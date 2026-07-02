@@ -73,3 +73,28 @@ func TestFilterDoesNotMutateInput(t *testing.T) {
 		t.Fatalf("input mutated: len = %d", len(b.Departures))
 	}
 }
+
+func TestFilterReturnsIndependentCallingPoints(t *testing.T) {
+	gen := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	b := &Board{GeneratedAt: gen, Departures: []Departure{dep("1", "GW", gen, "Oxford")}}
+	out := Filter{}.Apply(b) // no replacements configured
+	out.Departures[0].CallingPoints[0].Location.Name = "MUTATED"
+	if b.Departures[0].CallingPoints[0].Location.Name != "Oxford" {
+		t.Fatalf("mutating returned copy changed input calling point: %q", b.Departures[0].CallingPoints[0].Location.Name)
+	}
+}
+
+func TestFilterCutoffBoundaryExcluded(t *testing.T) {
+	gen := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	b := &Board{
+		GeneratedAt: gen,
+		Departures: []Departure{
+			dep("1", "GW", gen.Add(8*time.Hour), "AtCutoff"),         // exactly at cutoff → excluded
+			dep("1", "GW", gen.Add(8*time.Hour-time.Minute), "Just"), // just inside → kept
+		},
+	}
+	out := Filter{CutoffHours: 8}.Apply(b)
+	if len(out.Departures) != 1 || out.Departures[0].Destination.Name != "Just" {
+		t.Fatalf("cutoff boundary handling wrong: %+v", out.Departures)
+	}
+}

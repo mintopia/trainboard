@@ -42,20 +42,22 @@ func (f Filter) Apply(b *Board) *Board {
 	return &out
 }
 
-// replace applies station-name replacements to a departure's locations,
-// returning a copy with fresh calling-point storage.
+// replace returns a copy of d with fresh calling-point storage so the returned
+// Board never aliases the input's slices. Station-name replacements are applied
+// when configured.
 func (f Filter) replace(d Departure) Departure {
-	if len(f.Replacements) == 0 {
-		return d
+	if len(d.CallingPoints) > 0 {
+		cps := make([]CallingPoint, len(d.CallingPoints))
+		copy(cps, d.CallingPoints)
+		d.CallingPoints = cps
 	}
-	d.Origin.Name = f.applyReplacements(d.Origin.Name)
-	d.Destination.Name = f.applyReplacements(d.Destination.Name)
-	cps := make([]CallingPoint, len(d.CallingPoints))
-	for i, cp := range d.CallingPoints {
-		cp.Location.Name = f.applyReplacements(cp.Location.Name)
-		cps[i] = cp
+	if len(f.Replacements) > 0 {
+		d.Origin.Name = f.applyReplacements(d.Origin.Name)
+		d.Destination.Name = f.applyReplacements(d.Destination.Name)
+		for i := range d.CallingPoints {
+			d.CallingPoints[i].Location.Name = f.applyReplacements(d.CallingPoints[i].Location.Name)
+		}
 	}
-	d.CallingPoints = cps
 	return d
 }
 
