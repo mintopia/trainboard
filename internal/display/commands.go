@@ -2,8 +2,6 @@ package display
 
 // SSD1322 command opcodes (datasheet §9). Values referenced by the init
 // sequence and flush path; pinned by golden-byte tests.
-//
-//nolint:unused // consumed by the init/flush sequences implemented in Task 3/6/7.
 const (
 	cmdEnableGrayTable  = 0x00
 	cmdSetColumnAddr    = 0x15
@@ -31,8 +29,13 @@ const (
 	cmdSetVCOMH         = 0xBE
 
 	// Column window for a 256px panel in the 480px RAM.
+	//
+	//nolint:unused // consumed by the flush path implemented in Task 6/7.
 	colStart = 0x1C
-	colEnd   = 0x5B
+	//nolint:unused // consumed by the flush path implemented in Task 6/7.
+	colEnd = 0x5B
+	//nolint:unused // consumed by the flush path implemented in Task 6/7.
 	rowStart = 0x00
-	rowEnd   = 0x3F
+	//nolint:unused // consumed by the flush path implemented in Task 6/7.
+	rowEnd = 0x3F
 )
