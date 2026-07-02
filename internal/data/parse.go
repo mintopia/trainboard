@@ -23,16 +23,16 @@ type wireCallingPoint struct {
 }
 
 type wireService struct {
-	STD          string `xml:"std"`
-	ETD          string `xml:"etd"`
-	Platform     string `xml:"platform"`
-	Operator     string `xml:"operator"`
-	OperatorCode string `xml:"operatorCode"`
-	ServiceType  string `xml:"serviceType"`
-	Length       int    `xml:"length"`
-	IsCancelled  bool   `xml:"isCancelled"`
-	CancelReason string `xml:"cancelReason"`
-	DelayReason  string `xml:"delayReason"`
+	STD          string       `xml:"std"`
+	ETD          string       `xml:"etd"`
+	Platform     string       `xml:"platform"`
+	Operator     string       `xml:"operator"`
+	OperatorCode string       `xml:"operatorCode"`
+	ServiceType  string       `xml:"serviceType"`
+	Length       int          `xml:"length"`
+	IsCancelled  bool         `xml:"isCancelled"`
+	CancelReason string       `xml:"cancelReason"`
+	DelayReason  string       `xml:"delayReason"`
 	Origin       wireLocation `xml:"origin"`
 	Destination  wireLocation `xml:"destination"`
 	// subsequentCallingPoints > callingPointList > callingPoint (first list is
