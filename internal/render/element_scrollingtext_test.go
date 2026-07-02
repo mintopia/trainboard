@@ -31,7 +31,7 @@ func TestScrollingLongTextMovesLeft(t *testing.T) {
 func TestScrollingLongTextGoldenMidScroll(t *testing.T) {
 	fb := New(256, 12)
 	el := &ScrollingText{Font: mustFont(t, RegularTTF, 10),
-		Text: "This train is formed of 8 coaches. Mind the gap.",
+		Text: "This train is formed of 8 coaches. Please mind the gap between the train and the platform edge.",
 		X: 0, Y: 0, W: 256, H: 12, Level: 15, PauseTicks: 5}
 	el.Render(fb, 40, time.Time{})
 	assertGolden(t, "scroll_long_t40", fb)
