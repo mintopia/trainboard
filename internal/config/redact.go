@@ -27,3 +27,9 @@ func (d DarwinConfig) String() string {
 	}
 	return "DarwinConfig{token:" + redacted + "}"
 }
+
+// GoString masks the token so %#v (fmt.GoStringer) can't leak it either.
+func (c Config) GoString() string { return c.String() }
+
+// GoString masks the token so %#v can't leak it.
+func (d DarwinConfig) GoString() string { return d.String() }

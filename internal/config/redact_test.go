@@ -42,3 +42,17 @@ func TestRedactedEmptyTokenStaysEmpty(t *testing.T) {
 		t.Fatal("empty token should stay empty when redacted")
 	}
 }
+
+func TestGoStringNeverLeaksToken(t *testing.T) {
+	c := Default()
+	c.Darwin.Token = "super-secret-guid"
+	c.Board.Origin = "PAD"
+	for _, s := range []string{
+		fmt.Sprintf("%#v", c),
+		fmt.Sprintf("%#v", c.Darwin),
+	} {
+		if strings.Contains(s, "super-secret-guid") {
+			t.Fatalf("token leaked via %%#v in %q", s)
+		}
+	}
+}
