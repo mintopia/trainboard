@@ -19,6 +19,9 @@ config.local.*
 # Old Python project kept locally for reference (has its own git history)
 /reference/
 
+# Live Darwin response captures (may contain real data) — never commit
+internal/data/testdata/_live_*.xml
+
 # Claude Code local runtime
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
