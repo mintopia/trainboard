@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <GetDepBoardWithDetailsResponse xmlns="http://thalesgroup.com/RTTI/2021-11-01/ldb/">
+      <GetStationBoardResult xmlns:lt="http://thalesgroup.com/RTTI/2012-01-13/ldb/types">
+        <lt:generatedAt>2026-07-02T02:10:00.0000000+01:00</lt:generatedAt>
+        <lt:locationName>London Paddington</lt:locationName>
+        <lt:crs>PAD</lt:crs>
+      </GetStationBoardResult>
+    </GetDepBoardWithDetailsResponse>
+  </soap:Body>
+</soap:Envelope>

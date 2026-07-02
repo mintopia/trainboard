@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <GetDepBoardWithDetailsResponse xmlns="http://thalesgroup.com/RTTI/2021-11-01/ldb/">
+      <GetStationBoardResult xmlns:lt="http://thalesgroup.com/RTTI/2012-01-13/ldb/types">
+        <lt:generatedAt>2026-07-02T12:30:00.0000000+01:00</lt:generatedAt>
+        <lt:locationName>London Paddington</lt:locationName>
+        <lt:crs>PAD</lt:crs>
+        <lt:nrccMessages>
+          <lt:message>Engineering work between &lt;A&gt;Slough&lt;/A&gt; and Reading.</lt:message>
+        </lt:nrccMessages>
+        <lt:trainServices>
+          <lt:service>
+            <lt:std>12:45</lt:std>
+            <lt:etd>On time</lt:etd>
+            <lt:platform>9</lt:platform>
+            <lt:operator>Great Western Railway</lt:operator>
+            <lt:operatorCode>GW</lt:operatorCode>
+            <lt:serviceType>train</lt:serviceType>
+            <lt:length>8</lt:length>
+            <lt:origin><lt:location><lt:locationName>London Paddington</lt:locationName><lt:crs>PAD</lt:crs></lt:location></lt:origin>
+            <lt:destination><lt:location><lt:locationName>Bristol Temple Meads</lt:locationName><lt:crs>BRI</lt:crs></lt:location></lt:destination>
+            <lt:subsequentCallingPoints>
+              <lt:callingPointList>
+                <lt:callingPoint><lt:locationName>Reading</lt:locationName><lt:crs>RDG</lt:crs><lt:st>13:02</lt:st><lt:et>On time</lt:et></lt:callingPoint>
+                <lt:callingPoint><lt:locationName>Swindon</lt:locationName><lt:crs>SWI</lt:crs><lt:st>13:25</lt:st><lt:et>On time</lt:et></lt:callingPoint>
+              </lt:callingPointList>
+            </lt:subsequentCallingPoints>
+          </lt:service>
+        </lt:trainServices>
+      </GetStationBoardResult>
+    </GetDepBoardWithDetailsResponse>
+  </soap:Body>
+</soap:Envelope>

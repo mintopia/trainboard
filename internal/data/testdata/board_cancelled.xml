@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <GetDepBoardWithDetailsResponse xmlns="http://thalesgroup.com/RTTI/2021-11-01/ldb/">
+      <GetStationBoardResult xmlns:lt="http://thalesgroup.com/RTTI/2012-01-13/ldb/types">
+        <lt:generatedAt>2026-07-02T23:50:00.0000000+01:00</lt:generatedAt>
+        <lt:locationName>London Paddington</lt:locationName>
+        <lt:crs>PAD</lt:crs>
+        <lt:trainServices>
+          <lt:service>
+            <lt:std>00:12</lt:std>
+            <lt:etd>Cancelled</lt:etd>
+            <lt:operator>Great Western Railway</lt:operator>
+            <lt:operatorCode>GW</lt:operatorCode>
+            <lt:serviceType>train</lt:serviceType>
+            <lt:isCancelled>true</lt:isCancelled>
+            <lt:cancelReason>This train has been cancelled because of a fault on this train.</lt:cancelReason>
+            <lt:origin><lt:location><lt:locationName>London Paddington</lt:locationName><lt:crs>PAD</lt:crs></lt:location></lt:origin>
+            <lt:destination><lt:location><lt:locationName>Oxford</lt:locationName><lt:crs>OXF</lt:crs></lt:location></lt:destination>
+          </lt:service>
+        </lt:trainServices>
+      </GetStationBoardResult>
+    </GetDepBoardWithDetailsResponse>
+  </soap:Body>
+</soap:Envelope>
