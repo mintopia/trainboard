@@ -1,0 +1,25 @@
+# Secrets / local config — never commit
+.env
+*.env
+!.env.example
+
+# Local device config (may contain RTT credentials)
+config.local.*
+*.secret
+
+# Go build artifacts
+/trainboard
+/dist/
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+
+# Old Python project kept locally for reference (has its own git history)
+/reference/
+
+# Claude Code local runtime
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/*.lock
