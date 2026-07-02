@@ -70,3 +70,26 @@ func extractFault(body []byte) string {
 	}
 	return env.Fault.String
 }
+
+// Fetch runs the full pipeline: build+POST the request, parse the response, map
+// it to the model, and reconstruct absolute departure times.
+func (c *Client) Fetch(ctx context.Context, r Request) (*Board, error) {
+	raw, err := c.fetchRaw(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	wb, err := parseBoard(raw)
+	if err != nil {
+		return nil, err
+	}
+	b, err := mapBoard(wb)
+	if err != nil {
+		return nil, err
+	}
+	loc, err := londonLocation()
+	if err != nil {
+		return nil, err
+	}
+	reconstructTimes(b, loc)
+	return b, nil
+}
