@@ -46,3 +46,8 @@ func (d *SSD1322) Init() error {
 	}
 	return nil
 }
+
+// SetContrast sets the panel contrast current (0x00–0xFF), the brightness knob.
+func (d *SSD1322) SetContrast(level byte) error {
+	return d.t.Command(cmdSetContrast, level)
+}

@@ -50,3 +50,16 @@ func TestInitSequence(t *testing.T) {
 		t.Fatalf("init commands mismatch\n got=%#v\nwant=%#v", got, want)
 	}
 }
+
+func TestSetContrast(t *testing.T) {
+	f := NewFake()
+	d := New(f)
+	if err := d.SetContrast(0x7F); err != nil {
+		t.Fatal(err)
+	}
+	got := cmds(f.Ops)
+	want := [][]byte{{0xC1, 0x7F}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SetContrast cmds = %#v, want %#v", got, want)
+	}
+}
