@@ -1,0 +1,91 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
+
+func TestLoadMissingReturnsDefault(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "nope.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Version != CurrentVersion || c.Board.Services != 3 {
+		t.Fatalf("missing-file load not default: %+v", c)
+	}
+}
+
+func TestSaveThenLoadRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default()
+	c.Darwin.Token = "GUID"
+	c.Board.Origin = "PAD"
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Board.Origin != "PAD" || back.Darwin.Token != "GUID" {
+		t.Fatalf("round-trip lost data: %+v", back)
+	}
+}
+
+func TestSaveUsesMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default()
+	c.Darwin.Token = "GUID"
+	c.Board.Origin = "PAD"
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestSaveRejectsInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default() // no token, no origin ⇒ invalid
+	if err := Save(path, c); err == nil {
+		t.Fatal("expected Save to reject invalid config")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("invalid Save must not create the file")
+	}
+}
+
+func TestLoadRejectsInvalidFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"board":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected Load to reject an invalid config file")
+	}
+}
+
+func TestSaveNoTempLeftBehind(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := Default()
+	c.Darwin.Token = "GUID"
+	c.Board.Origin = "PAD"
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected only config.json, found %d entries", len(entries))
+	}
+}
