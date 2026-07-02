@@ -80,3 +80,34 @@ func (d *SSD1322) Flush(packed []byte) error {
 	}
 	return nil
 }
+
+// FlushRegion writes a 4-pixel-aligned sub-rectangle. rowData is row-major,
+// w/2 packed bytes per row, h rows. x and w must be multiples of 4.
+func (d *SSD1322) FlushRegion(rowData []byte, x, y, w, h int) error {
+	if x%4 != 0 || w%4 != 0 {
+		return fmt.Errorf("display: region x=%d w=%d must be 4-pixel aligned", x, w)
+	}
+	if x < 0 || y < 0 || x+w > 256 || y+h > 64 || w <= 0 || h <= 0 {
+		return fmt.Errorf("display: region %d,%d %dx%d out of 256x64", x, y, w, h)
+	}
+	if want := h * (w / 2); len(rowData) != want {
+		return fmt.Errorf("display: rowData is %d bytes, want %d", len(rowData), want)
+	}
+	cs := byte(colStart + x/4)
+	ce := byte(colStart + (x+w)/4 - 1)
+	if err := d.t.Command(cmdSetColumnAddr, cs, ce); err != nil {
+		return err
+	}
+	if err := d.t.Command(cmdSetRowAddr, byte(y), byte(y+h-1)); err != nil {
+		return err
+	}
+	if err := d.t.Command(cmdWriteRAM); err != nil {
+		return err
+	}
+	for _, c := range chunk(rowData, maxChunk) {
+		if err := d.t.Data(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}

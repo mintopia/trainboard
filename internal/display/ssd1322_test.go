@@ -97,3 +97,51 @@ func TestFlushRejectsWrongSize(t *testing.T) {
 		t.Fatal("expected error for wrong-size frame")
 	}
 }
+
+func TestFlushRegionWindowMath(t *testing.T) {
+	f := NewFake()
+	d := New(f)
+	// A 12-row-tall band at y=20, full width.
+	rowData := make([]byte, 12*(256/2))
+	if err := d.FlushRegion(rowData, 0, 20, 256, 12); err != nil {
+		t.Fatal(err)
+	}
+	wantCmds := [][]byte{
+		{0x15, 0x1C, 0x5B},         // full-width columns
+		{0x75, byte(20), byte(31)}, // rows 20..31
+		{0x5C},
+	}
+	if got := cmds(f.Ops); !reflect.DeepEqual(got, wantCmds) {
+		t.Fatalf("region cmds = %#v, want %#v", got, wantCmds)
+	}
+}
+
+func TestFlushRegionOffsetColumns(t *testing.T) {
+	f := NewFake()
+	d := New(f)
+	// x=8 (2 columns in), w=8 (2 columns wide): col start 0x1C+2, end +3.
+	if err := d.FlushRegion(make([]byte, 4*(8/2)), 8, 0, 8, 4); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0x15, 0x1C + 2, 0x1C + 3}
+	if got := cmds(f.Ops)[0]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("col window = % X, want % X", got, want)
+	}
+}
+
+func TestFlushRegionAlignment(t *testing.T) {
+	d := New(NewFake())
+	if err := d.FlushRegion(make([]byte, 10), 1, 0, 8, 1); err == nil {
+		t.Fatal("expected error for x not 4-aligned")
+	}
+	if err := d.FlushRegion(make([]byte, 10), 0, 0, 6, 1); err == nil {
+		t.Fatal("expected error for w not 4-aligned")
+	}
+}
+
+func TestFlushRegionDataLenCheck(t *testing.T) {
+	d := New(NewFake())
+	if err := d.FlushRegion(make([]byte, 5), 0, 0, 8, 2); err == nil {
+		t.Fatal("expected error for wrong rowData length")
+	}
+}
