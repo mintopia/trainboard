@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/xml"
 	"strings"
 	"testing"
 )
@@ -12,28 +13,28 @@ func TestBuildEnvelopeWithDestination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(got)
-	for _, want := range []string{
-		`xmlns:typ="http://thalesgroup.com/RTTI/2013-11-28/Token/types"`,
-		`xmlns:ldb="http://thalesgroup.com/RTTI/2021-11-01/ldb/"`,
-		`<typ:AccessToken><typ:TokenValue>TOKEN-GUID</typ:TokenValue></typ:AccessToken>`,
-		`<ldb:GetDepBoardWithDetailsRequest>`,
-		`<ldb:numRows>10</ldb:numRows>`,
-		`<ldb:crs>PAD</ldb:crs>`,
-		`<ldb:filterCrs>RDG</ldb:filterCrs>`,
-		`<ldb:filterType>to</ldb:filterType>`,
-		`<ldb:timeWindow>120</ldb:timeWindow>`,
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("envelope missing %q\n---\n%s", want, s)
-		}
+	want := `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:typ="http://thalesgroup.com/RTTI/2013-11-28/Token/types" xmlns:ldb="http://thalesgroup.com/RTTI/2021-11-01/ldb/"><soap:Header><typ:AccessToken><typ:TokenValue>TOKEN-GUID</typ:TokenValue></typ:AccessToken></soap:Header><soap:Body><ldb:GetDepBoardWithDetailsRequest><ldb:numRows>10</ldb:numRows><ldb:crs>PAD</ldb:crs><ldb:filterCrs>RDG</ldb:filterCrs><ldb:filterType>to</ldb:filterType><ldb:timeOffset>0</ldb:timeOffset><ldb:timeWindow>120</ldb:timeWindow></ldb:GetDepBoardWithDetailsRequest></soap:Body></soap:Envelope>`
+	if string(got) != want {
+		t.Fatalf("envelope mismatch:\ngot:\n%s\nwant:\n%s", string(got), want)
+	}
+	var v any
+	if err := xml.Unmarshal(got, &v); err != nil {
+		t.Fatalf("envelope not well-formed XML: %v", err)
 	}
 }
 
 func TestBuildEnvelopeOmitsFilterWhenNoDestination(t *testing.T) {
-	got, _ := buildEnvelope("T", Request{OriginCRS: "PAD", NumRows: 10, TimeWindowMinutes: 120})
-	if strings.Contains(string(got), "filterCrs") || strings.Contains(string(got), "filterType") {
-		t.Fatalf("filter elements must be omitted when no destination:\n%s", got)
+	got, err := buildEnvelope("T", Request{OriginCRS: "PAD", NumRows: 10, TimeWindowMinutes: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:typ="http://thalesgroup.com/RTTI/2013-11-28/Token/types" xmlns:ldb="http://thalesgroup.com/RTTI/2021-11-01/ldb/"><soap:Header><typ:AccessToken><typ:TokenValue>T</typ:TokenValue></typ:AccessToken></soap:Header><soap:Body><ldb:GetDepBoardWithDetailsRequest><ldb:numRows>10</ldb:numRows><ldb:crs>PAD</ldb:crs><ldb:timeOffset>0</ldb:timeOffset><ldb:timeWindow>120</ldb:timeWindow></ldb:GetDepBoardWithDetailsRequest></soap:Body></soap:Envelope>`
+	if string(got) != want {
+		t.Fatalf("envelope mismatch:\ngot:\n%s\nwant:\n%s", string(got), want)
+	}
+	var v any
+	if err := xml.Unmarshal(got, &v); err != nil {
+		t.Fatalf("envelope not well-formed XML: %v", err)
 	}
 }
 
