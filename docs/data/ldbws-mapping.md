@@ -5,8 +5,15 @@ Derived schema-first from the OpenLDBWS `GetDepBoardWithDetails` WSDL
 live response (Task 8 probe). **Not** ported from the old a51.li push-port feed.
 
 ## Request
+- Endpoint `https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx`.
 - Operation `GetDepBoardWithDetails`; `numRows` capped at 10 (always request 10,
-  trim client-side).
+  trim client-side; the client clamps out-of-range values to 10).
+- Request body namespace (`ldb`): `http://thalesgroup.com/RTTI/2021-11-01/ldb/`
+  (the current WSDL targetNamespace). **But the `SOAPAction` HTTP header retains the
+  `2015-05-14` ldb version** — `http://thalesgroup.com/RTTI/2015-05-14/ldb/GetDepBoardWithDetails`
+  (that's when the *WithDetails operations were introduced). A `2021-11-01` SOAPAction is
+  rejected with "did not recognize the value of HTTP Header SOAPAction". Confirmed against
+  the live WSDL binding + the live probe (2026-07-02).
 - Token: `<AccessToken><TokenValue>` in namespace
   `http://thalesgroup.com/RTTI/2013-11-28/Token/types`.
 - Destination filter is server-side: `filterCrs` + `filterType=to`.

@@ -14,8 +14,14 @@ import (
 // probe. If the probe faults on schema/namespace, correct ldbNamespace,
 // soapAction, and the golden test in the same commit.
 const (
-	endpointURL    = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx"
-	soapAction     = "http://thalesgroup.com/RTTI/2021-11-01/ldb/GetDepBoardWithDetails"
+	endpointURL = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx"
+	// soapAction retains the 2015-05-14 ldb version (when the *WithDetails
+	// operations were introduced) even though the request body namespace is the
+	// current 2021-11-01 ldb. This split is per the live WSDL binding
+	// (rtti_2021-11-01_ldb.wsdl) and confirmed by the live probe — a 2021-11-01
+	// SOAPAction is rejected with "did not recognize the value of HTTP Header
+	// SOAPAction".
+	soapAction     = "http://thalesgroup.com/RTTI/2015-05-14/ldb/GetDepBoardWithDetails"
 	ldbNamespace   = "http://thalesgroup.com/RTTI/2021-11-01/ldb/"
 	tokenNamespace = "http://thalesgroup.com/RTTI/2013-11-28/Token/types"
 )
