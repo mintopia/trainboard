@@ -50,3 +50,21 @@ func TestBrightnessSameDayWindow(t *testing.T) {
 		t.Errorf("outside same-day window = %d, want %d", got, NormalBrightness)
 	}
 }
+
+func TestBrightnessUnparseableTimeFailsSafe(t *testing.T) {
+	c := Default()
+	c.Powersaving.Enabled = true
+	c.Powersaving.Brightness = 10
+
+	c.Powersaving.Start = "garbage"
+	c.Powersaving.End = "07:00"
+	if got := c.BrightnessAt(at("03:00")); got != NormalBrightness {
+		t.Fatalf("unparseable start: brightness = %d, want NormalBrightness %d", got, NormalBrightness)
+	}
+
+	c.Powersaving.Start = "23:00"
+	c.Powersaving.End = "not-a-time"
+	if got := c.BrightnessAt(at("03:00")); got != NormalBrightness {
+		t.Fatalf("unparseable end: brightness = %d, want NormalBrightness %d", got, NormalBrightness)
+	}
+}
