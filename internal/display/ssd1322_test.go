@@ -63,3 +63,37 @@ func TestSetContrast(t *testing.T) {
 		t.Fatalf("SetContrast cmds = %#v, want %#v", got, want)
 	}
 }
+
+func TestFlushWindowAndChunks(t *testing.T) {
+	f := NewFake()
+	d := New(f)
+	if err := d.Flush(make([]byte, 8192)); err != nil {
+		t.Fatal(err)
+	}
+	// First three ops set column window, row window, and Write-RAM.
+	wantCmds := [][]byte{
+		{0x15, 0x1C, 0x5B},
+		{0x75, 0x00, 0x3F},
+		{0x5C},
+	}
+	if got := cmds(f.Ops); !reflect.DeepEqual(got, wantCmds) {
+		t.Fatalf("flush cmds = %#v, want %#v", got, wantCmds)
+	}
+	// Data must arrive as two 4096-byte chunks after the commands.
+	var dataLens []int
+	for _, op := range f.Ops {
+		if op.Kind == OpData {
+			dataLens = append(dataLens, len(op.Bytes))
+		}
+	}
+	if len(dataLens) != 2 || dataLens[0] != 4096 || dataLens[1] != 4096 {
+		t.Fatalf("data chunks = %v, want [4096 4096]", dataLens)
+	}
+}
+
+func TestFlushRejectsWrongSize(t *testing.T) {
+	d := New(NewFake())
+	if err := d.Flush(make([]byte, 100)); err == nil {
+		t.Fatal("expected error for wrong-size frame")
+	}
+}

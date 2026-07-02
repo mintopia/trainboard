@@ -5,12 +5,9 @@ package display
 const (
 	//nolint:unused // datasheet opcode reserved for later use; declared verbatim per plan.
 	cmdEnableGrayTable = 0x00
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
-	cmdSetColumnAddr = 0x15
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
-	cmdWriteRAM = 0x5C
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
-	cmdSetRowAddr = 0x75
+	cmdSetColumnAddr   = 0x15
+	cmdWriteRAM        = 0x5C
+	cmdSetRowAddr      = 0x75
 
 	cmdSetRemap         = 0xA0
 	cmdSetStartLine     = 0xA1
@@ -34,13 +31,8 @@ const (
 	cmdSetVCOMH         = 0xBE
 
 	// Column window for a 256px panel in the 480px RAM.
-	//
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
 	colStart = 0x1C
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
-	colEnd = 0x5B
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
+	colEnd   = 0x5B
 	rowStart = 0x00
-	//nolint:unused // consumed by the flush path implemented in Task 6/7.
-	rowEnd = 0x3F
+	rowEnd   = 0x3F
 )
