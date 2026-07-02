@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"image"
 	"testing"
 )
 
@@ -40,5 +41,42 @@ func TestClear(t *testing.T) {
 	fb.Clear()
 	if fb.At(0, 0) != 0 {
 		t.Fatalf("Clear did not zero pixel")
+	}
+}
+
+func TestBlitAlphaScalesByLevel(t *testing.T) {
+	fb := New(2, 1)
+	src := image.NewAlpha(image.Rect(0, 0, 2, 1))
+	src.Pix[0] = 255 // full ink
+	src.Pix[1] = 0   // transparent
+	fb.BlitAlpha(src, 0, 0, 15)
+	if fb.At(0, 0) != 15 {
+		t.Fatalf("full ink at level 15 = %d, want 15", fb.At(0, 0))
+	}
+	if fb.At(1, 0) != 0 {
+		t.Fatalf("transparent px = %d, want 0", fb.At(1, 0))
+	}
+}
+
+func TestBlitAlphaMidLevel(t *testing.T) {
+	fb := New(1, 1)
+	src := image.NewAlpha(image.Rect(0, 0, 1, 1))
+	src.Pix[0] = 128 // ~half
+	fb.BlitAlpha(src, 0, 0, 15)
+	// round(128*15/255) = round(7.53) = 8
+	if fb.At(0, 0) != 8 {
+		t.Fatalf("mid ink = %d, want 8", fb.At(0, 0))
+	}
+}
+
+func TestBlitAlphaClips(t *testing.T) {
+	fb := New(2, 2)
+	src := image.NewAlpha(image.Rect(0, 0, 2, 2))
+	for i := range src.Pix {
+		src.Pix[i] = 255
+	}
+	fb.BlitAlpha(src, 1, 1, 15) // only (1,1) lands
+	if fb.At(1, 1) != 15 || fb.At(0, 0) != 0 {
+		t.Fatalf("clip failed: (1,1)=%d (0,0)=%d", fb.At(1, 1), fb.At(0, 0))
 	}
 }

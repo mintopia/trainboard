@@ -2,6 +2,8 @@
 // rasterization, and a scene/element engine for the departure board.
 package render
 
+import "image"
+
 // Framebuffer is a W×H grid of 4-bit greyscale pixels (levels 0–15), one
 // byte per pixel for cheap drawing. Pack() converts to SSD1322 wire format.
 type Framebuffer struct {
@@ -58,4 +60,18 @@ func (fb *Framebuffer) Pack() []byte {
 		}
 	}
 	return out
+}
+
+// BlitAlpha composites an alpha bitmap at (x,y): each source coverage value
+// (0–255) becomes level round(alpha*level/255), overwriting the source
+// rectangle. Clipped to the framebuffer bounds.
+func (fb *Framebuffer) BlitAlpha(src *image.Alpha, x, y int, level byte) {
+	b := src.Bounds()
+	for sy := b.Min.Y; sy < b.Max.Y; sy++ {
+		for sx := b.Min.X; sx < b.Max.X; sx++ {
+			a := int(src.AlphaAt(sx, sy).A)
+			v := (a*int(level) + 127) / 255 // round to nearest
+			fb.SetPixel(x+(sx-b.Min.X), y+(sy-b.Min.Y), byte(v))
+		}
+	}
 }

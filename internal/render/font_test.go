@@ -32,3 +32,13 @@ func TestRenderTextProducesInk(t *testing.T) {
 		t.Fatal("RenderText produced a blank bitmap")
 	}
 }
+
+func TestGoldenHarness(t *testing.T) {
+	f, err := LoadFont(BoldTTF, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb := New(256, 64)
+	fb.BlitAlpha(f.RenderText("12:34"), 4, 4, 15) // BlitAlpha lands in Task 9
+	assertGolden(t, "harness_smoke", fb)
+}
