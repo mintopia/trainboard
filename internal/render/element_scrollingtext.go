@@ -4,6 +4,8 @@ import "time"
 
 const defaultPauseTicks = 60 // reference paused 60 frames before scrolling
 
+var _ Element = (*ScrollingText)(nil)
+
 // ScrollingText renders one line inside a box. If the text is wider than the
 // box it scrolls right-to-left at one pixel per tick after an initial pause;
 // otherwise it is left-aligned and static.

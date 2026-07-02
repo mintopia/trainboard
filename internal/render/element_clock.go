@@ -4,6 +4,8 @@ import (
 	"time"
 )
 
+var _ Element = (*Clock)(nil)
+
 // Clock renders HH:MM in a large font with :SS in a tall font beside it,
 // centered horizontally. Mirrors the reference board's clock layout.
 type Clock struct {

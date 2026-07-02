@@ -4,16 +4,14 @@ package display
 // while a full frame is 8192 B, so RAM writes must be split.
 const maxChunk = 4096
 
-// chunk splits p into slices of at most max bytes (views into p, not copies).
-//
-//nolint:revive // "max" param name matches the task spec verbatim; shadows the max builtin only within this function.
-func chunk(p []byte, max int) [][]byte {
+// chunk splits p into slices of at most size bytes (views into p, not copies).
+func chunk(p []byte, size int) [][]byte {
 	if len(p) == 0 {
 		return nil
 	}
 	var out [][]byte
 	for len(p) > 0 {
-		n := max
+		n := size
 		if n > len(p) {
 			n = len(p)
 		}

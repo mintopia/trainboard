@@ -2,6 +2,8 @@ package render
 
 import "time"
 
+var _ Element = (*StaticText)(nil)
+
 // StaticText renders a single line of text within a fixed box, horizontally
 // aligned and top-anchored.
 type StaticText struct {
