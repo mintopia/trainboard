@@ -47,3 +47,15 @@ func TestBuildEnvelopeEscapesToken(t *testing.T) {
 		t.Fatalf("token escaping wrong:\n%s", got)
 	}
 }
+
+func TestBuildEnvelopeClampsNumRows(t *testing.T) {
+	for _, n := range []int{0, -1, 11, 100} {
+		got, err := buildEnvelope("T", Request{OriginCRS: "PAD", NumRows: n, TimeWindowMinutes: 120})
+		if err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		if !strings.Contains(string(got), "<ldb:numRows>10</ldb:numRows>") {
+			t.Fatalf("NumRows %d not clamped to 10:\n%s", n, got)
+		}
+	}
+}

@@ -14,6 +14,9 @@ const DefaultPath = "/var/lib/trainboard/config.json"
 
 // Load reads and validates the config at path. A missing file returns defaults
 // with no error; a present-but-invalid file returns an error.
+// Note: Default() is itself invalid (empty origin/token), so callers deciding
+// provisioning/AP-mode must Validate() the returned config, not rely on Load's
+// error alone.
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

@@ -25,7 +25,10 @@ type BoardConfig struct {
 	Destination       string            `json:"destination"`       // optional CRS (server-side filter)
 	Platforms         []string          `json:"platforms"`         // client filter
 	TOCs              []string          `json:"tocs"`              // client filter (operatorCode)
-	Services          int               `json:"services"`          // max rows to show
+	// Services is the max rows to display. Plan C maps this to data.Filter.MaxServices
+	// (client-side trim) — NOT to data.Request.NumRows, which must stay 10 (the LDBWS
+	// WithDetails cap) so server-side capping can't cause a false NoServices.
+	Services int `json:"services"` // max rows to show
 	CutoffHours       int               `json:"cutoffHours"`       // hide departures beyond this window
 	RefreshSeconds    int               `json:"refreshSeconds"`    // poll interval
 	TimeWindowMinutes int               `json:"timeWindowMinutes"` // LDBWS timeWindow

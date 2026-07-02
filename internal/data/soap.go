@@ -31,6 +31,9 @@ type Request struct {
 // buildEnvelope renders the SOAP request bytes. Values are XML-escaped. The
 // element order and namespaces are pinned by TestBuildEnvelope*.
 func buildEnvelope(token string, r Request) ([]byte, error) {
+	if r.NumRows <= 0 || r.NumRows > 10 {
+		r.NumRows = 10 // LDBWS WithDetails caps at 10; always request the max and trim client-side
+	}
 	var filter string
 	if r.DestinationCRS != "" {
 		filter = fmt.Sprintf(
