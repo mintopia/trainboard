@@ -24,20 +24,11 @@ func parseTemplates() *template.Template {
 	return template.Must(template.New("layout.html").ParseFS(embeddedFS, "templates/layout.html"))
 }
 
-// indexContent is the placeholder authed home page; Task 7 replaces it with
-// the real status view. It has no dedicated template file since it isn't
-// part of this task's Files list.
-const indexContent = `{{define "title"}}status — trainboard{{end}}
-{{define "content"}}
-<h2>Status</h2>
-<p>status coming soon</p>
-{{end}}`
-
 var (
-	baseTemplate  = parseTemplates()
-	setupTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
-	loginTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
-	indexTemplate = template.Must(template.Must(baseTemplate.Clone()).Parse(indexContent))
+	baseTemplate   = parseTemplates()
+	setupTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
+	loginTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
+	statusTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
 )
 
 // staticFS returns the embedded static/ subtree for the file server.

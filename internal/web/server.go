@@ -41,14 +41,11 @@ type loginPageData struct {
 	Error string
 }
 
-type indexPageData struct {
-	basePage
-}
-
 // NewServer builds the full route table: /setup, /login, /logout, /static/,
-// and a placeholder authed / that renders the layout with "status coming
-// soon" (later tasks add the rest). authLimit gates setup/login POSTs at a
-// burst of 5/min; actionLimit gates other state-changing routes at 30/min.
+// the authed status page (/), its live preview image (/preview.png), its
+// polled event feed (/events), and later tasks add the rest. authLimit gates
+// setup/login POSTs at a burst of 5/min; actionLimit gates other
+// state-changing routes at 30/min.
 func NewServer(svc *Service, log *slog.Logger) *Server {
 	s := &Server{
 		svc:         svc,
@@ -67,6 +64,8 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /logout", chain(http.HandlerFunc(s.handleLogout),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
+	s.mux.Handle("GET /preview.png", chain(http.HandlerFunc(s.handlePreviewPNG), requireAuth(s.sessions, false)))
+	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
 	return s
@@ -141,7 +140,7 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	case "login":
 		t = loginTemplate
 	case "index":
-		t = indexTemplate
+		t = statusTemplate
 	default:
 		http.Error(w, "unknown page", http.StatusInternalServerError)
 		return
@@ -231,8 +230,4 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	expireSessionCookie(w)
 	http.Redirect(w, r, "/login", http.StatusFound)
-}
-
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "index", indexPageData{basePage{LoggedIn: true, CSRF: csrfFrom(r)}})
 }
