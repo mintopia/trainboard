@@ -47,3 +47,32 @@ func TestValidateRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateWifiPSKBounds(t *testing.T) {
+	c := validConfig()
+	c.Wifi.SSID = "HomeNet"
+	c.Wifi.PSK = "short7c"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.psk") {
+		t.Fatalf("7-char PSK must fail: %v", err)
+	}
+	c.Wifi.PSK = strings.Repeat("x", 64)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.psk") {
+		t.Fatalf("64-char PSK must fail: %v", err)
+	}
+	c.Wifi.PSK = "goodpassphrase"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid PSK rejected: %v", err)
+	}
+	c.Wifi.SSID = ""
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.ssid") {
+		t.Fatalf("PSK without SSID must fail: %v", err)
+	}
+	c.Wifi.SSID = strings.Repeat("s", 33)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.ssid") {
+		t.Fatalf("33-byte SSID must fail: %v", err)
+	}
+	c.Wifi = WifiConfig{} // both empty: fine
+	if err := c.Validate(); err != nil {
+		t.Fatalf("empty wifi rejected: %v", err)
+	}
+}

@@ -7,11 +7,14 @@ const CurrentVersion = 1
 
 // Config is the full device configuration document.
 type Config struct {
-	Version     int              `json:"version"`
-	Darwin      DarwinConfig     `json:"darwin"`
-	Board       BoardConfig      `json:"board"`
-	Layout      LayoutConfig     `json:"layout"`
-	Powersaving PowersavingConfig `json:"powersaving"`
+	Version      int                `json:"version"`
+	Darwin       DarwinConfig       `json:"darwin"`
+	Board        BoardConfig        `json:"board"`
+	Layout       LayoutConfig       `json:"layout"`
+	Powersaving  PowersavingConfig  `json:"powersaving"`
+	Web          WebConfig          `json:"web"`
+	Provisioning ProvisioningConfig `json:"provisioning"`
+	Wifi         WifiConfig         `json:"wifi"`
 }
 
 // DarwinConfig holds the Darwin Lite access token (secret).
@@ -21,14 +24,14 @@ type DarwinConfig struct {
 
 // BoardConfig holds departure-board content settings.
 type BoardConfig struct {
-	Origin            string            `json:"origin"`            // CRS
-	Destination       string            `json:"destination"`       // optional CRS (server-side filter)
-	Platforms         []string          `json:"platforms"`         // client filter
-	TOCs              []string          `json:"tocs"`              // client filter (operatorCode)
+	Origin      string   `json:"origin"`      // CRS
+	Destination string   `json:"destination"` // optional CRS (server-side filter)
+	Platforms   []string `json:"platforms"`   // client filter
+	TOCs        []string `json:"tocs"`        // client filter (operatorCode)
 	// Services is the max rows to display. Plan C maps this to data.Filter.MaxServices
 	// (client-side trim) — NOT to data.Request.NumRows, which must stay 10 (the LDBWS
 	// WithDetails cap) so server-side capping can't cause a false NoServices.
-	Services int `json:"services"` // max rows to show
+	Services          int               `json:"services"`          // max rows to show
 	CutoffHours       int               `json:"cutoffHours"`       // hide departures beyond this window
 	RefreshSeconds    int               `json:"refreshSeconds"`    // poll interval
 	TimeWindowMinutes int               `json:"timeWindowMinutes"` // LDBWS timeWindow
@@ -46,6 +49,25 @@ type PowersavingConfig struct {
 	Start      string `json:"start"`      // "HH:MM"
 	End        string `json:"end"`        // "HH:MM"
 	Brightness int    `json:"brightness"` // SSD1322 contrast 0-255 while saving
+}
+
+// WebConfig holds the admin web UI credential. An empty PasswordHash means
+// first-boot setup has not run and /setup is open.
+type WebConfig struct {
+	PasswordHash string `json:"passwordHash"`
+}
+
+// ProvisioningConfig holds the AP-mode credential (used by M3), distinct
+// from the admin password by design.
+type ProvisioningConfig struct {
+	APPassword string `json:"apPassword"`
+}
+
+// WifiConfig is the desired STA credential set. Stored by M2's UI, applied
+// by M3's connectivity manager; inert until then.
+type WifiConfig struct {
+	SSID string `json:"ssid"`
+	PSK  string `json:"psk"`
 }
 
 // Default returns a config populated with sane defaults.
