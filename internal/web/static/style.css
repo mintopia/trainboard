@@ -1,0 +1,6 @@
+/* Placeholder styles; the M2 design pass (Task 12) owns the real look. */
+body { font-family: system-ui, sans-serif; background: #000; color: #ffb000; margin: 0 auto; max-width: 40rem; padding: 1rem; }
+a, button { color: #ffb000; }
+.error { color: #ff5544; }
+.inline { display: inline; }
+label { display: block; margin: .5rem 0; }

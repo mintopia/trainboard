@@ -176,6 +176,38 @@ func TestSetInitialPasswordVirginDevice(t *testing.T) {
 	}
 }
 
+// TestNeedsSetup covers the three states NeedsSetup must distinguish: a
+// virgin directory (no config file at all — config.Load's missing-file
+// fallback to Default() has an empty PasswordHash), a valid saved config with
+// no password hash yet, and a valid saved config with one.
+func TestNeedsSetup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	svc := newTestServiceAt(t, path)
+	if !svc.NeedsSetup() {
+		t.Fatal("virgin directory (no config file) must need setup")
+	}
+
+	cfg := validCfg()
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !svc.NeedsSetup() {
+		t.Fatal("valid config without a password hash must need setup")
+	}
+
+	h, err := HashPassword("hunter22")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Web.PasswordHash = h
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if svc.NeedsSetup() {
+		t.Fatal("config with a password hash must not need setup")
+	}
+}
+
 func TestVerifyLogin(t *testing.T) {
 	cfg := validCfg()
 	h, _ := HashPassword("hunter22")

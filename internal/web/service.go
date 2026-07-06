@@ -177,6 +177,21 @@ func (s *Service) SetInitialPassword(pw, originCRS, token string) error {
 	return config.Save(s.cfgPath, cur)
 }
 
+// NeedsSetup reports whether first-boot setup still needs to run, i.e. no
+// admin password is stored yet. It must not go through ConfigRedacted:
+// config.Load validates internally and errors on a virgin or otherwise
+// invalid on-disk file, which is exactly the state setup exists to fix. So
+// this loads tolerantly instead: any Load error (missing-but-invalid,
+// unparseable, failing Validate) is treated as "setup needed"; a successful
+// Load needs setup iff no password hash is stored.
+func (s *Service) NeedsSetup() bool {
+	cur, err := config.Load(s.cfgPath)
+	if err != nil {
+		return true
+	}
+	return cur.Web.PasswordHash == ""
+}
+
 // VerifyLogin checks a login attempt against the stored hash.
 func (s *Service) VerifyLogin(pw string) bool {
 	cur, err := config.Load(s.cfgPath)
