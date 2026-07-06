@@ -1,0 +1,19 @@
+# Train departure board. Installed to /etc/systemd/system/trainboard.service.
+# Starts early and deliberately does NOT wait for network-online: the board
+# renders its Initialising/Error scenes offline and recovers when Darwin
+# becomes reachable (M1C design §systemd).
+[Unit]
+Description=Train departure board
+# No After=network-online.target on purpose.
+
+[Service]
+ExecStart=/usr/local/bin/trainboard --production
+Restart=always
+RestartSec=2
+User=root
+# WatchdogSec placeholder: M3's connectivity manager will own sd_notify
+# aggregation. The render loop must NOT pet the watchdog for connectivity.
+#WatchdogSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -7,3 +7,9 @@ func TestName(t *testing.T) {
 		t.Fatalf("Name() = %q, want %q", got, "trainboard")
 	}
 }
+
+func TestVersionDefaultsToDev(t *testing.T) {
+	if Version() != "dev" {
+		t.Fatalf("Version() = %q, want \"dev\"", Version())
+	}
+}
