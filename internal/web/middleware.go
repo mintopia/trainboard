@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -58,8 +59,10 @@ func stateChanging(r *http.Request) bool {
 }
 
 // csrfProtect enforces the per-session CSRF token on state-changing
-// requests. Chain it after requireAuth.
-func csrfProtect() middleware {
+// requests. Chain it after requireAuth. Rejections are logged to log (path
+// and method only — never the tokens themselves) to satisfy the security
+// invariant that CSRF failures are both rejected with 403 and observable.
+func csrfProtect(log *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !stateChanging(r) {
@@ -72,6 +75,7 @@ func csrfProtect() middleware {
 				got = r.PostFormValue("csrf")
 			}
 			if want == "" || got != want {
+				log.Warn("csrf rejected", "path", r.URL.Path, "method", r.Method)
 				http.Error(w, "csrf token invalid", http.StatusForbidden)
 				return
 			}
@@ -117,6 +121,46 @@ func rateLimit(rl *limiter, log *slog.Logger) middleware {
 				}
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// trackingWriter records whether a response has started (header written or
+// body bytes sent) so recoverPanics can decide whether it is still safe to
+// write its own 500 response.
+type trackingWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (tw *trackingWriter) WriteHeader(code int) {
+	tw.started = true
+	tw.ResponseWriter.WriteHeader(code)
+}
+
+func (tw *trackingWriter) Write(b []byte) (int, error) {
+	tw.started = true
+	return tw.ResponseWriter.Write(b)
+}
+
+// recoverPanics recovers panics from downstream handlers (e.g. Sessions.Create
+// failing on crypto/rand exhaustion) so a single bad request cannot take down
+// the server. It logs the panic value and, if the response hasn't started
+// yet, replies 500. It must be the OUTERMOST middleware in the chain built by
+// Task 6, so every other middleware and handler runs under its recover.
+func recoverPanics(log *slog.Logger) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tw := &trackingWriter{ResponseWriter: w}
+			defer func() {
+				if v := recover(); v != nil {
+					log.Error("handler panic", "path", r.URL.Path, "panic", fmt.Sprint(v))
+					if !tw.started {
+						http.Error(tw, "internal error", http.StatusInternalServerError)
+					}
+				}
+			}()
+			next.ServeHTTP(tw, r)
 		})
 	}
 }

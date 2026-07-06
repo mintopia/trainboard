@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/mintopia/trainboard/internal/obs"
 )
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -60,7 +62,7 @@ func TestRequireAuthPassesValidSession(t *testing.T) {
 
 func TestCSRFRejectsMissingAndWrongToken(t *testing.T) {
 	s := NewSessions()
-	h := chain(okHandler(), requireAuth(s, false), csrfProtect())
+	h := chain(okHandler(), requireAuth(s, false), csrfProtect(testLog()))
 	for _, tok := range []string{"", "wrong"} {
 		form := url.Values{"csrf": {tok}}
 		r, _ := authedRequest(t, s, "POST", "/config", strings.NewReader(form.Encode()))
@@ -75,7 +77,7 @@ func TestCSRFRejectsMissingAndWrongToken(t *testing.T) {
 
 func TestCSRFAcceptsFormFieldAndHeader(t *testing.T) {
 	s := NewSessions()
-	h := chain(okHandler(), requireAuth(s, false), csrfProtect())
+	h := chain(okHandler(), requireAuth(s, false), csrfProtect(testLog()))
 	// form field
 	r, csrf := authedRequest(t, s, "POST", "/config", nil)
 	form := url.Values{"csrf": {csrf}}
@@ -99,12 +101,82 @@ func TestCSRFAcceptsFormFieldAndHeader(t *testing.T) {
 
 func TestCSRFIgnoresGET(t *testing.T) {
 	s := NewSessions()
-	h := chain(okHandler(), requireAuth(s, false), csrfProtect())
+	h := chain(okHandler(), requireAuth(s, false), csrfProtect(testLog()))
 	r, _ := authedRequest(t, s, "GET", "/", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET must skip csrf, got %d", rec.Code)
+	}
+}
+
+func TestCSRFRejectionLogsToObs(t *testing.T) {
+	ring := obs.NewRing(obs.DefaultRingCapacity)
+	log := obs.NewLogger(io.Discard, ring, slog.LevelWarn)
+	s := NewSessions()
+	h := chain(okHandler(), requireAuth(s, false), csrfProtect(log))
+	form := url.Values{"csrf": {"wrong"}}
+	r, _ := authedRequest(t, s, "POST", "/config", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", rec.Code)
+	}
+	var found bool
+	for _, e := range ring.Events() {
+		if e.Msg == "csrf rejected" {
+			found = true
+			if e.Attrs["path"] != "/config" || e.Attrs["method"] != "POST" {
+				t.Fatalf("unexpected attrs: %+v", e.Attrs)
+			}
+			for _, v := range e.Attrs {
+				if v == "wrong" {
+					t.Fatalf("csrf token value leaked into log attrs: %+v", e.Attrs)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a \"csrf rejected\" event in the obs ring")
+	}
+}
+
+func TestRecoverPanicsMiddleware(t *testing.T) {
+	ring := obs.NewRing(obs.DefaultRingCapacity)
+	log := obs.NewLogger(io.Discard, ring, slog.LevelWarn)
+	panicky := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic("boom")
+	})
+	h := chain(panicky, recoverPanics(log))
+	rec := httptest.NewRecorder()
+
+	func() {
+		defer func() {
+			if v := recover(); v != nil {
+				t.Fatalf("recoverPanics did not stop the panic from propagating: %v", v)
+			}
+		}()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	}()
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+	var found bool
+	for _, e := range ring.Events() {
+		if e.Msg == "handler panic" {
+			found = true
+			if e.Attrs["path"] != "/" {
+				t.Fatalf("unexpected attrs: %+v", e.Attrs)
+			}
+			if !strings.Contains(e.Attrs["panic"], "boom") {
+				t.Fatalf("panic value missing from log attrs: %+v", e.Attrs)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a \"handler panic\" event in the obs ring")
 	}
 }
 
