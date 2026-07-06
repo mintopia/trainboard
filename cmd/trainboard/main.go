@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/buildinfo"
@@ -18,6 +20,7 @@ import (
 	"github.com/mintopia/trainboard/internal/display"
 	"github.com/mintopia/trainboard/internal/obs"
 	"github.com/mintopia/trainboard/internal/runtime"
+	"github.com/mintopia/trainboard/internal/web"
 )
 
 func main() {
@@ -32,6 +35,7 @@ func run() error {
 	production := flag.Bool("production", false, "drive the real SSD1322 over SPI")
 	previewDir := flag.String("preview-dir", "./preview", "PNG preview directory (host mode)")
 	fixture := flag.String("fixture", "", "JSON board fixture instead of live Darwin (dev)")
+	httpAddr := flag.String("http", ":80", "address for the embedded config/status web server")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -40,6 +44,7 @@ func run() error {
 		return nil
 	}
 
+	startedAt := time.Now()
 	ring := obs.NewRing(obs.DefaultRingCapacity)
 	log := obs.NewLogger(os.Stderr, ring, slog.LevelInfo)
 
@@ -52,6 +57,7 @@ func run() error {
 	}
 
 	var fl runtime.Flusher
+	var previewLatest func() []byte
 	if *production {
 		tr, err := display.OpenPeriph(display.PeriphConfig{SPIPort: "SPI0.0", DCPin: "GPIO25", ResetPin: "GPIO27", MaxHz: 16_000_000})
 		if err != nil {
@@ -62,21 +68,31 @@ func run() error {
 		if err := panel.Init(); err != nil {
 			return err
 		}
-		fl = panel
+		// Production still serves a live preview to the web UI, but never to
+		// disk: newPreviewSink("", 25) skips disk writes entirely (dir=="")
+		// while still encoding for Latest(). teeFlusher fans every Flush and
+		// SetContrast call out to both; the panel's error (not the
+		// preview's) is what the render loop sees.
+		sink := newPreviewSink("", 25)
+		fl = newTeeFlusher(panel, sink)
+		previewLatest = sink.Latest
 	} else {
 		if err := os.MkdirAll(*previewDir, 0o755); err != nil {
 			return err
 		}
-		fl = newPreviewSink(*previewDir, 25)
+		sink := newPreviewSink(*previewDir, 25)
+		fl = sink
+		previewLatest = sink.Latest
 		log.Info("preview mode", "dir", *previewDir)
 	}
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		// Config unusable (missing/unparsable/invalid): show the E04 fault
-		// on-screen and idle; the operator fixes the file (M2 will offer a
-		// UI). systemd keeps us alive.
-		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, err)
+		// on-screen and idle; the operator fixes the file via the embedded
+		// web UI's /setup and /config, which stay reachable in this path
+		// too. systemd keeps us alive.
+		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, err)
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
 
@@ -94,9 +110,48 @@ func run() error {
 	poller := runtime.NewPoller(fetcher, cfg, log)
 	go poller.Run(ctx)
 
+	startWebServer(ctx, *cfgPath, *httpAddr, poller.Snapshot, ring, previewLatest, startedAt, log)
+
 	loop := runtime.NewLoop(poller.Snapshot, fl, cfg, fonts, buildinfo.Version(), log)
 	log.Info("starting render loop", "version", buildinfo.Version())
 	return loop.Run(ctx)
+}
+
+// startWebServer builds the web.Service/Server over cfgPath and runs it in
+// the background for the remainder of ctx's lifetime. It is shared by both
+// boot paths (valid config and the E04 error loop) so a virgin or broken
+// device always has /setup and /config reachable to fix itself.
+//
+// Apply is an immediate clean exit: the 500ms "let the response finish
+// writing first" delay already lives in the web handlers (Task 8), so main's
+// side of Apply must not add a second delay of its own. systemd is expected
+// to restart the process. Reboot shells out to systemctl and reports the
+// error rather than the web handler having to guess.
+func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, log *slog.Logger) {
+	actions := web.Actions{
+		Apply: func() {
+			log.Info("applying config: exiting for restart")
+			os.Exit(0)
+		},
+		Reboot: func() error {
+			return exec.Command("systemctl", "reboot").Run()
+		},
+	}
+	sources := web.Sources{
+		Snapshot:   snapshot,
+		Ring:       ring,
+		PreviewPNG: previewLatest,
+		Version:    buildinfo.Version(),
+		StartedAt:  startedAt,
+	}
+	svc := web.NewService(cfgPath, sources, actions, log)
+	srv := web.NewServer(svc, log)
+	log.Info("starting web server", "addr", httpAddr)
+	go func() {
+		if err := srv.Run(ctx, httpAddr); err != nil {
+			log.Error("web server exited", "error", err.Error())
+		}
+	}()
 }
 
 // loadConfig reads and fully validates the config at path, returning an
@@ -120,10 +175,16 @@ func loadConfig(path string) (config.Config, error) {
 // runConfigErrorLoop renders the E04 fault scene and idles forever (until
 // ctx is cancelled): the shared fallback for both a Load error (unreadable
 // file) and a Validate error (missing/invalid values, including the
-// fresh-install case where Default() doesn't pass Validate).
-func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path string, err error) error {
+// fresh-install case where Default() doesn't pass Validate). The web server
+// still runs here, over the SAME config path, so a virgin or broken device
+// can be fixed from /setup or /config without needing physical access.
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, err error) error {
 	log.Error("config error", "err", err.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
-	loop := runtime.NewLoop(func() *board.Snapshot { return snap }, fl, config.Default(), fonts, buildinfo.Version(), log)
+	staticSnapshot := func() *board.Snapshot { return snap }
+
+	startWebServer(ctx, path, httpAddr, staticSnapshot, ring, previewLatest, startedAt, log)
+
+	loop := runtime.NewLoop(staticSnapshot, fl, config.Default(), fonts, buildinfo.Version(), log)
 	return loop.Run(ctx)
 }
