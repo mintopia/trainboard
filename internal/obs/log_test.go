@@ -45,3 +45,32 @@ func TestLoggerLevelGate(t *testing.T) {
 		t.Fatal("debug record must be dropped at Info level")
 	}
 }
+
+func TestLoggerTeeIncludesBoundAttrs(t *testing.T) {
+	ring := NewRing(8)
+	log := NewLogger(&strings.Builder{}, ring, slog.LevelInfo)
+	log.With("component", "fetcher").Info("done", "n", 5)
+	events := ring.Events()
+	if len(events) != 1 {
+		t.Fatalf("ring has %d events, want 1", len(events))
+	}
+	if events[0].Attrs["component"] != "fetcher" {
+		t.Fatalf("event attrs missing bound attr, got %+v", events[0].Attrs)
+	}
+	if events[0].Attrs["n"] != "5" {
+		t.Fatalf("event attrs missing record attr, got %+v", events[0].Attrs)
+	}
+}
+
+func TestLoggerTeeQualifiesGroupedAttrs(t *testing.T) {
+	ring := NewRing(8)
+	log := NewLogger(&strings.Builder{}, ring, slog.LevelInfo)
+	log.WithGroup("req").Info("done", "n", 5)
+	events := ring.Events()
+	if len(events) != 1 {
+		t.Fatalf("ring has %d events, want 1", len(events))
+	}
+	if events[0].Attrs["req.n"] != "5" {
+		t.Fatalf("event attrs missing group-qualified attr, got %+v", events[0].Attrs)
+	}
+}
