@@ -11,6 +11,8 @@ import (
 
 var update = flag.Bool("update", false, "regenerate golden images")
 
+// Kept in lockstep with internal/render/rendertest (which downstream
+// packages use; it can't be imported from these in-package tests).
 // toGray renders the framebuffer as an 8-bit grey image (level*17 ⇒ 0..255).
 func toGray(fb *Framebuffer) *image.Gray {
 	g := image.NewGray(image.Rect(0, 0, fb.W, fb.H))
