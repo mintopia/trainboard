@@ -59,7 +59,6 @@ func singleDepBoard() *data.Board {
 	return b
 }
 
-//nolint:unused // shared fixture consumed by later M1C tasks (scenes/runtime)
 func emptyBoard() *data.Board {
 	b := fixtureBoard()
 	b.Departures = nil
