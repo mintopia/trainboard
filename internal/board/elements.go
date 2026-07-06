@@ -79,8 +79,9 @@ func (n *nextServiceRow) Render(fb *render.Framebuffer, tick int, _ time.Time) {
 }
 
 // remainingServices vertically cycles rows 2..n (reference RemainingServices):
-// scroll in, hold each row rsPauseTicks, scroll 12px to the next in
-// rsMoveTicks, wrapping seamlessly via a duplicated first row.
+// each row moves into place then holds (move-then-hold, not hold-then-move) —
+// scroll in, slide 12px into the next row, hold rsPauseTicks, repeat —
+// wrapping seamlessly via a duplicated first row.
 type remainingServices struct {
 	strip *render.Framebuffer
 	n     int
@@ -88,6 +89,8 @@ type remainingServices struct {
 
 func newRemainingServices(deps []data.Departure, f *Fonts) render.Element {
 	if len(deps) == 0 {
+		// n stays 0 (zero value); Render's nil-strip guard below depends on
+		// strip being nil in this case, not on n.
 		return &remainingServices{}
 	}
 	n := len(deps)
@@ -110,12 +113,16 @@ func (r *remainingServices) Render(fb *render.Framebuffer, tick int, _ time.Time
 		return
 	}
 	t := tick - rsMoveTicks
-	seg := t / rsSegTicks
+	s := t / rsSegTicks
 	w := t % rsSegTicks
-	row := 1 + seg%r.n
-	top := row * RowH
-	if w >= rsPauseTicks {
-		top += rsStep * (w - rsPauseTicks + 1)
+	step := rsStep * (w + 1)
+	if step > RowH {
+		step = RowH
+	}
+	u := RowH*s + step // continuous unwrapped scroll position
+	top := u
+	if u > RowH {
+		top = RowH + (u-RowH)%(RowH*r.n) // wrap within real rows; dup row covers mid-move windows
 	}
 	copyRect(fb, r.strip, top, top+RowH, 0, RemainingY)
 }

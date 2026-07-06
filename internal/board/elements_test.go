@@ -57,14 +57,54 @@ func TestRemainingServicesEmptyRendersNothing(t *testing.T) {
 	}
 }
 
+func TestRemainingServicesSlidesFirstRowIn(t *testing.T) {
+	f := mustFonts(t)
+	deps := fixtureBoard().Departures[1:] // ordinals 2..5
+	el := newRemainingServices(deps, f)
+
+	// t=5: end of the blank scroll-in phase, band still fully blank.
+	at5 := fbFor(t, el, 5)
+	for y := RemainingY; y < RemainingY+RowH; y++ {
+		for x := 0; x < W; x++ {
+			if at5.At(x, y) != 0 {
+				t.Fatalf("pixel (%d,%d) lit at t=5, band should still be blank", x, y)
+			}
+		}
+	}
+
+	// t=8: mid first move (top=6), row 1 is sliding in so the band has some
+	// lit pixels but isn't yet the fully-held frame.
+	at8 := fbFor(t, el, 8)
+	lit := false
+	for y := RemainingY; y < RemainingY+RowH && !lit; y++ {
+		for x := 0; x < W; x++ {
+			if at8.At(x, y) != 0 {
+				lit = true
+				break
+			}
+		}
+	}
+	if !lit {
+		t.Fatal("expected some lit pixels at t=8 (row 1 sliding in)")
+	}
+
+	at11 := fbFor(t, el, 11)
+	if string(at8.Pix) == string(at5.Pix) {
+		t.Fatal("t=8 frame must differ from t=5 (blank) frame")
+	}
+	if string(at8.Pix) == string(at11.Pix) {
+		t.Fatal("t=8 frame must differ from t=11 (fully-held) frame")
+	}
+}
+
 func TestRemainingServicesHoldsRowDuringPause(t *testing.T) {
 	f := mustFonts(t)
 	deps := fixtureBoard().Departures[1:] // ordinals 2..5
 	el := newRemainingServices(deps, f)
-	// After scroll-in (t=6) the window holds row 1 (first remaining, ordinal
-	// "2nd") for rsPauseTicks. Frames at t=6 and t=6+124 must be identical.
-	a := fbFor(t, el, 6)
-	b := fbFor(t, el, 6+rsPauseTicks-1)
+	// Row 1 finishes sliding in at t=11 (top=12) and holds until t=136
+	// (t'=5..130, i.e. rsPauseTicks worth of held frames).
+	a := fbFor(t, el, 11)
+	b := fbFor(t, el, 136)
 	if string(a.Pix) != string(b.Pix) {
 		t.Fatal("carousel must hold the row for the whole pause")
 	}
@@ -76,7 +116,7 @@ func TestRemainingServicesAdvancesToNextRow(t *testing.T) {
 	deps := fixtureBoard().Departures[1:]
 	el := newRemainingServices(deps, f)
 	// One full segment after the first hold: window shows ordinal "3rd".
-	rendertest.AssertGolden(t, "testdata", "el_remaining_hold3rd", fbFor(t, el, 6+131))
+	rendertest.AssertGolden(t, "testdata", "el_remaining_hold3rd", fbFor(t, el, 11+131))
 }
 
 func TestRemainingServicesWrapsSeamlessly(t *testing.T) {
@@ -84,8 +124,8 @@ func TestRemainingServicesWrapsSeamlessly(t *testing.T) {
 	deps := fixtureBoard().Departures[1:] // n = 4
 	el := newRemainingServices(deps, f)
 	// Hold frame of cycle 0 row 0 must equal hold frame of cycle 1 row 0.
-	a := fbFor(t, el, 6)
-	b := fbFor(t, el, 6+4*131)
+	a := fbFor(t, el, 11)
+	b := fbFor(t, el, 11+4*131)
 	if string(a.Pix) != string(b.Pix) {
 		t.Fatal("carousel wrap must be seamless")
 	}
