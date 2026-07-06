@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,13 +12,26 @@ import (
 // newTestServer wires a Server to a saved, otherwise-valid config (origin
 // and Darwin token already present, as validCfg does for the Service tests)
 // with no admin password yet, so setupGate redirects everything to /setup.
-// A literally-missing config file is covered directly by
-// TestSetInitialPasswordVirginDevice in service_test.go; here the config
-// already exists so /setup's optional token field can be left blank without
-// tripping config.Validate's darwin.token requirement.
+// Because a token is already stored, /setup's token field can be left blank
+// in these tests without tripping config.Validate's darwin.token requirement
+// (the "keep the stored secret" write-only path). A literally virgin device
+// — no config file, no stored token — is covered by newTestServerVirgin
+// below and by TestSetInitialPasswordVirginDevice in service_test.go.
 func newTestServer(t *testing.T) (*Server, *Service) {
 	t.Helper()
 	svc, _ := newTestService(t, validCfg())
+	return NewServer(svc, testLog()), svc
+}
+
+// newTestServerVirgin wires a Server to a config path with no file on it at
+// all — a genuinely virgin device, with no stored Darwin token to fall back
+// on. Unlike newTestServer, POSTing /setup here with a blank token must be
+// rejected by config.Validate (darwin.token is required), since there is
+// nothing to keep.
+func newTestServerVirgin(t *testing.T) (*Server, *Service) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	svc := newTestServiceAt(t, path)
 	return NewServer(svc, testLog()), svc
 }
 
@@ -112,6 +126,27 @@ func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 	rec2 := getPath(t, h, "/setup")
 	if rec2.Code != http.StatusNotFound {
 		t.Fatalf("want 404 for /setup once a password exists, got %d", rec2.Code)
+	}
+}
+
+// (b2) on a genuinely virgin device (no config file, no stored token),
+// POSTing /setup with no token must re-render 200 with an error surfacing
+// config.Validate's darwin.token rejection — not a 500, and not a redirect
+// to / as if setup had succeeded.
+func TestServerSetupPostVirginDeviceRequiresToken(t *testing.T) {
+	srv, svc := newTestServerVirgin(t)
+	h := srv.Handler()
+
+	form := url.Values{"password": {"longenough1"}, "confirm": {"longenough1"}, "origin": {"PAD"}}
+	rec := postForm(t, h, "/setup", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "darwin.token") {
+		t.Fatalf("expected darwin.token error in body: %s", rec.Body.String())
+	}
+	if svc.VerifyLogin("longenough1") {
+		t.Fatal("password must not be set when setup is rejected for a missing token")
 	}
 }
 

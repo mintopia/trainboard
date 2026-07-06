@@ -143,18 +143,30 @@ func (s *Service) UpdateConfig(u ConfigUpdate) error {
 // The resulting document must be valid on its own, so setup gathers whatever
 // Validate requires up front rather than relaxing Save's contract.
 //
-// originCRS is required (a 3-letter CRS code); token is optional — leave it
-// blank to configure the Darwin token later via UpdateConfig. Permitted only
-// while no admin password is stored yet.
+// originCRS is required (a 3-letter CRS code). token is write-only like the
+// other secrets: a blank token keeps whatever is already stored on disk (the
+// path taken when a config already carries a valid token and setup is only
+// establishing the admin password). It is NOT optional in the sense of
+// "the board can run without one" — a genuinely virgin device has no stored
+// token, so a blank token there leaves Darwin.Token empty and the closing
+// cur.Validate() call rejects it with "darwin.token is required"; no config
+// file is written in that case. Callers driving a first-boot UI (no config
+// on disk yet) must collect a real token from the operator.
+//
+// Permitted only while no admin password is stored yet.
 func (s *Service) SetInitialPassword(pw, originCRS, token string) error {
 	if len(pw) < 8 {
 		return errors.New("password must be at least 8 characters")
 	}
 	// config.Load validates internally, so a present-but-invalid file (e.g.
-	// an installer-written config.Default() with no origin/token yet) errors
-	// here rather than returning a usable document. That's exactly the
-	// state first-boot setup exists to fix, so fall back to Default(): this
-	// is the "current-or-default" load the design calls for.
+	// an installer-written config.Default() with no origin/token yet, or a
+	// corrupted/unreadable file) errors here rather than returning a usable
+	// document. Falling back to Default() in every such case is deliberate:
+	// first-boot setup's whole job is turning an invalid-or-absent document
+	// into a valid one, and a config file this method can't even parse is
+	// treated the same as "no config yet" — fresh setup over an unrecoverable
+	// file, rather than surfacing a load error the operator can't act on
+	// from this form.
 	cur, err := config.Load(s.cfgPath)
 	if err != nil {
 		cur = config.Default()

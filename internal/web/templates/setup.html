@@ -6,7 +6,7 @@
   <label>Admin password (min 8 chars) <input type="password" name="password" required minlength="8"></label>
   <label>Confirm password <input type="password" name="confirm" required></label>
   <label>Station code (CRS, e.g. PAD) <input type="text" name="origin" required maxlength="3" pattern="[A-Za-z]{3}"></label>
-  <label>Darwin API token (optional, set later in Config) <input type="password" name="token" autocomplete="off"></label>
+  <label>Darwin API token (from the National Rail OpenLDBWS registration email) <input type="password" name="token" required autocomplete="off"></label>
   <button type="submit">Save and continue</button>
 </form>
 {{end}}

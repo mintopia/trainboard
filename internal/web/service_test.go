@@ -2,7 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -65,6 +68,35 @@ func TestStatusEventsNewestFirstCapped(t *testing.T) {
 	ev := svc.Status().Events
 	if len(ev) != 8 || ev[0].Msg != "h" || ev[7].Msg != "a" {
 		t.Fatalf("events not newest-first: %+v", ev)
+	}
+}
+
+// TestStatusEventsCapAt50 exercises maxStatusEvents itself: a ring holding
+// more than 50 events must still only surface the newest 50, newest first.
+func TestStatusEventsCapAt50(t *testing.T) {
+	src := Sources{
+		Snapshot:   func() *board.Snapshot { return nil },
+		Ring:       obs.NewRing(64),
+		PreviewPNG: func() []byte { return nil },
+		Version:    "vtest",
+		StartedAt:  time.Now(),
+	}
+	svc := NewService(filepath.Join(t.TempDir(), "config.json"), src, Actions{Apply: func() {}, Reboot: func() error { return nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := config.Save(svc.cfgPath, validCfg()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 60; i++ {
+		src.Ring.Add(obs.Event{Msg: fmt.Sprintf("evt-%d", i)})
+	}
+	ev := svc.Status().Events
+	if len(ev) != maxStatusEvents {
+		t.Fatalf("events len = %d, want %d", len(ev), maxStatusEvents)
+	}
+	if ev[0].Msg != "evt-59" {
+		t.Fatalf("newest event first: got %q", ev[0].Msg)
+	}
+	if ev[len(ev)-1].Msg != "evt-10" {
+		t.Fatalf("oldest surfaced event should be evt-10 (60 pushed, cap 50): got %q", ev[len(ev)-1].Msg)
 	}
 }
 
@@ -170,6 +202,49 @@ func TestSetInitialPasswordVirginDevice(t *testing.T) {
 	}
 	if stored.Darwin.Token != "tok-first" {
 		t.Fatalf("token not persisted: %+v", stored)
+	}
+	if !VerifyPassword(stored.Web.PasswordHash, "longenough1") {
+		t.Fatal("stored hash must verify")
+	}
+}
+
+// TestSetInitialPasswordVirginDeviceBlankTokenRejected covers the finding
+// this task resolves: a genuinely virgin device (no config file at all) has
+// no stored Darwin token to fall back on, so a blank token at setup must be
+// rejected by cur.Validate() — it is not a valid way to "configure the token
+// later." No config file must be written when this happens.
+func TestSetInitialPasswordVirginDeviceBlankTokenRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	svc := newTestServiceAt(t, path) // no file at path: config.Load falls back to Default()
+
+	err := svc.SetInitialPassword("longenough1", "PAD", "")
+	if err == nil {
+		t.Fatal("blank token on a virgin device must be rejected")
+	}
+	if !strings.Contains(err.Error(), "darwin.token") {
+		t.Fatalf("error must mention darwin.token, got: %v", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("no config file must be created on rejection, stat err = %v", statErr)
+	}
+}
+
+// TestSetInitialPasswordBlankTokenKeepsStoredToken pins the companion case:
+// a device with an already-valid stored config (token present, no password
+// hash yet — e.g. provisioned by an installer) can complete first-boot setup
+// with a blank token, and the stored token is left untouched.
+func TestSetInitialPasswordBlankTokenKeepsStoredToken(t *testing.T) {
+	svc, path := newTestService(t, validCfg()) // validCfg has Darwin.Token = "tok-original"
+
+	if err := svc.SetInitialPassword("longenough1", "PAD", ""); err != nil {
+		t.Fatalf("blank token must be accepted when a token is already stored: %v", err)
+	}
+	stored, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("stored config must validate: %v", err)
+	}
+	if stored.Darwin.Token != "tok-original" {
+		t.Fatalf("blank token at setup must keep the stored token, got %q", stored.Darwin.Token)
 	}
 	if !VerifyPassword(stored.Web.PasswordHash, "longenough1") {
 		t.Fatal("stored hash must verify")
