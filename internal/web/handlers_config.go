@@ -97,7 +97,7 @@ func (s *Server) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "applied", basePage{LoggedIn: true, CSRF: csrfFrom(r)})
-	time.AfterFunc(applyDelay, s.svc.act.Apply)
+	s.scheduleApply()
 }
 
 // handleConfigAPPassword mints a fresh AP-mode password and re-renders the

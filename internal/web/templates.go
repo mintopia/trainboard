@@ -28,9 +28,11 @@ var (
 	baseTemplate    = parseTemplates()
 	setupTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
 	loginTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
-	statusTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
-	configTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config.html"))
-	appliedTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/applied.html"))
+	statusTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
+	configTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config.html"))
+	appliedTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/applied.html"))
+	actionsTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/actions.html"))
+	rebootingTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/rebooting.html"))
 )
 
 // staticFS returns the embedded static/ subtree for the file server.

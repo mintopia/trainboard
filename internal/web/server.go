@@ -73,6 +73,29 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
+	s.mux.Handle("GET /actions", chain(http.HandlerFunc(s.handleActionsGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /actions/restart", chain(http.HandlerFunc(s.handleActionsRestart),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/reboot", chain(http.HandlerFunc(s.handleActionsReboot),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+
+	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
+	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
+	// also translate the shared csrfProtect/rateLimit middleware's plain-text
+	// 403/429 into the API's uniform {"error":"..."} shape.
+	s.mux.Handle("GET /api/status", chain(http.HandlerFunc(s.handleAPIStatus),
+		apiJSONErrors, requireAuth(s.sessions, true)))
+	s.mux.Handle("GET /api/config", chain(http.HandlerFunc(s.handleAPIConfigGet),
+		apiJSONErrors, requireAuth(s.sessions, true)))
+	s.mux.Handle("PUT /api/config", chain(http.HandlerFunc(s.handleAPIConfigPut),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("GET /api/events", chain(http.HandlerFunc(s.handleAPIEvents),
+		apiJSONErrors, requireAuth(s.sessions, true)))
+	s.mux.Handle("POST /api/actions/restart", chain(http.HandlerFunc(s.handleAPIActionsRestart),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/reboot", chain(http.HandlerFunc(s.handleAPIActionsReboot),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+
 	return s
 }
 
@@ -150,6 +173,10 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = configTemplate
 	case "applied":
 		t = appliedTemplate
+	case "actions":
+		t = actionsTemplate
+	case "rebooting":
+		t = rebootingTemplate
 	default:
 		http.Error(w, "unknown page", http.StatusInternalServerError)
 		return

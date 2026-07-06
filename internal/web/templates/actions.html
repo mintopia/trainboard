@@ -1,0 +1,9 @@
+{{define "title"}}actions — trainboard{{end}}
+{{define "content"}}
+<h2>Actions</h2>
+<form method="post" action="/actions/restart"><input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Restart board software</button></form>
+<form method="post" action="/actions/reboot" onsubmit="return confirm('Reboot the device?')"><input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Reboot device</button></form>
+<form><button type="button" disabled title="coming in a later release">Update firmware</button></form>
+{{end}}

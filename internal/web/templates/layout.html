@@ -10,7 +10,7 @@
 <body>
 <header>
   <h1>trainboard</h1>
-  {{if .LoggedIn}}<nav><a href="/">Status</a> <a href="/config">Config</a>
+  {{if .LoggedIn}}<nav><a href="/">Status</a> <a href="/config">Config</a> <a href="/actions">Actions</a>
   <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form></nav>{{end}}
 </header>
 <main>{{block "content" .}}{{end}}</main>
