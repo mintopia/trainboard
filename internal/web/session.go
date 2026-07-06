@@ -11,7 +11,6 @@ import (
 // restart logs everyone out (acceptable for a single-admin appliance).
 const SessionTTL = 7 * 24 * time.Hour
 
-//nolint:unused // consumed by the session-cookie middleware landing in a later M2 task
 const sessionCookie = "tb_session"
 
 type sessionEntry struct {
