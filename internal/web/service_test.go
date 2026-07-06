@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,33 @@ func TestUpdateConfigRejectsInvalid(t *testing.T) {
 	stored, _ := config.Load(path)
 	if stored.Board.RefreshSeconds == 5 {
 		t.Fatal("rejected config must not be written")
+	}
+}
+
+// TestUpdateConfigRejectsShortPassword covers the finding this task resolves:
+// UpdateConfig must enforce the same 8-character minimum as
+// SetInitialPassword when NewPassword is set. Nothing must be written on
+// rejection, including the stored password hash.
+func TestUpdateConfigRejectsShortPassword(t *testing.T) {
+	svc, path := newTestService(t, validCfg())
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u := ConfigUpdate{Cfg: validCfg(), NewPassword: "short"}
+	if err := svc.UpdateConfig(u); err == nil {
+		t.Fatal("password shorter than 8 characters must be rejected")
+	} else if !strings.Contains(err.Error(), "at least 8 characters") {
+		t.Fatalf("error must mention the 8-character minimum, got: %v", err)
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("rejected password change must write nothing:\nbefore=%+v\nafter=%+v", before, after)
 	}
 }
 

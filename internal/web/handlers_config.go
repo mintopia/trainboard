@@ -120,11 +120,23 @@ func (s *Server) handleConfigAPPassword(w http.ResponseWriter, r *http.Request) 
 // submits (Board, Layout, Powersaving, Wifi.SSID — the fields
 // Service.UpdateConfig actually merges from ConfigUpdate.Cfg). Secrets
 // (darwin.token, wifi.psk, web.password) are read directly by the caller
-// into ConfigUpdate's write-only fields instead. On the first parse failure
-// it returns the best-effort partial config built so far alongside the
-// error, so the caller can re-render the form with whatever the user typed.
+// into ConfigUpdate's write-only fields instead.
+//
+// Every field is parsed unconditionally, regardless of whether an earlier
+// field failed: only the FIRST parse error is returned, but cfg is always
+// populated from every field that parsed successfully. This matters because
+// the caller re-renders the form from the returned cfg on error — bailing
+// out on the first failure would silently revert every later field to its
+// zero value in that re-render, discarding user input the form never had a
+// problem with.
 func parseConfigForm(r *http.Request) (config.Config, error) {
 	var cfg config.Config
+	var firstErr error
+	keepFirst := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 
 	cfg.Board.Origin = strings.ToUpper(strings.TrimSpace(r.PostFormValue("board.origin")))
 	cfg.Board.Destination = strings.ToUpper(strings.TrimSpace(r.PostFormValue("board.destination")))
@@ -132,37 +144,32 @@ func parseConfigForm(r *http.Request) (config.Config, error) {
 	cfg.Board.TOCs = splitCSV(r.PostFormValue("board.tocs"))
 
 	var err error
-	if cfg.Board.Services, err = parseIntField(r, "board.services"); err != nil {
-		return cfg, err
-	}
-	if cfg.Board.CutoffHours, err = parseIntField(r, "board.cutoffHours"); err != nil {
-		return cfg, err
-	}
-	if cfg.Board.RefreshSeconds, err = parseIntField(r, "board.refreshSeconds"); err != nil {
-		return cfg, err
-	}
-	if cfg.Board.TimeWindowMinutes, err = parseIntField(r, "board.timeWindowMinutes"); err != nil {
-		return cfg, err
-	}
+	cfg.Board.Services, err = parseIntField(r, "board.services")
+	keepFirst(err)
+	cfg.Board.CutoffHours, err = parseIntField(r, "board.cutoffHours")
+	keepFirst(err)
+	cfg.Board.RefreshSeconds, err = parseIntField(r, "board.refreshSeconds")
+	keepFirst(err)
+	cfg.Board.TimeWindowMinutes, err = parseIntField(r, "board.timeWindowMinutes")
+	keepFirst(err)
 
 	reps, err := parseReplacements(r.PostFormValue("board.replacements"))
-	if err != nil {
-		return cfg, err
+	keepFirst(err)
+	if err == nil {
+		cfg.Board.Replacements = reps
 	}
-	cfg.Board.Replacements = reps
 
 	cfg.Layout.Times = formHasKey(r, "layout.times")
 
 	cfg.Powersaving.Enabled = formHasKey(r, "powersaving.enabled")
 	cfg.Powersaving.Start = strings.TrimSpace(r.PostFormValue("powersaving.start"))
 	cfg.Powersaving.End = strings.TrimSpace(r.PostFormValue("powersaving.end"))
-	if cfg.Powersaving.Brightness, err = parseIntField(r, "powersaving.brightness"); err != nil {
-		return cfg, err
-	}
+	cfg.Powersaving.Brightness, err = parseIntField(r, "powersaving.brightness")
+	keepFirst(err)
 
 	cfg.Wifi.SSID = strings.TrimSpace(r.PostFormValue("wifi.ssid"))
 
-	return cfg, nil
+	return cfg, firstErr
 }
 
 // parseIntField parses form field name as a base-10 integer, returning a

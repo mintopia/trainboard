@@ -290,6 +290,88 @@ func TestConfigPostPasswordConfirmMismatch(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
+// TestConfigPostPartialFailurePreservesOtherFields covers the finding this
+// task resolves: parseConfigForm used to bail out on the FIRST unparsable
+// field, so every field parsed after it silently reverted to its zero value
+// in the re-rendered form. A user who fat-fingers board.services while also
+// legitimately changing board.refreshSeconds and powersaving.start must see
+// both of those changes preserved in the re-render alongside the services
+// error, not wiped back to their old values.
+func TestConfigPostPartialFailurePreservesOtherFields(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseConfigForm()
+	form.Set("board.services", "abc")
+	form.Set("board.refreshSeconds", "120")
+	form.Set("powersaving.start", "22:00")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "services") {
+		t.Fatalf("expected board.services validation error in body: %s", body)
+	}
+	if !strings.Contains(body, `value="120"`) {
+		t.Fatalf("expected refreshSeconds=120 preserved in re-rendered form: %s", body)
+	}
+	if !strings.Contains(body, `value="22:00"`) {
+		t.Fatalf("expected powersaving.start=22:00 preserved in re-rendered form: %s", body)
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigPostShortPasswordRerendersWithError covers the finding this task
+// resolves: UpdateConfig previously enforced no minimum length on a password
+// change, unlike SetInitialPassword's 8-character floor. A config POST
+// setting web.password to a too-short value must re-render with an error and
+// leave the file (and stored password hash) unchanged.
+func TestConfigPostShortPasswordRerendersWithError(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseConfigForm()
+	form.Set("web.password", "short")
+	form.Set("web.password.confirm", "short")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "at least 8 characters") {
+		t.Fatalf("expected password-length validation error in body: %s", rec.Body.String())
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on short password:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
 // (h) POST /config/ap-password regenerates the AP password, showing it
 // exactly once in the response body, and persists it to the file.
 func TestConfigAPPasswordRegenerate(t *testing.T) {

@@ -124,6 +124,9 @@ func (s *Service) UpdateConfig(u ConfigUpdate) error {
 		next.Wifi.PSK = u.NewWifiPSK
 	}
 	if u.NewPassword != "" {
+		if len(u.NewPassword) < 8 {
+			return errors.New("password must be at least 8 characters")
+		}
 		h, err := HashPassword(u.NewPassword)
 		if err != nil {
 			return err
