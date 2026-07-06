@@ -1,0 +1,43 @@
+{{define "title"}}config — trainboard{{end}}
+{{define "content"}}
+<h2>Configuration</h2>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{if .APPassword}}<p class="flash">New hotspot password: <strong>{{.APPassword}}</strong> — shown once, note it down.</p>{{end}}
+<form method="post" action="/config">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<fieldset><legend>Board</legend>
+  <label>Origin CRS <input name="board.origin" value="{{.Cfg.Board.Origin}}" required maxlength="3" pattern="[A-Za-z]{3}"></label>
+  <label>Destination CRS (optional) <input name="board.destination" value="{{.Cfg.Board.Destination}}" maxlength="3"></label>
+  <label>Platforms (comma-separated, empty = all) <input name="board.platforms" value="{{.PlatformsCSV}}"></label>
+  <label>Operators (TOC codes, comma-separated) <input name="board.tocs" value="{{.TOCsCSV}}"></label>
+  <label>Services shown <input type="number" name="board.services" value="{{.Cfg.Board.Services}}" min="1" max="10"></label>
+  <label>Cutoff hours <input type="number" name="board.cutoffHours" value="{{.Cfg.Board.CutoffHours}}" min="1"></label>
+  <label>Refresh seconds <input type="number" name="board.refreshSeconds" value="{{.Cfg.Board.RefreshSeconds}}" min="15"></label>
+  <label>Time window minutes <input type="number" name="board.timeWindowMinutes" value="{{.Cfg.Board.TimeWindowMinutes}}" min="1"></label>
+  <label>Name replacements (one per line, From=To) <textarea name="board.replacements" rows="3">{{.ReplacementsText}}</textarea></label>
+  <label><input type="checkbox" name="layout.times" {{if .Cfg.Layout.Times}}checked{{end}}> Show calling-point times</label>
+</fieldset>
+<fieldset><legend>Powersaving</legend>
+  <label><input type="checkbox" name="powersaving.enabled" {{if .Cfg.Powersaving.Enabled}}checked{{end}}> Enabled</label>
+  <label>Start (HH:MM) <input name="powersaving.start" value="{{.Cfg.Powersaving.Start}}"></label>
+  <label>End (HH:MM) <input name="powersaving.end" value="{{.Cfg.Powersaving.End}}"></label>
+  <label>Dim brightness (0-255) <input type="number" name="powersaving.brightness" value="{{.Cfg.Powersaving.Brightness}}" min="0" max="255"></label>
+</fieldset>
+<fieldset><legend>Darwin</legend>
+  <label>API token <input type="password" name="darwin.token" placeholder="unchanged" autocomplete="off"></label>
+</fieldset>
+<fieldset><legend>WiFi (applied when provisioning support lands)</legend>
+  <label>SSID <input name="wifi.ssid" value="{{.Cfg.Wifi.SSID}}" maxlength="32"></label>
+  <label>Password <input type="password" name="wifi.psk" placeholder="unchanged" autocomplete="off"></label>
+</fieldset>
+<fieldset><legend>Admin</legend>
+  <label>New admin password <input type="password" name="web.password" placeholder="unchanged" autocomplete="new-password"></label>
+  <label>Confirm <input type="password" name="web.password.confirm" placeholder="unchanged" autocomplete="new-password"></label>
+</fieldset>
+<button type="submit">Save &amp; apply (restarts the board)</button>
+</form>
+<form method="post" action="/config/ap-password">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Regenerate hotspot password</button>
+</form>
+{{end}}

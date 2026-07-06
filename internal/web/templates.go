@@ -25,10 +25,12 @@ func parseTemplates() *template.Template {
 }
 
 var (
-	baseTemplate   = parseTemplates()
-	setupTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
-	loginTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
-	statusTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
+	baseTemplate    = parseTemplates()
+	setupTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
+	loginTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
+	statusTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
+	configTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config.html"))
+	appliedTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/applied.html"))
 )
 
 // staticFS returns the embedded static/ subtree for the file server.

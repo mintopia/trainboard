@@ -66,6 +66,11 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /preview.png", chain(http.HandlerFunc(s.handlePreviewPNG), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
+	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config", chain(http.HandlerFunc(s.handleConfigPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /config/ap-password", chain(http.HandlerFunc(s.handleConfigAPPassword),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
 	return s
@@ -141,6 +146,10 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = loginTemplate
 	case "index":
 		t = statusTemplate
+	case "config":
+		t = configTemplate
+	case "applied":
+		t = appliedTemplate
 	default:
 		http.Error(w, "unknown page", http.StatusInternalServerError)
 		return
