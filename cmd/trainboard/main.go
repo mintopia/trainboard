@@ -71,14 +71,12 @@ func run() error {
 		log.Info("preview mode", "dir", *previewDir)
 	}
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
-		// Config unusable: show the E04 fault on-screen and idle; the operator
-		// fixes the file (M2 will offer a UI). systemd keeps us alive.
-		log.Error("config load failed", "err", err.Error(), "path", *cfgPath)
-		snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
-		loop := runtime.NewLoop(func() *board.Snapshot { return snap }, fl, config.Default(), fonts, buildinfo.Version(), log)
-		return loop.Run(ctx)
+		// Config unusable (missing/unparsable/invalid): show the E04 fault
+		// on-screen and idle; the operator fixes the file (M2 will offer a
+		// UI). systemd keeps us alive.
+		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, err)
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
 
@@ -98,5 +96,34 @@ func run() error {
 
 	loop := runtime.NewLoop(poller.Snapshot, fl, cfg, fonts, buildinfo.Version(), log)
 	log.Info("starting render loop", "version", buildinfo.Version())
+	return loop.Run(ctx)
+}
+
+// loadConfig reads and fully validates the config at path, returning an
+// error for both load failures (unreadable/unparsable file) and validation
+// failures. config.Load's own doc warns that a missing file returns
+// Default() with a nil error, and Default() is itself invalid (empty
+// origin/token) — so loadConfig must Validate() on top of Load to catch the
+// fresh-install case, matching NewPoller's documented precondition that cfg
+// has passed Validate.
+func loadConfig(path string) (config.Config, error) {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+// runConfigErrorLoop renders the E04 fault scene and idles forever (until
+// ctx is cancelled): the shared fallback for both a Load error (unreadable
+// file) and a Validate error (missing/invalid values, including the
+// fresh-install case where Default() doesn't pass Validate).
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path string, err error) error {
+	log.Error("config error", "err", err.Error(), "path", path)
+	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
+	loop := runtime.NewLoop(func() *board.Snapshot { return snap }, fl, config.Default(), fonts, buildinfo.Version(), log)
 	return loop.Run(ctx)
 }

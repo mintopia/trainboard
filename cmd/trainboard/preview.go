@@ -5,6 +5,8 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+
+	"github.com/mintopia/trainboard/internal/board"
 )
 
 // previewSink is the host-mode Flusher: it unpacks SSD1322 wire frames and
@@ -31,8 +33,7 @@ func (p *previewSink) Flush(packed []byte) error {
 	if p.n%p.every != 0 {
 		return nil
 	}
-	const w, h = 256, 64
-	img := image.NewGray(image.Rect(0, 0, w, h))
+	img := image.NewGray(image.Rect(0, 0, board.W, board.H))
 	for i, b := range packed {
 		img.Pix[i*2] = (b >> 4) * 17 // high nibble = left pixel
 		img.Pix[i*2+1] = (b & 0x0F) * 17
