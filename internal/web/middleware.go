@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -87,6 +88,13 @@ func csrfProtect(log *slog.Logger) middleware {
 // originCheck rejects state-changing requests whose Origin header disagrees
 // with the request Host. Absent Origin (non-browser clients) is allowed —
 // auth and CSRF still gate those.
+//
+// This middleware runs in the global chain (Handler()), before mux dispatch,
+// so it never passes through apiJSONErrors — the per-route middleware that
+// otherwise normalises /api/* error bodies to JSON. It therefore has to be
+// API-aware itself: /api/* rejections get the uniform {"error":"..."} JSON
+// body (mirroring requireAuth's isAPI handling); every other route keeps the
+// existing plain-text http.Error body.
 func originCheck(log *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +103,12 @@ func originCheck(log *slog.Logger) middleware {
 					u, err := url.Parse(o)
 					if err != nil || u.Host == "" || u.Host != r.Host {
 						log.Warn("origin rejected", "origin", o, "host", r.Host, "path", r.URL.Path)
-						http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+						const msg = "cross-origin request rejected"
+						if strings.HasPrefix(r.URL.Path, "/api/") {
+							writeJSONError(w, http.StatusForbidden, msg)
+							return
+						}
+						http.Error(w, msg, http.StatusForbidden)
 						return
 					}
 				}

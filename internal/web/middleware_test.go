@@ -212,6 +212,43 @@ func TestOriginCheck(t *testing.T) {
 	}
 }
 
+// TestOriginCheckAPIRouteRejectsAsJSON guards the T9 finding: originCheck
+// runs in the global chain, before mux dispatch, so its 403 must be JSON for
+// /api/* paths on its own — it can't rely on apiJSONErrors, which only wraps
+// each route's per-mux chain and never sees this rejection.
+func TestOriginCheckAPIRouteRejectsAsJSON(t *testing.T) {
+	h := chain(okHandler(), originCheck(testLog()))
+	r := httptest.NewRequest("POST", "http://trainboard.local/api/config", nil)
+	r.Header.Set("Origin", "http://evil.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("want application/json, got %q", ct)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"cross-origin request rejected"}` {
+		t.Fatalf("body = %q", got)
+	}
+}
+
+// TestOriginCheckHTMLRouteRejectsAsText asserts the existing plain-text
+// behaviour is unchanged for non-API routes.
+func TestOriginCheckHTMLRouteRejectsAsText(t *testing.T) {
+	h := chain(okHandler(), originCheck(testLog()))
+	r := httptest.NewRequest("POST", "http://trainboard.local/config", nil)
+	r.Header.Set("Origin", "http://evil.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("HTML route origin rejection must not be JSON, got %q", ct)
+	}
+}
+
 func TestRateLimitMiddleware429(t *testing.T) {
 	rl := newLimiter(2)
 	h := chain(okHandler(), rateLimit(rl, testLog()))

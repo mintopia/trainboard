@@ -87,7 +87,7 @@ func TestLoadConfigValidFileReturnsMatchingConfig(t *testing.T) {
 func TestTeeFlusherWithPreviewSinkComposition(t *testing.T) {
 	panel := &fakeFlusher{}
 	sink := newPreviewSink("", 1) // every flush encodes; memory-only
-	tee := newTeeFlusher(panel, sink)
+	tee := newTeeFlusher(panel, sink, testLog())
 
 	fb := render.New(256, 64)
 	fb.SetPixel(0, 0, 15)

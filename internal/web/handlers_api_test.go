@@ -360,6 +360,52 @@ func TestAPIActionsRebootFiresRebootAndReportsError(t *testing.T) {
 	decodeAPIError(t, rec2)
 }
 
+// (l2) POST /api/actions/restart without X-CSRF-Token -> 403 JSON.
+func TestAPIActionsRestartMissingCSRFRejected403JSON(t *testing.T) {
+	srv, _, _, applyCh := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	rec := postJSON(t, srv.Handler(), "/api/actions/restart", "", cookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	decodeAPIError(t, rec)
+	assertApplyNotCalled(t, applyCh)
+}
+
+// (l3) POST /api/actions/reboot without X-CSRF-Token -> 403 JSON.
+func TestAPIActionsRebootMissingCSRFRejected403JSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, validCfg()); err != nil {
+		t.Fatal(err)
+	}
+	svc := newTestServiceAt(t, path)
+	rebootCh := make(chan struct{}, 1)
+	svc.act = Actions{
+		Apply: func() {},
+		Reboot: func() error {
+			rebootCh <- struct{}{}
+			return nil
+		},
+	}
+	if err := svc.SetInitialPassword("longenough1", "PAD", ""); err != nil {
+		t.Fatalf("SetInitialPassword: %v", err)
+	}
+	srv := NewServer(svc, testLog())
+	cookie, _ := loginAs(t, srv, "longenough1")
+
+	rec := postJSON(t, srv.Handler(), "/api/actions/reboot", "", cookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	decodeAPIError(t, rec)
+	select {
+	case <-rebootCh:
+		t.Fatal("Actions.Reboot must not be called when CSRF is missing")
+	default:
+	}
+}
+
 // (m) 31 rapid state-changing API requests trip the shared rate limiter
 // (burst 30) on the 31st, surfaced as JSON rather than the middleware's
 // default plain text.

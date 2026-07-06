@@ -9,15 +9,20 @@ import (
 // teeFlusher fans a single render loop out to two Flushers: the real panel
 // (a) and the in-memory/on-disk preview sink (b). Both are always called —
 // the preview must keep working even if the panel errors, and vice versa —
-// but only a's error is ever returned to the loop; b's is logged and
-// swallowed so a preview hiccup can never stall or fault the panel.
+// but only a's error is ever returned to the loop; b's is logged (through
+// log, which callers wire to the obs logger so preview failures surface in
+// /events, not just stderr) and swallowed so a preview hiccup can never
+// stall or fault the panel.
 type teeFlusher struct {
 	a, b runtime.Flusher
+	log  *slog.Logger
 }
 
-// newTeeFlusher wires the panel (a) and preview sink (b) together.
-func newTeeFlusher(a, b runtime.Flusher) *teeFlusher {
-	return &teeFlusher{a: a, b: b}
+// newTeeFlusher wires the panel (a) and preview sink (b) together. log
+// records b's swallowed errors; pass the obs logger so a struggling preview
+// sink is still observable.
+func newTeeFlusher(a, b runtime.Flusher, log *slog.Logger) *teeFlusher {
+	return &teeFlusher{a: a, b: b, log: log}
 }
 
 // Flush writes packed to both flushers unconditionally, returning a's error
@@ -26,7 +31,7 @@ func newTeeFlusher(a, b runtime.Flusher) *teeFlusher {
 func (t *teeFlusher) Flush(packed []byte) error {
 	aErr := t.a.Flush(packed)
 	if bErr := t.b.Flush(packed); bErr != nil {
-		slog.Default().Error("preview flush failed", "error", bErr.Error())
+		t.log.Warn("preview flush failed", "err", bErr.Error())
 	}
 	return aErr
 }
@@ -36,7 +41,7 @@ func (t *teeFlusher) Flush(packed []byte) error {
 func (t *teeFlusher) SetContrast(level byte) error {
 	aErr := t.a.SetContrast(level)
 	if bErr := t.b.SetContrast(level); bErr != nil {
-		slog.Default().Error("preview set contrast failed", "error", bErr.Error())
+		t.log.Warn("preview set contrast failed", "err", bErr.Error())
 	}
 	return aErr
 }

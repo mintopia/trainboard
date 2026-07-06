@@ -2,8 +2,16 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
+
+	"github.com/mintopia/trainboard/internal/obs"
 )
+
+// testLog is a *slog.Logger discarding output, for tests that don't assert
+// on log content.
+func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // fakeFlusher records every Flush/SetContrast call and can be made to fail.
 type fakeFlusher struct {
@@ -30,7 +38,7 @@ func (f *fakeFlusher) SetContrast(level byte) error {
 func TestTeeFlusherCallsBothFlush(t *testing.T) {
 	a := &fakeFlusher{}
 	b := &fakeFlusher{}
-	tee := newTeeFlusher(a, b)
+	tee := newTeeFlusher(a, b, testLog())
 
 	if err := tee.Flush([]byte{1, 2, 3}); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -43,7 +51,7 @@ func TestTeeFlusherCallsBothFlush(t *testing.T) {
 func TestTeeFlusherCallsBothSetContrast(t *testing.T) {
 	a := &fakeFlusher{}
 	b := &fakeFlusher{}
-	tee := newTeeFlusher(a, b)
+	tee := newTeeFlusher(a, b, testLog())
 
 	if err := tee.SetContrast(42); err != nil {
 		t.Fatalf("SetContrast: %v", err)
@@ -60,7 +68,7 @@ func TestTeeFlusherFlushPropagatesAErrorButStillCallsB(t *testing.T) {
 	wantErr := errors.New("panel down")
 	a := &fakeFlusher{flushErr: wantErr}
 	b := &fakeFlusher{}
-	tee := newTeeFlusher(a, b)
+	tee := newTeeFlusher(a, b, testLog())
 
 	err := tee.Flush([]byte{9})
 	if !errors.Is(err, wantErr) {
@@ -74,7 +82,7 @@ func TestTeeFlusherFlushPropagatesAErrorButStillCallsB(t *testing.T) {
 func TestTeeFlusherFlushSwallowsBErrorWhenANil(t *testing.T) {
 	a := &fakeFlusher{}
 	b := &fakeFlusher{flushErr: errors.New("preview disk full")}
-	tee := newTeeFlusher(a, b)
+	tee := newTeeFlusher(a, b, testLog())
 
 	err := tee.Flush([]byte{9})
 	if err != nil {
@@ -89,7 +97,7 @@ func TestTeeFlusherSetContrastPropagatesAErrorButStillCallsB(t *testing.T) {
 	wantErr := errors.New("panel contrast fault")
 	a := &fakeFlusher{contrastErr: wantErr}
 	b := &fakeFlusher{}
-	tee := newTeeFlusher(a, b)
+	tee := newTeeFlusher(a, b, testLog())
 
 	err := tee.SetContrast(10)
 	if !errors.Is(err, wantErr) {
@@ -103,7 +111,7 @@ func TestTeeFlusherSetContrastPropagatesAErrorButStillCallsB(t *testing.T) {
 func TestTeeFlusherSetContrastSwallowsBErrorWhenANil(t *testing.T) {
 	a := &fakeFlusher{}
 	b := &fakeFlusher{contrastErr: errors.New("preview contrast noop failed")}
-	tee := newTeeFlusher(a, b)
+	tee := newTeeFlusher(a, b, testLog())
 
 	err := tee.SetContrast(10)
 	if err != nil {
@@ -111,5 +119,61 @@ func TestTeeFlusherSetContrastSwallowsBErrorWhenANil(t *testing.T) {
 	}
 	if a.contrastCalls != 1 || b.contrastCalls != 1 {
 		t.Fatalf("contrastCalls a=%d b=%d, want 1/1", a.contrastCalls, b.contrastCalls)
+	}
+}
+
+// TestTeeFlusherFlushLogsBErrorThroughProvidedLogger guards the T10
+// implementer concern: b's swallowed Flush error must reach the caller's
+// logger (in production, the obs logger so it surfaces via /events), not
+// slog.Default().
+func TestTeeFlusherFlushLogsBErrorThroughProvidedLogger(t *testing.T) {
+	ring := obs.NewRing(obs.DefaultRingCapacity)
+	log := obs.NewLogger(io.Discard, ring, slog.LevelWarn)
+	a := &fakeFlusher{}
+	b := &fakeFlusher{flushErr: errors.New("preview disk full")}
+	tee := newTeeFlusher(a, b, log)
+
+	if err := tee.Flush([]byte{9}); err != nil {
+		t.Fatalf("Flush err = %v, want nil", err)
+	}
+
+	var found bool
+	for _, e := range ring.Events() {
+		if e.Msg == "preview flush failed" {
+			found = true
+			if e.Attrs["err"] != "preview disk full" {
+				t.Fatalf("unexpected attrs: %+v", e.Attrs)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a \"preview flush failed\" event in the obs ring")
+	}
+}
+
+// TestTeeFlusherSetContrastLogsBErrorThroughProvidedLogger is the
+// SetContrast counterpart of TestTeeFlusherFlushLogsBErrorThroughProvidedLogger.
+func TestTeeFlusherSetContrastLogsBErrorThroughProvidedLogger(t *testing.T) {
+	ring := obs.NewRing(obs.DefaultRingCapacity)
+	log := obs.NewLogger(io.Discard, ring, slog.LevelWarn)
+	a := &fakeFlusher{}
+	b := &fakeFlusher{contrastErr: errors.New("preview contrast noop failed")}
+	tee := newTeeFlusher(a, b, log)
+
+	if err := tee.SetContrast(10); err != nil {
+		t.Fatalf("SetContrast err = %v, want nil", err)
+	}
+
+	var found bool
+	for _, e := range ring.Events() {
+		if e.Msg == "preview set contrast failed" {
+			found = true
+			if e.Attrs["err"] != "preview contrast noop failed" {
+				t.Fatalf("unexpected attrs: %+v", e.Attrs)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a \"preview set contrast failed\" event in the obs ring")
 	}
 }

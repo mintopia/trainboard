@@ -74,7 +74,7 @@ func run() error {
 		// SetContrast call out to both; the panel's error (not the
 		// preview's) is what the render loop sees.
 		sink := newPreviewSink("", 25)
-		fl = newTeeFlusher(panel, sink)
+		fl = newTeeFlusher(panel, sink, log)
 		previewLatest = sink.Latest
 	} else {
 		if err := os.MkdirAll(*previewDir, 0o755); err != nil {
