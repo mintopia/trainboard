@@ -53,7 +53,6 @@ func fixtureBoard() *data.Board {
 	}
 }
 
-//nolint:unused // shared fixture consumed by later M1C tasks (scenes/runtime)
 func singleDepBoard() *data.Board {
 	b := fixtureBoard()
 	b.Departures = b.Departures[:1]
