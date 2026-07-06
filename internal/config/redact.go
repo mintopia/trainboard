@@ -66,3 +66,14 @@ func (p ProvisioningConfig) String() string {
 
 // GoString masks the AP password so %#v can't leak it.
 func (p ProvisioningConfig) GoString() string { return p.String() }
+
+// String masks the password hash so WebConfig can't leak it via %s/%v.
+func (w WebConfig) String() string {
+	if w.PasswordHash == "" {
+		return "WebConfig{passwordHash:unset}"
+	}
+	return "WebConfig{passwordHash:" + redacted + "}"
+}
+
+// GoString masks the password hash so %#v can't leak it.
+func (w WebConfig) GoString() string { return w.String() }

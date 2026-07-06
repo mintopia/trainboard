@@ -86,3 +86,49 @@ func TestRedactionCoversNewSecrets(t *testing.T) {
 		t.Fatal("empty secrets must stay empty after redaction")
 	}
 }
+
+func TestRedactedMasksWebPasswordHash(t *testing.T) {
+	c := Default()
+	c.Web.PasswordHash = "$argon2id$fake"
+	r := c.Redacted()
+	if r.Web.PasswordHash == "$argon2id$fake" || r.Web.PasswordHash == "" {
+		t.Fatalf("web password hash not masked: %q", r.Web.PasswordHash)
+	}
+	if c.Web.PasswordHash != "$argon2id$fake" {
+		t.Fatal("Redacted mutated the original")
+	}
+	empty := Default().Redacted()
+	if empty.Web.PasswordHash != "" {
+		t.Fatal("empty web password hash must stay empty after redaction")
+	}
+}
+
+func TestBareSubstructStringNeverLeaksSecrets(t *testing.T) {
+	wifi := WifiConfig{SSID: "HomeNet", PSK: "psk-secret"}
+	provisioning := ProvisioningConfig{APPassword: "ap-secret"}
+	web := WebConfig{PasswordHash: "$argon2id$fake"}
+
+	for name, s := range map[string]string{
+		"wifi %v":         fmt.Sprintf("%v", wifi),
+		"wifi %#v":        fmt.Sprintf("%#v", wifi),
+		"provisioning %v": fmt.Sprintf("%v", provisioning),
+		"provisioning %#v": fmt.Sprintf(
+			"%#v", provisioning,
+		),
+		"web %v":  fmt.Sprintf("%v", web),
+		"web %#v": fmt.Sprintf("%#v", web),
+	} {
+		for _, secret := range []string{"psk-secret", "ap-secret", "$argon2id$fake"} {
+			if strings.Contains(s, secret) {
+				t.Errorf("%s output leaks %q: %q", name, secret, s)
+			}
+		}
+	}
+
+	if !strings.Contains(fmt.Sprintf("%v", wifi), "HomeNet") {
+		t.Fatal("wifi String() must retain non-secret SSID")
+	}
+	if !strings.Contains(fmt.Sprintf("%#v", wifi), "HomeNet") {
+		t.Fatal("wifi GoString() must retain non-secret SSID")
+	}
+}
