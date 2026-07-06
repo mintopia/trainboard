@@ -11,8 +11,10 @@ import (
 	"github.com/mintopia/trainboard/internal/data"
 )
 
-// fetchTimeout bounds one Darwin round-trip; well under the minimum
-// 15-second refresh interval so polls never overlap.
+// fetchTimeout bounds one Darwin round-trip. Polls can never overlap — not
+// because of this value, but because Run calls pollOnce synchronously from a
+// single goroutine; a fetch outlasting the refresh interval only delays the
+// next tick (cadence drift, never concurrency).
 const fetchTimeout = 30 * time.Second
 
 // Fetcher is the data-client seam; *data.Client satisfies it.
@@ -38,7 +40,8 @@ type Poller struct {
 
 // NewPoller derives the Darwin request and client-side filter from cfg.
 // NumRows stays pinned at 10 (the LDBWS WithDetails cap): display trimming
-// happens in the filter via cfg.Board.Services.
+// happens in the filter via cfg.Board.Services. cfg must have passed
+// Validate (RefreshSeconds >= 15); a zero interval would panic in Run.
 func NewPoller(f Fetcher, cfg config.Config, log *slog.Logger) *Poller {
 	return &Poller{
 		fetcher: f,
@@ -82,6 +85,8 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
+// pollOnce must only be called from Run's goroutine: the one-poll-at-a-time
+// invariant is structural (sequential caller), not enforced with a lock.
 func (p *Poller) pollOnce(ctx context.Context) {
 	fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
