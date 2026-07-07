@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,86 @@ const configTestPassword = "longenough1"
 // config — a value distinctive enough that its accidental presence anywhere
 // in a rendered page is unambiguous.
 const configTestToken = "tok-super-secret-xyz"
+
+// connFakes tracks connectivity seam state for testing, backed by plain vars.
+type connFakes struct {
+	hs        *board.Hotspot
+	lastErr   string
+	retries   int
+	provNotes int
+	mu        sync.Mutex
+}
+
+// set updates the hotspot and error state.
+func (cf *connFakes) set(hs *board.Hotspot, err string) {
+	cf.mu.Lock()
+	defer cf.mu.Unlock()
+	cf.hs = hs
+	cf.lastErr = err
+}
+
+// counts returns the current retry and provisioning note counts.
+func (cf *connFakes) counts() (retries, provNotes int) {
+	cf.mu.Lock()
+	defer cf.mu.Unlock()
+	return cf.retries, cf.provNotes
+}
+
+// newConnTestServer wraps newConfigTestServer and returns access to the
+// connectivity seam fakes (hotspot state, last error, retry/provisioning counts).
+func newConnTestServer(t *testing.T) (srv *Server, svc *Service, path string, applyCh chan struct{}, conn *connFakes) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	cfg.Board.Origin = "PAD"
+	cfg.Darwin.Token = configTestToken
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	applyCh = make(chan struct{}, 1)
+	var soakRem time.Duration
+	conn = &connFakes{}
+	src := Sources{
+		Snapshot:      func() *board.Snapshot { return nil },
+		Ring:          obs.NewRing(8),
+		PreviewPNG:    func() []byte { return nil },
+		Version:       "vtest",
+		StartedAt:     time.Now(),
+		SoakRemaining: func() time.Duration { return soakRem },
+		Hotspot: func() *board.Hotspot {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			return conn.hs
+		},
+		LastSTAError: func() string {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			return conn.lastErr
+		},
+	}
+	act := Actions{
+		Apply:      func() { applyCh <- struct{}{} },
+		Reboot:     func() error { return nil },
+		SoakStart:  func(d time.Duration) { soakRem = d },
+		SoakCancel: func() { soakRem = 0 },
+		WifiRetry: func() {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			conn.retries++
+		},
+		NoteProvisioning: func() {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			conn.provNotes++
+		},
+	}
+	svc = NewService(path, src, act, testLog())
+	if err := svc.SetInitialPassword(configTestPassword, "PAD", ""); err != nil {
+		t.Fatalf("SetInitialPassword: %v", err)
+	}
+	srv = NewServer(svc, testLog())
+	return srv, svc, path, applyCh, conn
+}
 
 // newConfigTestServer wires a Server over a valid, saved baseline config
 // (origin PAD, a known Darwin token, admin password already set) and returns

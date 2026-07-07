@@ -22,6 +22,12 @@ type Sources struct {
 	// SoakRemaining reports the burn-in soak's remaining time (0 =
 	// inactive). Optional: nil reads as never-soaking.
 	SoakRemaining func() time.Duration
+	// Hotspot reports the connectivity manager's AP-mode identity; nil =
+	// not in AP mode (or --manage-network off).
+	Hotspot func() *board.Hotspot
+	// LastSTAError is the most recent failed WiFi-join error, preserved
+	// across AP restore for the reconnecting provisioning user; "" = none.
+	LastSTAError func() string
 }
 
 // Actions are the write-side callbacks main wires up. Apply is invoked after
@@ -33,6 +39,12 @@ type Actions struct {
 	// production). Optional: a nil SoakStart makes StartSoak error.
 	SoakStart  func(d time.Duration)
 	SoakCancel func()
+	// WifiRetry asks the manager to attempt the configured WiFi now
+	// (tears the AP down; the hotspot drops). No-op when nil.
+	WifiRetry func()
+	// NoteProvisioning marks live provisioning activity so the manager
+	// suppresses its periodic retry. No-op when nil.
+	NoteProvisioning func()
 }
 
 // Service is the logic behind both the HTML pages and the JSON API.
@@ -280,4 +292,39 @@ func (s *Service) SoakRemaining() time.Duration {
 		return 0
 	}
 	return s.src.SoakRemaining()
+}
+
+// Hotspot reports the connectivity manager's AP-mode identity (nil = not in
+// AP mode or --manage-network off). Nil-safe.
+func (s *Service) Hotspot() *board.Hotspot {
+	if s.src.Hotspot == nil {
+		return nil
+	}
+	return s.src.Hotspot()
+}
+
+// LastSTAError reports the most recent failed WiFi-join error, preserved
+// across AP restore for reconnection attempts by the provisioning user.
+// Nil-safe; returns "" when no error is known.
+func (s *Service) LastSTAError() string {
+	if s.src.LastSTAError == nil {
+		return ""
+	}
+	return s.src.LastSTAError()
+}
+
+// WifiRetryNow asks the connectivity manager to attempt the configured WiFi
+// immediately (tears the AP down; the hotspot drops). Nil-safe no-op.
+func (s *Service) WifiRetryNow() {
+	if s.act.WifiRetry != nil {
+		s.act.WifiRetry()
+	}
+}
+
+// MarkProvisioning marks live provisioning activity so the manager suppresses
+// its periodic retry. Nil-safe no-op.
+func (s *Service) MarkProvisioning() {
+	if s.act.NoteProvisioning != nil {
+		s.act.NoteProvisioning()
+	}
 }

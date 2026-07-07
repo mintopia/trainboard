@@ -398,3 +398,34 @@ func TestServiceSoakNilSourcesSafe(t *testing.T) {
 	}
 	svc.CancelSoak() // must not panic
 }
+
+func TestServiceConnectivitySeams(t *testing.T) {
+	srv, svc, _, _, conn := newConnTestServer(t)
+	_ = srv
+	if got := svc.Hotspot(); got != nil {
+		t.Fatalf("no AP mode: Hotspot() = %v, want nil", got)
+	}
+	conn.set(&board.Hotspot{SSID: "Trainboard-AB12", Password: "pw", Addr: "192.168.4.1"}, "join failed: wrong PSK")
+	if got := svc.Hotspot(); got == nil || got.SSID != "Trainboard-AB12" {
+		t.Fatalf("Hotspot() = %v", got)
+	}
+	if got := svc.LastSTAError(); got != "join failed: wrong PSK" {
+		t.Fatalf("LastSTAError() = %q", got)
+	}
+	svc.WifiRetryNow()
+	svc.MarkProvisioning()
+	if r, p := conn.counts(); r != 1 || p != 1 {
+		t.Fatalf("retry/prov counts = %d/%d, want 1/1", r, p)
+	}
+}
+
+func TestServiceConnectivityNilSeamsSafe(t *testing.T) {
+	src := Sources{Snapshot: func() *board.Snapshot { return nil }, Ring: obs.NewRing(1),
+		PreviewPNG: func() []byte { return nil }, StartedAt: time.Now()}
+	svc := NewService("/nonexistent", src, Actions{}, testLog())
+	if svc.Hotspot() != nil || svc.LastSTAError() != "" {
+		t.Fatal("nil seams must read as inactive")
+	}
+	svc.WifiRetryNow()      // must not panic
+	svc.MarkProvisioning()  // must not panic
+}
