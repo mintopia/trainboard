@@ -184,6 +184,82 @@ func TestPollOnceTracksConsecutiveFailures(t *testing.T) {
 	}
 }
 
+// TestPokeTriggersImmediatePollBypassingBackoff proves Poke short-circuits
+// the error backoff entirely: without it, the retry would wait the full 2s
+// first-failure backoff; Poke must deliver the retry almost immediately.
+func TestPokeTriggersImmediatePollBypassingBackoff(t *testing.T) {
+	f := &scriptFetcher{results: []fetchResult{{err: errors.New("boom")}, {b: goodBoard(1)}}}
+	p, _ := newTestPoller(f) // testCfg's interval is 15s; first backoff step is 2s
+	done := make(chan struct{}, 8)
+	p.pollDone = done
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+
+	<-done // first, immediate poll: fails
+	if s := p.Snapshot(); s == nil || s.State != board.StateError {
+		t.Fatalf("snapshot after first poll = %+v, want error state", s)
+	}
+
+	p.Poke()
+	select {
+	case <-done:
+		// Poke delivered the retry well inside the 2s backoff window.
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Poke did not trigger an immediate poll bypassing the backoff wait")
+	}
+	if s := p.Snapshot(); s == nil || s.State != board.StateDepartures {
+		t.Fatalf("snapshot after poked retry = %+v, want departures", s)
+	}
+}
+
+// TestSetBeatIncrementsAcrossPolls verifies the beat callback fires once per
+// Run loop iteration (Poke used here purely to force extra iterations
+// deterministically, without waiting out the configured interval).
+func TestSetBeatIncrementsAcrossPolls(t *testing.T) {
+	f := &scriptFetcher{results: []fetchResult{{b: goodBoard(1)}}}
+	p, _ := newTestPoller(f)
+	done := make(chan struct{}, 8)
+	p.pollDone = done
+
+	var mu sync.Mutex
+	beats := 0
+	p.SetBeat(func() {
+		mu.Lock()
+		beats++
+		mu.Unlock()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+
+	// The initial immediate poll (before Run's for-loop starts) races with
+	// the loop's first beat() call in program order vs. this goroutine
+	// observing it, so it is deliberately not asserted on here. What is
+	// deterministic: each subsequent Poke-triggered poll is preceded, in
+	// the same goroutine and therefore ordered, by that iteration's beat().
+	<-done
+
+	p.Poke()
+	<-done
+	mu.Lock()
+	b1 := beats
+	mu.Unlock()
+	if b1 < 1 {
+		t.Fatalf("beat count after one loop iteration = %d, want >= 1", b1)
+	}
+
+	p.Poke()
+	<-done
+	mu.Lock()
+	b2 := beats
+	mu.Unlock()
+	if b2 <= b1 {
+		t.Fatalf("beat count did not increase across iterations: b1=%d b2=%d", b1, b2)
+	}
+}
+
 // TestRunRetriesFastAfterError proves the fix end-to-end: a failed poll is
 // followed by a retry well inside the short backoff window rather than
 // waiting out the full (much longer) configured refresh interval.

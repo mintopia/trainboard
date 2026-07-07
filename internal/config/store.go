@@ -35,12 +35,64 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// Save validates c, then writes it atomically at mode 0600: a temp file in the
-// same directory is written, fsync'd, and renamed over path.
+// LoadRaw parses the JSON document at path WITHOUT calling Validate(),
+// returning whatever fields it contains even when the document as a whole
+// would fail board Validate (e.g. a previously-configured device whose
+// Board.Origin has since gone stale). A missing file returns Default() with
+// a nil error, same as Load.
+//
+// This exists ONLY to let the E04 (config error) boot path recover a
+// previously-configured device's persisted Provisioning.APPassword and
+// Web.PasswordHash even though the document fails full Validate — see
+// resolveE04Config in cmd/trainboard/connectivity.go, its only caller. It
+// MUST NOT be used to feed normal operation: the poller/render loop/web
+// service all require a config that has passed Validate (see loadConfig in
+// cmd/trainboard/main.go), and LoadRaw's whole point is to skip that check.
+func LoadRaw(path string) (Config, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Default(), nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("config: reading %s: %w", path, err)
+	}
+	var c Config
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return Config{}, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
+	return c, nil
+}
+
+// Save validates c with the full Validate() tier, then writes it atomically
+// at mode 0600: a temp file in the same directory is written, fsync'd, and
+// renamed over path. Use SaveConnectivity instead when c is only expected to
+// meet the lighter ValidateConnectivity bar (e.g. an unconfigured device
+// that hasn't been through /setup yet).
 func Save(path string, c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	return saveRaw(path, c)
+}
+
+// SaveConnectivity validates c against ValidateConnectivity (not the full
+// Validate) and writes it the same atomic way as Save. This is the tier
+// --manage-network wiring uses to persist a freshly generated
+// Provisioning.APPassword on a device that hasn't completed first-boot setup
+// (Board.Origin/Darwin.Token unset, so full Validate would reject it) — see
+// Task 12's report for the investigation this rests on: config.Save always
+// hard-validates, so a distinct save path was needed for the connectivity
+// tier rather than relaxing Save's existing contract.
+func SaveConnectivity(path string, c Config) error {
+	if err := c.ValidateConnectivity(); err != nil {
+		return err
+	}
+	return saveRaw(path, c)
+}
+
+// saveRaw writes c to path as an atomic rename-over, with no validation of
+// its own — callers (Save, SaveConnectivity) pick the validation tier.
+func saveRaw(path string, c Config) error {
 	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("config: encoding: %w", err)

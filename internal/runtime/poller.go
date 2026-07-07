@@ -38,6 +38,15 @@ type Poller struct {
 	// zero the moment a poll lands in any non-error state.
 	failures int
 
+	// beat, when non-nil, is invoked once per Run loop iteration (wired to
+	// the watchdog aggregator's per-component Beat in Task 12).
+	beat func()
+	// poke requests an out-of-band immediate poll, bypassing whatever delay
+	// Run is currently waiting on. Buffered 1: a poke that arrives while
+	// Run is still busy polling is coalesced into a single extra poll
+	// rather than blocking the caller.
+	poke chan struct{}
+
 	// test seams
 	now      func() time.Time
 	pollDone chan<- struct{}
@@ -96,6 +105,25 @@ func NewPoller(f Fetcher, cfg config.Config, log *slog.Logger) *Poller {
 		interval: time.Duration(cfg.Board.RefreshSeconds) * time.Second,
 		log:      log,
 		now:      time.Now,
+		poke:     make(chan struct{}, 1),
+	}
+}
+
+// SetBeat installs a heartbeat callback invoked once per Run loop iteration.
+// Call before Run starts (or accept that early iterations before the call
+// won't be counted); nil (the default) disables the hook.
+func (p *Poller) SetBeat(f func()) {
+	p.beat = f
+}
+
+// Poke requests an immediate additional poll, bypassing Run's current wait
+// (whether the normal interval or an error backoff). Non-blocking: a poke
+// already pending is coalesced rather than queued. Safe to call from any
+// goroutine.
+func (p *Poller) Poke() {
+	select {
+	case p.poke <- struct{}{}:
+	default:
 	}
 }
 
@@ -122,12 +150,22 @@ func (p *Poller) Snapshot() *board.Snapshot {
 func (p *Poller) Run(ctx context.Context) {
 	p.pollOnce(ctx)
 	for {
+		if p.beat != nil {
+			p.beat()
+		}
 		t := time.NewTimer(nextDelay(p.failures, p.interval))
 		select {
 		case <-ctx.Done():
 			t.Stop()
 			return
 		case <-t.C:
+			p.pollOnce(ctx)
+		case <-p.poke:
+			// Extra, unscheduled poll: the timer is deliberately left to
+			// fire on its own schedule rather than being reset — an extra
+			// poll is harmless, and resetting would complicate the backoff
+			// bookkeeping for no benefit.
+			t.Stop()
 			p.pollOnce(ctx)
 		}
 	}

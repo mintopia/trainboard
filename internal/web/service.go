@@ -1,11 +1,9 @@
 package web
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net"
 	"time"
 
@@ -226,20 +224,16 @@ func (s *Service) VerifyLogin(pw string) bool {
 	return VerifyPassword(cur.Web.PasswordHash, pw)
 }
 
-const apAlphabet = "23456789abcdefghjkmnpqrstuvwxyz"
-
 // RegenerateAPPassword mints, stores, and returns a fresh AP-mode password.
-// The value is displayed once; ConfigRedacted never returns it.
+// The value is displayed once; ConfigRedacted never returns it. Generation
+// itself lives in config.GenerateAPPassword (Task 12 refactor) so the
+// --manage-network wiring in cmd/trainboard can mint one the same way
+// without depending on this package.
 func (s *Service) RegenerateAPPassword() (string, error) {
-	buf := make([]byte, 12)
-	for i := range buf {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(apAlphabet))))
-		if err != nil {
-			return "", err
-		}
-		buf[i] = apAlphabet[n.Int64()]
+	pw, err := config.GenerateAPPassword()
+	if err != nil {
+		return "", err
 	}
-	pw := string(buf)
 	cur, err := config.Load(s.cfgPath)
 	if err != nil {
 		return "", err

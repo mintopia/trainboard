@@ -84,11 +84,13 @@ func clockNotSyncedScene(f *Fonts) *render.Scene {
 	}}
 }
 
-// hotspotInfoScene is defined for the scene contract; M3 drives it.
-func hotspotInfoScene(ssid, addr string, f *Fonts) *render.Scene {
+// hotspotInfoScene is the first-boot / AP-fallback setup screen: it shows
+// the join details (SSID + password) and the captive-portal address.
+func hotspotInfoScene(ssid, password, addr string, f *Fonts) *render.Scene {
 	return &render.Scene{Elements: []render.Element{
 		centered(f.Bold, "Setup mode", 0),
 		centered(f.Regular, "Join hotspot: "+ssid, 16),
 		centered(f.Regular, "Then open http://"+addr, 28),
+		centered(f.Regular, "Password: "+password, 40),
 	}}
 }

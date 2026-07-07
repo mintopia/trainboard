@@ -18,9 +18,26 @@ import (
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/data"
 	"github.com/mintopia/trainboard/internal/display"
+	netconn "github.com/mintopia/trainboard/internal/net"
 	"github.com/mintopia/trainboard/internal/obs"
 	"github.com/mintopia/trainboard/internal/runtime"
 	"github.com/mintopia/trainboard/internal/web"
+)
+
+// watchdogInterval is how often the aggregated Watchdog considers petting
+// systemd (Task 12); the systemd unit's own WatchdogSec (deploy/
+// trainboard.service) must stay comfortably above this so a single missed
+// tick is never itself fatal.
+const watchdogInterval = 10 * time.Second
+
+// renderBeatDeadline and pollerBeatDeadlineExtra are the watchdog liveness
+// windows for the render loop and poller components (Task 12 wiring rules).
+// The poller's deadline scales with its own configured refresh interval
+// (2x, so a single slow-but-not-hung poll never trips it) plus a fixed
+// margin for the fetch timeout and backoff.
+const (
+	renderBeatDeadline      = 5 * time.Second
+	pollerBeatDeadlineExtra = 35 * time.Second
 )
 
 func main() {
@@ -36,6 +53,7 @@ func run() error {
 	previewDir := flag.String("preview-dir", "./preview", "PNG preview directory (host mode)")
 	fixture := flag.String("fixture", "", "JSON board fixture instead of live Darwin (dev)")
 	httpAddr := flag.String("http", ":80", "address for the embedded config/status web server")
+	manageNetwork := flag.Bool("manage-network", false, "drive wlan0 (STA connect / AP fallback) via the connectivity manager — safety interlock: only enable once the target device has been migrated off ifupdown-managed WiFi (see docs/deploy.md, Connectivity & AP mode)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -50,6 +68,14 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Watchdog: always constructed (obs.SdNotify no-ops when $NOTIFY_SOCKET
+	// is unset, i.e. off-systemd/dev mode) so both boot paths below can
+	// register their components unconditionally — a healthy render loop
+	// alone must never mask a deadlocked poller or connectivity manager
+	// (M3 spec §Watchdog).
+	wd := obs.NewWatchdog(obs.SdNotify, time.Now)
+	go wd.Run(ctx, watchdogInterval)
 
 	soak := &runtime.Soak{} // shared burn-in soak state: web starts/cancels, loop renders
 
@@ -100,7 +126,7 @@ func run() error {
 		// on-screen and idle; the operator fixes the file via the embedded
 		// web UI's /setup and /config, which stay reachable in this path
 		// too. systemd keeps us alive.
-		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, err)
+		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, wd, *manageNetwork, err)
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
 
@@ -116,11 +142,21 @@ func run() error {
 	}
 
 	poller := runtime.NewPoller(fetcher, cfg, log)
+	pollerInterval := time.Duration(cfg.Board.RefreshSeconds) * time.Second
+	poller.SetBeat(wd.Register("poller", 2*pollerInterval+pollerBeatDeadlineExtra))
 	go poller.Run(ctx)
 
-	startWebServer(ctx, *cfgPath, *httpAddr, poller.Snapshot, ring, previewLatest, startedAt, soak, log)
+	snapshotSrc := poller.Snapshot
+	if *manageNetwork {
+		sta := func() netconn.STAConfig { return netconn.STAConfig{SSID: cfg.Wifi.SSID, PSK: cfg.Wifi.PSK} }
+		mgr := startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
+		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
+	}
 
-	loop := runtime.NewLoop(poller.Snapshot, fl, cfg, fonts, buildinfo.Version(), log)
+	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, log)
+
+	loop := runtime.NewLoop(snapshotSrc, fl, cfg, fonts, buildinfo.Version(), log)
+	loop.SetBeat(wd.Register("render", renderBeatDeadline))
 	loop.UseSoak(soak)
 	log.Info("starting render loop", "version", buildinfo.Version())
 	return loop.Run(ctx)
@@ -190,14 +226,42 @@ func loadConfig(path string) (config.Config, error) {
 // fresh-install case where Default() doesn't pass Validate). The web server
 // still runs here, over the SAME config path, so a virgin or broken device
 // can be fixed from /setup or /config without needing physical access.
-func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, err error) error {
+//
+// manageNetwork wires the connectivity manager here too (M3 spec: the AP
+// must work even on a wholly unconfigured device): its STA closure always
+// reports no SSID configured, so Manager.Run falls straight through to the
+// AP fallback on every boot rather than ever attempting a client network
+// that doesn't exist yet. There is no poller in this path, so — per Task
+// 12's wiring rules — only the render and manager components are
+// registered on wd, not a poller beat.
+//
+// The config fed to startConnectivityManager here is a tolerant
+// config.LoadRaw read (via resolveE04Config), not config.Default(): the
+// config that got us into this loop might just be board-invalid (e.g. a
+// stale Board.Origin) on an otherwise previously-configured device, and
+// LoadRaw's un-validated parse still carries its real Provisioning.
+// APPassword/Web.PasswordHash — resolveAPPassword falls back to
+// config.Default()'s behaviour (mint + best-effort persist) only when
+// LoadRaw itself comes back empty (missing/unparsable file).
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork bool, err error) error {
 	log.Error("config error", "err", err.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
-	staticSnapshot := func() *board.Snapshot { return snap }
+	snapshotSrc := func() *board.Snapshot { return snap }
 
-	startWebServer(ctx, path, httpAddr, staticSnapshot, ring, previewLatest, startedAt, soak, log)
+	if manageNetwork {
+		sta := func() netconn.STAConfig { return netconn.STAConfig{} } // no wifi configured here: straight to AP
+		raw, rawErr := config.LoadRaw(path)
+		if rawErr != nil {
+			log.Warn("connectivity: raw config read failed; AP password won't carry over this boot", "err", rawErr.Error())
+		}
+		mgr := startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
+		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
+	}
 
-	loop := runtime.NewLoop(staticSnapshot, fl, config.Default(), fonts, buildinfo.Version(), log)
+	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, log)
+
+	loop := runtime.NewLoop(snapshotSrc, fl, config.Default(), fonts, buildinfo.Version(), log)
+	loop.SetBeat(wd.Register("render", renderBeatDeadline))
 	loop.UseSoak(soak)
 	return loop.Run(ctx)
 }

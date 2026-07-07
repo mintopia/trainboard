@@ -286,6 +286,31 @@ func TestLoopSoakResumesSceneAfterCancel(t *testing.T) {
 	}
 }
 
+// TestStepCallsBeatOnEveryTick verifies SetBeat's callback fires once per
+// step() call, and that a nil beat (never set) never panics — exercised
+// implicitly by every other test in this file.
+func TestStepCallsBeatOnEveryTick(t *testing.T) {
+	l, _ := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+	var mu sync.Mutex
+	beats := 0
+	l.SetBeat(func() {
+		mu.Lock()
+		beats++
+		mu.Unlock()
+	})
+	day := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if err := l.step(day.Add(time.Duration(i) * TickInterval)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if beats != 3 {
+		t.Fatalf("beat count = %d, want 3", beats)
+	}
+}
+
 func TestLoopNilSoakUnchanged(t *testing.T) {
 	// A loop with no UseSoak call behaves exactly as before.
 	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())

@@ -44,6 +44,7 @@ type Loop struct {
 	sceneBuilt bool
 	soak       *Soak // optional soak override; nil = feature not wired
 	soaking    bool  // previous tick was a soak frame (drives exit cleanup)
+	beat       func()
 }
 
 // NewLoop wires a snapshot source (Poller.Snapshot) to a Flusher.
@@ -54,6 +55,10 @@ func NewLoop(src func() *board.Snapshot, fl Flusher, cfg config.Config, fonts *b
 // UseSoak attaches the soak override. Call before Run; the loop reads it on
 // every tick. A nil receiver-field (never attached) disables the feature.
 func (l *Loop) UseSoak(s *Soak) { l.soak = s }
+
+// SetBeat installs a heartbeat callback invoked once per rendered tick
+// (called from step). nil (the default) disables the hook.
+func (l *Loop) SetBeat(f func()) { l.beat = f }
 
 // Run ticks until ctx cancels. A flush error is returned (fatal: the panel
 // is unreachable; systemd restarts the unit).
@@ -74,6 +79,9 @@ func (l *Loop) Run(ctx context.Context) error {
 
 // step renders and flushes exactly one frame at the given instant.
 func (l *Loop) step(now time.Time) error {
+	if l.beat != nil {
+		l.beat()
+	}
 	if l.soak != nil && l.soak.Remaining(now) > 0 {
 		return l.soakStep(now)
 	}

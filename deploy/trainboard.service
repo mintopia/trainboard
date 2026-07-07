@@ -19,9 +19,14 @@ User=root
 # "creating temp file: no such file or directory" (found on hardware
 # 2026-07-07).
 StateDirectory=trainboard
-# WatchdogSec placeholder: M3's connectivity manager will own sd_notify
-# aggregation. The render loop must NOT pet the watchdog for connectivity.
-#WatchdogSec=30
+# Watchdog: the internal/obs Watchdog aggregator pets systemd via sd_notify
+# only while every registered component (render loop, poller, connectivity
+# manager) has beaten within its deadline — a healthy render loop alone must
+# not mask a deadlocked manager (M3 spec § Watchdog). Type stays default
+# (simple); sd_notify's watchdog protocol works under Type=simple via
+# WatchdogSec + NotifyAccess, no Type=notify/READY=1 required.
+WatchdogSec=30
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

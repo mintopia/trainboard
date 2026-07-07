@@ -8,5 +8,15 @@ linters:
     - unused
     - misspell
     - revive
+  exclusions:
+    rules:
+      # internal/net intentionally shadows the stdlib "net" package name
+      # (ADR 0003); revive's var-naming check otherwise flags this once per
+      # package. Scoped to internal/net/ only so it doesn't mask genuine
+      # stdlib-shadow issues elsewhere in the codebase.
+      - path: internal/net/
+        linters:
+          - revive
+        text: "var-naming: avoid package names that conflict with Go standard library package names"
 run:
   timeout: 5m
