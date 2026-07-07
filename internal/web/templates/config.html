@@ -34,7 +34,7 @@
   <label>New admin password <input type="password" name="web.password" placeholder="unchanged" autocomplete="new-password"></label>
   <label>Confirm <input type="password" name="web.password.confirm" placeholder="unchanged" autocomplete="new-password"></label>
 </fieldset>
-<button type="submit">Save &amp; apply (restarts the board)</button>
+<button type="submit" class="primary">Save &amp; apply (restarts the board)</button>
 </form>
 <form method="post" action="/config/ap-password">
   <input type="hidden" name="csrf" value="{{.CSRF}}">

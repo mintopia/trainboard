@@ -23,6 +23,6 @@
 {{end}}
 {{define "eventlist"}}
 <table class="events"><tbody>
-{{range .}}<tr><td>{{.Time.Format "15:04:05"}}</td><td>{{.Level}}</td><td>{{.Msg}}</td></tr>{{end}}
+{{range .}}<tr data-level="{{.Level}}"><td>{{.Time.Format "15:04:05"}}</td><td>{{.Level}}</td><td>{{.Msg}}</td></tr>{{end}}
 </tbody></table>
 {{end}}
