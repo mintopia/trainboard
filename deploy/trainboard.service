@@ -14,6 +14,11 @@ ExecStart=/usr/local/bin/trainboard --production
 Restart=always
 RestartSec=2
 User=root
+# Creates /var/lib/trainboard so the config atomic-write (temp file +
+# rename) has somewhere to land; without it first-boot /setup fails with
+# "creating temp file: no such file or directory" (found on hardware
+# 2026-07-07).
+StateDirectory=trainboard
 # WatchdogSec placeholder: M3's connectivity manager will own sd_notify
 # aggregation. The render loop must NOT pet the watchdog for connectivity.
 #WatchdogSec=30

@@ -59,7 +59,13 @@ func run() error {
 	var fl runtime.Flusher
 	var previewLatest func() []byte
 	if *production {
-		tr, err := display.OpenPeriph(display.PeriphConfig{SPIPort: "SPI0.0", DCPin: "GPIO25", ResetPin: "GPIO27", MaxHz: 16_000_000})
+		// DC/RST match the panel's physical wiring, which follows luma.core's
+		// spi() defaults (gpio_DC=24, gpio_RST=25) — the reference Python
+		// project constructed spi() with no pin args (reference/src/trains/
+		// board.py). Verified on hardware 2026-07-07: the previous GPIO25/27
+		// assignment toggled the panel's real RST line as D/C, so the panel
+		// was reset mid-init and never displayed anything.
+		tr, err := display.OpenPeriph(display.PeriphConfig{SPIPort: "SPI0.0", DCPin: "GPIO24", ResetPin: "GPIO25", MaxHz: 16_000_000})
 		if err != nil {
 			return err
 		}
