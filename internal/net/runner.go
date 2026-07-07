@@ -3,7 +3,6 @@ package net
 import (
 	"context"
 	"fmt"
-	stdnet "net"
 	"os/exec"
 )
 
@@ -29,5 +28,3 @@ func (ExecRunner) Run(ctx context.Context, argv ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
 	return string(out), err
 }
-
-var _ stdnet.Conn // prevent unused import of stdlib net if we add it later
