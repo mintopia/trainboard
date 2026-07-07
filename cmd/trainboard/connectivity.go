@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/config"
 	netconn "github.com/mintopia/trainboard/internal/net"
 	"github.com/mintopia/trainboard/internal/obs"
@@ -238,4 +239,49 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 	}()
 
 	return mgr
+}
+
+// connManager is the slice of *netconn.Manager the web-seam adapter needs:
+// the published Status snapshot plus the two run-loop nudges. An interface
+// (rather than the concrete Manager) purely so tests can substitute a fake;
+// production only ever passes the real Manager.
+type connManager interface {
+	Status() netconn.Status
+	RetryNow()
+	NoteProvisioning(now time.Time)
+}
+
+var _ connManager = (*netconn.Manager)(nil)
+
+// webConnSeams carries the four connectivity funcs the web package exposes
+// as seams (web.Sources.Hotspot/LastSTAError, web.Actions.WifiRetry/
+// NoteProvisioning). The zero value — what both boot paths pass when
+// --manage-network is off — leaves every field nil, which the web Service
+// nil-tolerates by design (nil hotspot, empty error, no-op actions).
+type webConnSeams struct {
+	hotspot          func() *board.Hotspot
+	lastSTAError     func() string
+	wifiRetry        func()
+	noteProvisioning func()
+}
+
+// newWebConnSeams adapts the connectivity manager to the web seams. The read
+// seams go through m.Status() on every call (the manager republishes an
+// immutable snapshot as it moves between STA and AP), keeping internal/web
+// free of any internal/net dependency: net types are mapped here, in cmd, to
+// *board.Hotspot and plain strings.
+//
+// noteProvisioning stamps NoteProvisioning with now(): the web handlers call
+// it on portal HTTP activity, which suppresses the manager's periodic STA
+// retry. HTTP activity from the AP subnet implies a DHCP lease — a conscious
+// simplification of the spec's lease-AND-HTTP pair; a mere association
+// without traffic still never suppresses (no HTTP request, no
+// NoteProvisioning call).
+func newWebConnSeams(m connManager, now func() time.Time) webConnSeams {
+	return webConnSeams{
+		hotspot:          func() *board.Hotspot { return m.Status().Hotspot },
+		lastSTAError:     func() string { return m.Status().LastSTAErr },
+		wifiRetry:        m.RetryNow,
+		noteProvisioning: func() { m.NoteProvisioning(now()) },
+	}
 }

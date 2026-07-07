@@ -146,13 +146,15 @@ func run() error {
 	go poller.Run(ctx)
 
 	snapshotSrc := poller.Snapshot
+	var conn webConnSeams // zero (all nil) unless --manage-network wires the manager in
 	if *manageNetwork {
 		sta := staFromDisk(*cfgPath)
 		mgr := startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
+		conn = newWebConnSeams(mgr, time.Now)
 	}
 
-	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, log)
+	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, log)
 
 	loop := runtime.NewLoop(snapshotSrc, fl, cfg, fonts, buildinfo.Version(), log)
 	loop.SetBeat(wd.Register("render", renderBeatDeadline))
@@ -161,17 +163,20 @@ func run() error {
 	return loop.Run(ctx)
 }
 
-// startWebServer builds the web.Service/Server over cfgPath and runs it in
-// the background for the remainder of ctx's lifetime. It is shared by both
-// boot paths (valid config and the E04 error loop) so a virgin or broken
-// device always has /setup and /config reachable to fix itself.
+// newWebService builds the web.Service both boot paths serve: production
+// Apply/Reboot actions, the shared soak state, and the connectivity seams.
+// conn is the zero webConnSeams when --manage-network is off, leaving
+// web.Sources.Hotspot/LastSTAError and web.Actions.WifiRetry/
+// NoteProvisioning nil — the web Service nil-tolerates all four by design
+// (nil hotspot, empty error, no-op actions). Split from startWebServer so
+// the seam wiring is testable without binding a listener.
 //
 // Apply is an immediate clean exit: the 500ms "let the response finish
 // writing first" delay already lives in the web handlers (Task 8), so main's
 // side of Apply must not add a second delay of its own. systemd is expected
 // to restart the process. Reboot shells out to systemctl and reports the
 // error rather than the web handler having to guess.
-func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, log *slog.Logger) {
+func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, log *slog.Logger) *web.Service {
 	actions := web.Actions{
 		Apply: func() {
 			log.Info("applying config: exiting for restart")
@@ -180,8 +185,10 @@ func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func
 		Reboot: func() error {
 			return exec.Command("systemctl", "reboot").Run()
 		},
-		SoakStart:  func(d time.Duration) { soak.Start(d, time.Now()) },
-		SoakCancel: soak.Cancel,
+		SoakStart:        func(d time.Duration) { soak.Start(d, time.Now()) },
+		SoakCancel:       soak.Cancel,
+		WifiRetry:        conn.wifiRetry,
+		NoteProvisioning: conn.noteProvisioning,
 	}
 	sources := web.Sources{
 		Snapshot:      snapshot,
@@ -190,8 +197,18 @@ func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func
 		Version:       buildinfo.Version(),
 		StartedAt:     startedAt,
 		SoakRemaining: func() time.Duration { return soak.Remaining(time.Now()) },
+		Hotspot:       conn.hotspot,
+		LastSTAError:  conn.lastSTAError,
 	}
-	svc := web.NewService(cfgPath, sources, actions, log)
+	return web.NewService(cfgPath, sources, actions, log)
+}
+
+// startWebServer builds the web.Service/Server over cfgPath and runs it in
+// the background for the remainder of ctx's lifetime. It is shared by both
+// boot paths (valid config and the E04 error loop) so a virgin or broken
+// device always has /setup and /config reachable to fix itself.
+func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, log *slog.Logger) {
+	svc := newWebService(cfgPath, snapshot, ring, previewLatest, startedAt, soak, conn, log)
 	srv := web.NewServer(svc, log)
 	log.Info("starting web server", "addr", httpAddr)
 	go func() {
@@ -247,6 +264,7 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
 	snapshotSrc := func() *board.Snapshot { return snap }
 
+	var conn webConnSeams // zero (all nil) unless manageNetwork wires the manager in
 	if manageNetwork {
 		sta := staFromDisk(path)
 		raw, rawErr := config.LoadRaw(path)
@@ -255,9 +273,10 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 		}
 		mgr := startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
+		conn = newWebConnSeams(mgr, time.Now)
 	}
 
-	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, log)
+	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, log)
 
 	loop := runtime.NewLoop(snapshotSrc, fl, config.Default(), fonts, buildinfo.Version(), log)
 	loop.SetBeat(wd.Register("render", renderBeatDeadline))

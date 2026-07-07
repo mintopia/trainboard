@@ -2,11 +2,19 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/config"
 	netconn "github.com/mintopia/trainboard/internal/net"
+	"github.com/mintopia/trainboard/internal/obs"
+	"github.com/mintopia/trainboard/internal/runtime"
+	"github.com/mintopia/trainboard/internal/web"
 )
 
 func TestMacTailNormalMAC(t *testing.T) {
@@ -136,4 +144,135 @@ func TestSTAFromDiskReadsOnEveryCall(t *testing.T) {
 	if third != zero {
 		t.Fatalf("Missing file call: got %+v, want zero STAConfig %+v", third, zero)
 	}
+}
+
+// fakeConnManager implements the connManager seam the web-wiring adapter is
+// built against, recording every interaction so tests can assert the mapping
+// (Status fields -> read seams, RetryNow/NoteProvisioning -> action seams).
+type fakeConnManager struct {
+	status  netconn.Status
+	retries int
+	notedAt []time.Time
+}
+
+func (f *fakeConnManager) Status() netconn.Status         { return f.status }
+func (f *fakeConnManager) RetryNow()                      { f.retries++ }
+func (f *fakeConnManager) NoteProvisioning(now time.Time) { f.notedAt = append(f.notedAt, now) }
+
+// TestNewWebConnSeamsMapsManagerState proves the adapter maps the manager's
+// published state onto the four web seams: Status().Hotspot -> hotspot,
+// Status().LastSTAErr -> lastSTAError, RetryNow -> wifiRetry, and
+// NoteProvisioning -> noteProvisioning stamped with the injected clock.
+func TestNewWebConnSeamsMapsManagerState(t *testing.T) {
+	hs := &board.Hotspot{SSID: "Trainboard-AB12", Password: "appw", Addr: "192.168.4.1"}
+	fake := &fakeConnManager{status: netconn.Status{
+		State:      netconn.ManagerAPFallback,
+		Hotspot:    hs,
+		LastSTAErr: "sta: join failed: wrong PSK",
+	}}
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+
+	seams := newWebConnSeams(fake, func() time.Time { return now })
+
+	if got := seams.hotspot(); got != hs {
+		t.Fatalf("hotspot() = %v, want the manager's published %v", got, hs)
+	}
+	if got := seams.lastSTAError(); got != "sta: join failed: wrong PSK" {
+		t.Fatalf("lastSTAError() = %q", got)
+	}
+	seams.wifiRetry()
+	if fake.retries != 1 {
+		t.Fatalf("wifiRetry: RetryNow called %d times, want 1", fake.retries)
+	}
+	seams.noteProvisioning()
+	if len(fake.notedAt) != 1 || !fake.notedAt[0].Equal(now) {
+		t.Fatalf("noteProvisioning: NoteProvisioning calls = %v, want exactly one at %v", fake.notedAt, now)
+	}
+}
+
+// TestNewWebConnSeamsReadsLiveStatus proves the read seams re-read
+// Status() on every call rather than capturing a boot-time snapshot — the
+// manager republishes state as it moves between STA and AP.
+func TestNewWebConnSeamsReadsLiveStatus(t *testing.T) {
+	fake := &fakeConnManager{} // zero Status: no hotspot, no error
+	seams := newWebConnSeams(fake, time.Now)
+
+	if got := seams.hotspot(); got != nil {
+		t.Fatalf("hotspot() before AP = %v, want nil", got)
+	}
+	if got := seams.lastSTAError(); got != "" {
+		t.Fatalf("lastSTAError() before any failure = %q, want empty", got)
+	}
+
+	fake.status = netconn.Status{
+		State:      netconn.ManagerAPFallback,
+		Hotspot:    &board.Hotspot{SSID: "Trainboard-CAFE", Addr: "192.168.4.1"},
+		LastSTAErr: "sta: timeout",
+	}
+	if got := seams.hotspot(); got == nil || got.SSID != "Trainboard-CAFE" {
+		t.Fatalf("hotspot() after publish = %v, want the fresh status", got)
+	}
+	if got := seams.lastSTAError(); got != "sta: timeout" {
+		t.Fatalf("lastSTAError() after publish = %q", got)
+	}
+}
+
+// TestNewWebServiceWiresConnSeams drives the actual construction path both
+// boot paths use (newWebService) and checks the seams surface through the
+// web Service exactly as the manager publishes them.
+func TestNewWebServiceWiresConnSeams(t *testing.T) {
+	hs := &board.Hotspot{SSID: "Trainboard-AB12", Password: "appw", Addr: "192.168.4.1"}
+	fake := &fakeConnManager{status: netconn.Status{Hotspot: hs, LastSTAErr: "sta: boom"}}
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	svc := newTestWebService(t, newWebConnSeams(fake, func() time.Time { return now }))
+
+	if got := svc.Hotspot(); got != hs {
+		t.Fatalf("svc.Hotspot() = %v, want the manager's %v", got, hs)
+	}
+	if got := svc.LastSTAError(); got != "sta: boom" {
+		t.Fatalf("svc.LastSTAError() = %q", got)
+	}
+	svc.WifiRetryNow()
+	if fake.retries != 1 {
+		t.Fatalf("svc.WifiRetryNow(): RetryNow called %d times, want 1", fake.retries)
+	}
+	svc.MarkProvisioning()
+	if len(fake.notedAt) != 1 || !fake.notedAt[0].Equal(now) {
+		t.Fatalf("svc.MarkProvisioning(): NoteProvisioning calls = %v, want one at %v", fake.notedAt, now)
+	}
+}
+
+// TestNewWebServiceSeamsNilWithoutManageNetwork pins the --manage-network-off
+// contract: both boot paths pass the zero webConnSeams, and the web Service
+// must read as "no connectivity manager" (nil hotspot, empty error) with the
+// action seams as safe no-ops — the nil-tolerance web.Sources/Actions
+// document.
+func TestNewWebServiceSeamsNilWithoutManageNetwork(t *testing.T) {
+	svc := newTestWebService(t, webConnSeams{})
+
+	if got := svc.Hotspot(); got != nil {
+		t.Fatalf("Hotspot() with no manager = %v, want nil", got)
+	}
+	if got := svc.LastSTAError(); got != "" {
+		t.Fatalf("LastSTAError() with no manager = %q, want empty", got)
+	}
+	svc.WifiRetryNow()     // must be a safe no-op
+	svc.MarkProvisioning() // must be a safe no-op
+}
+
+// newTestWebService builds a web.Service through the production newWebService
+// constructor with harness stand-ins for everything except the connectivity
+// seams under test.
+func newTestWebService(t *testing.T, conn webConnSeams) *web.Service {
+	t.Helper()
+	return newWebService(
+		filepath.Join(t.TempDir(), "config.json"),
+		func() *board.Snapshot { return nil },
+		obs.NewRing(4),
+		func() []byte { return nil },
+		time.Now(),
+		&runtime.Soak{},
+		conn,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 }
