@@ -35,6 +35,34 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
+// LoadRaw parses the JSON document at path WITHOUT calling Validate(),
+// returning whatever fields it contains even when the document as a whole
+// would fail board Validate (e.g. a previously-configured device whose
+// Board.Origin has since gone stale). A missing file returns Default() with
+// a nil error, same as Load.
+//
+// This exists ONLY to let the E04 (config error) boot path recover a
+// previously-configured device's persisted Provisioning.APPassword and
+// Web.PasswordHash even though the document fails full Validate — see
+// resolveE04Config in cmd/trainboard/connectivity.go, its only caller. It
+// MUST NOT be used to feed normal operation: the poller/render loop/web
+// service all require a config that has passed Validate (see loadConfig in
+// cmd/trainboard/main.go), and LoadRaw's whole point is to skip that check.
+func LoadRaw(path string) (Config, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Default(), nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("config: reading %s: %w", path, err)
+	}
+	var c Config
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return Config{}, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
+	return c, nil
+}
+
 // Save validates c with the full Validate() tier, then writes it atomically
 // at mode 0600: a temp file in the same directory is written, fsync'd, and
 // renamed over path. Use SaveConnectivity instead when c is only expected to

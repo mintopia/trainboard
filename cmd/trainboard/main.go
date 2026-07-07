@@ -234,6 +234,15 @@ func loadConfig(path string) (config.Config, error) {
 // that doesn't exist yet. There is no poller in this path, so — per Task
 // 12's wiring rules — only the render and manager components are
 // registered on wd, not a poller beat.
+//
+// The config fed to startConnectivityManager here is a tolerant
+// config.LoadRaw read (via resolveE04Config), not config.Default(): the
+// config that got us into this loop might just be board-invalid (e.g. a
+// stale Board.Origin) on an otherwise previously-configured device, and
+// LoadRaw's un-validated parse still carries its real Provisioning.
+// APPassword/Web.PasswordHash — resolveAPPassword falls back to
+// config.Default()'s behaviour (mint + best-effort persist) only when
+// LoadRaw itself comes back empty (missing/unparsable file).
 func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork bool, err error) error {
 	log.Error("config error", "err", err.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
@@ -241,7 +250,11 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 
 	if manageNetwork {
 		sta := func() netconn.STAConfig { return netconn.STAConfig{} } // no wifi configured here: straight to AP
-		mgr := startConnectivityManager(ctx, config.Default(), path, log, wd, sta, nil)
+		raw, rawErr := config.LoadRaw(path)
+		if rawErr != nil {
+			log.Warn("connectivity: raw config read failed; AP password won't carry over this boot", "err", rawErr.Error())
+		}
+		mgr := startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
 	}
 

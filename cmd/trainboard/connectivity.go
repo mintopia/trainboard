@@ -76,19 +76,24 @@ func macTail(mac string) string {
 }
 
 // resolveAPPassword returns the AP-mode password to advertise, generating
-// and best-effort persisting one when the config doesn't have one yet: the
-// M3 spec requires the AP to work even on a wholly unconfigured device
-// (this is exercised from the E04 boot path), and an unconfigured device's
-// config won't pass config.Save's full Validate() (missing origin/token),
-// so the persist attempt uses the lighter SaveConnectivity/
-// ValidateConnectivity tier instead — see the Task 12 report for the
-// config.Save investigation this rests on. A persist failure (e.g.
-// ValidateConnectivity also unmet, because no admin password is set yet
-// either) is logged and tolerated: the freshly generated password is still
-// used for THIS boot's AP (and shown on its on-screen hotspot scene
-// regardless of disk persistence), just not carried over to the next boot
-// until setup completes far enough for one of the two validation tiers to
-// accept it.
+// and best-effort persisting one when the config doesn't have one yet. The
+// E04 boot path feeds this the result of resolveE04Config (a config.LoadRaw
+// read), which preserves a previously-configured device's persisted
+// Provisioning.APPassword and Web.PasswordHash even when the document as a
+// whole fails board Validate — so this fresh-generation branch only
+// actually fires for a WHOLLY unconfigured device: no config file at all
+// (or one LoadRaw itself can't parse). That device's config won't pass
+// config.Save's full Validate() (missing origin/token) either, so the
+// persist attempt uses the lighter SaveConnectivity/ValidateConnectivity
+// tier instead — see the Task 12 report for the config.Save investigation
+// this rests on. A persist failure (e.g. ValidateConnectivity also unmet,
+// because no admin password is set yet either) is logged and tolerated:
+// the freshly generated password is still used for THIS boot's AP (and
+// shown on its on-screen hotspot scene regardless of disk persistence),
+// just not carried over to the next boot until setup completes far enough
+// for one of the two validation tiers to accept it — the one remaining M3b
+// loose end (a device that never finishes /setup mints a new AP password
+// every boot).
 func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) string {
 	if cfg.Provisioning.APPassword != "" {
 		return cfg.Provisioning.APPassword
@@ -104,6 +109,30 @@ func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) stri
 		log.Warn("connectivity: could not persist generated AP password yet (will retry next boot)", "err", err.Error())
 	}
 	return pw
+}
+
+// resolveE04Config picks the config to feed startConnectivityManager from
+// the E04 (config error) boot path, given the result of a tolerant
+// config.LoadRaw(path) read. When the raw read succeeded (rawErr == nil) it
+// is preferred over a virgin config.Default(), even though the document as
+// a whole failed board Validate() (that's WHY we're in this boot path at
+// all) — this is what lets a previously-configured device whose config
+// merely fails board validation (e.g. a stale origin) keep its persisted
+// Provisioning.APPassword and Web.PasswordHash across E04 boots, instead of
+// resolveAPPassword minting (and failing to persist) a brand new one every
+// single time.
+//
+// When rawErr != nil, raw is the zero Config (LoadRaw returns Default() with
+// a nil error for a missing file, so a non-nil error here means the file
+// exists but isn't even valid JSON) and config.Default() is used instead:
+// this is the genuinely "wholly fresh/unreadable device" case where
+// per-boot AP password churn remains the documented M3b loose end (see
+// resolveAPPassword).
+func resolveE04Config(raw config.Config, rawErr error) config.Config {
+	if rawErr != nil {
+		return config.Default()
+	}
+	return raw
 }
 
 // httpGetProbe is the layered Check's captive-portal probe transport: a
