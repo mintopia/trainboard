@@ -183,3 +183,116 @@ func TestStepEmitsPeriodicFrameTiming(t *testing.T) {
 		t.Fatalf("frame-timing events = %d, want exactly 1 after %d ticks", timings, timingEveryTicks+1)
 	}
 }
+
+func TestLoopSoakRendersUniformCyclingFrames(t *testing.T) {
+	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+	soak := &Soak{}
+	l.UseSoak(soak)
+
+	base := time.Unix(1_600_000_000, 0) // Unix()/2 even => white phase
+	soak.Start(time.Hour, base)
+
+	if err := l.step(base); err != nil {
+		t.Fatal(err)
+	}
+	assertUniformFrame(t, fl, 0xFF) // packed white: 0xF<<4|0xF
+
+	if err := l.step(base.Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	assertUniformFrame(t, fl, 0x00) // packed black
+}
+
+// assertUniformFrame checks the last flushed frame is full-size and every
+// packed byte equals want.
+func assertUniformFrame(t *testing.T, fl *fakeFlusher, want byte) {
+	t.Helper()
+	fl.mu.Lock()
+	frame := append([]byte(nil), fl.lastFrame...)
+	fl.mu.Unlock()
+	if len(frame) != board.W*board.H/2 {
+		t.Fatalf("frame is %d bytes, want %d", len(frame), board.W*board.H/2)
+	}
+	for i, b := range frame {
+		if b != want {
+			t.Fatalf("frame[%d] = %#x, want %#x", i, b, want)
+		}
+	}
+}
+
+func TestLoopSoakForcesFullContrastThenScheduleResumes(t *testing.T) {
+	// Powersaving window is 23:00–07:00 @ 32 (powersavingCfg). Soak must
+	// force 0xFF even inside the window; after expiry the schedule value
+	// must be re-applied.
+	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, powersavingCfg())
+	soak := &Soak{}
+	l.UseSoak(soak)
+
+	inWindow := time.Date(2026, 7, 7, 23, 30, 0, 0, time.UTC)
+	soak.Start(time.Minute, inWindow)
+
+	if err := l.step(inWindow); err != nil {
+		t.Fatal(err)
+	}
+	fl.mu.Lock()
+	got := append([]byte(nil), fl.contrasts...)
+	fl.mu.Unlock()
+	if len(got) == 0 || got[len(got)-1] != 0xFF {
+		t.Fatalf("during soak: contrasts = %v, want last == 0xFF", got)
+	}
+
+	// Step again after expiry, still inside the powersave window.
+	after := inWindow.Add(2 * time.Minute)
+	if err := l.step(after); err != nil {
+		t.Fatal(err)
+	}
+	fl.mu.Lock()
+	got = append([]byte(nil), fl.contrasts...)
+	fl.mu.Unlock()
+	if got[len(got)-1] != 32 {
+		t.Fatalf("after soak: contrasts = %v, want last == 32 (powersave)", got)
+	}
+}
+
+func TestLoopSoakResumesSceneAfterCancel(t *testing.T) {
+	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+	soak := &Soak{}
+	l.UseSoak(soak)
+
+	base := time.Unix(1_600_000_000, 0)
+	soak.Start(time.Hour, base)
+	if err := l.step(base); err != nil {
+		t.Fatal(err)
+	}
+	soak.Cancel()
+	if err := l.step(base.Add(40 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	// A scene frame (nil snapshot => initialising scene) is not uniform:
+	// at least two distinct byte values appear.
+	fl.mu.Lock()
+	frame := append([]byte(nil), fl.lastFrame...)
+	fl.mu.Unlock()
+	first := frame[0]
+	uniform := true
+	for _, b := range frame {
+		if b != first {
+			uniform = false
+			break
+		}
+	}
+	if uniform {
+		t.Fatal("after cancel: frame is still uniform — scene rendering did not resume")
+	}
+}
+
+func TestLoopNilSoakUnchanged(t *testing.T) {
+	// A loop with no UseSoak call behaves exactly as before.
+	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+	if err := l.step(time.Unix(1_600_000_000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := fl.stats(); n != 1 {
+		t.Fatalf("flushes = %d, want 1", n)
+	}
+}

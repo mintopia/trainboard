@@ -42,12 +42,18 @@ type Loop struct {
 	brightness int  // last applied; -1 = never
 	flushed    bool // first-frame logged
 	sceneBuilt bool
+	soak       *Soak // optional soak override; nil = feature not wired
+	soaking    bool  // previous tick was a soak frame (drives exit cleanup)
 }
 
 // NewLoop wires a snapshot source (Poller.Snapshot) to a Flusher.
 func NewLoop(src func() *board.Snapshot, fl Flusher, cfg config.Config, fonts *board.Fonts, version string, log *slog.Logger) *Loop {
 	return &Loop{src: src, fl: fl, cfg: cfg, fonts: fonts, version: version, log: log, fb: render.New(board.W, board.H), brightness: -1}
 }
+
+// UseSoak attaches the soak override. Call before Run; the loop reads it on
+// every tick. A nil receiver-field (never attached) disables the feature.
+func (l *Loop) UseSoak(s *Soak) { l.soak = s }
 
 // Run ticks until ctx cancels. A flush error is returned (fatal: the panel
 // is unreachable; systemd restarts the unit).
@@ -68,6 +74,17 @@ func (l *Loop) Run(ctx context.Context) error {
 
 // step renders and flushes exactly one frame at the given instant.
 func (l *Loop) step(now time.Time) error {
+	if l.soak != nil && l.soak.Remaining(now) > 0 {
+		return l.soakStep(now)
+	}
+	if l.soaking {
+		// Soak just ended (expired or cancelled): force the powersave
+		// schedule's contrast to re-apply on this tick, then resume the
+		// existing scene where it left off.
+		l.soaking = false
+		l.brightness = -1
+	}
+
 	if snap := l.src(); snap != l.last || !l.sceneBuilt {
 		l.scene = board.BuildScene(snap, l.cfg.Layout, l.version, l.fonts)
 		l.last = snap
@@ -102,4 +119,25 @@ func (l *Loop) step(now time.Time) error {
 	}
 	l.tick++
 	return nil
+}
+
+// soakStep renders one burn-in soak frame: the whole panel full-white or
+// full-black on a 2-second wall-clock phase, at full contrast. No scene, no
+// overlay — any static element during soak would defeat the treatment.
+func (l *Loop) soakStep(now time.Time) error {
+	l.soaking = true
+	if l.brightness != 0xFF {
+		if err := l.fl.SetContrast(0xFF); err != nil {
+			return err
+		}
+		l.brightness = 0xFF
+	}
+	level := byte(0x00)
+	if now.Unix()/2%2 == 0 {
+		level = 0x0F
+	}
+	for i := range l.fb.Pix {
+		l.fb.Pix[i] = level
+	}
+	return l.fl.Flush(l.fb.Pack())
 }
