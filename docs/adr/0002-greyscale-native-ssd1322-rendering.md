@@ -51,3 +51,9 @@ deletable — the reference scenes dirty most of the panel per tick). Use
 constants from captured reference frames (Go metrics ≠ PIL FreeType, sfnt is unhinted).
 Encode `spidev` 4096 B `bufsiz` chunking and the 256-wide panel's **column offset 0x1C**
 + 4-pixel alignment in the golden-byte tests._
+
+_Resolved 2026-07-07 — hardware benchmark run (Pi Zero 2 W, real SSD1322, `cmd/bench`,
+300 frames): full-frame flush **4.50 ms/frame (222 fps) at 16 MHz SPI**, 6.78 ms (147 fps)
+even at a conservative 10 MHz. 8.9x over the 25 fps gate. **Full-frame flush is the
+final architecture; dirty-region tracking will not be built.** See
+`docs/benchmarks/README.md` for the results table._

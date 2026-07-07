@@ -25,6 +25,17 @@ The script prompts for your WiFi SSID/password, then:
 - appends `dtparam=spi=on` to `config.txt` (required for the SSD1322 over
   SPI0.0)
 
+### Panel wiring (BCM numbering)
+
+The panel follows luma.core's `spi()` defaults, inherited from the original
+Python build (see `reference/assets/pi-display-connections_bb.png`):
+
+| Signal | Pin |
+|---|---|
+| MOSI / SCLK / CS | SPI0 (GPIO10 / GPIO11 / CE0) |
+| D/C | GPIO24 |
+| RST | GPIO25 |
+
 **This destroys all data on the target disk.** Double-check the disk
 identifier before confirming.
 
