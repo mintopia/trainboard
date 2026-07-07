@@ -12,12 +12,6 @@ import (
 // the STA and AP network blocks (only one is ever "selected" at a time).
 const wpaConfPath = "/run/trainboard-wpa.conf"
 
-// pollAttempts and pollInterval bound the wait for wpa_supplicant to reach
-// the wanted state after a select_network.
-const pollAttempts = 10
-
-const pollInterval = 500 * time.Millisecond
-
 // mode2Driver drives a single wpa_supplicant instance in "mode=2" (native
 // AP) mode: one conf file with a disabled STA network (id 0) and a disabled
 // AP network (id 1), switched between via select_network.
@@ -103,22 +97,6 @@ func (d *mode2Driver) ensureDaemon(ctx context.Context) error {
 	return nil
 }
 
-// pollStatus polls `wpa_cli status` up to pollAttempts times, pollInterval
-// apart, until want reports true. It returns an error naming failMsg if the
-// state is never reached.
-func (d *mode2Driver) pollStatus(ctx context.Context, want func(map[string]string) bool, failMsg string) error {
-	for i := 0; i < pollAttempts; i++ {
-		out, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "status")
-		if err == nil && want(parseWpaStatus(out)) {
-			return nil
-		}
-		if i < pollAttempts-1 {
-			d.sleep(pollInterval)
-		}
-	}
-	return fmt.Errorf("net: mode2: %s after %d polls", failMsg, pollAttempts)
-}
-
 // StartAP writes the conf (retaining whatever STA credentials are already
 // known), ensures the daemon is running with it, selects the AP network,
 // waits for it to beacon, then assigns the AP's static address.
@@ -133,7 +111,7 @@ func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "select_network", "1"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: select_network 1: %w", err)
 	}
-	if err := d.pollStatus(ctx, func(kv map[string]string) bool {
+	if err := pollStatus(ctx, d.r, d.iface, d.sleep, func(kv map[string]string) bool {
 		return kv["wpa_state"] == "COMPLETED" && kv["mode"] == "AP"
 	}, "AP not active"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
@@ -159,28 +137,14 @@ func (d *mode2Driver) StopAP(ctx context.Context) error {
 	return nil
 }
 
-// AttemptSTA writes fresh STA credentials into the conf, reconfigures the
-// (already-running) daemon, selects the STA network, waits for association,
-// then runs a one-shot dhclient. It does not evaluate connectivity beyond
-// that — the layered Check owns that.
+// AttemptSTA switches to the client network using the shared staAttempt
+// flow: reconfigure the (already-running) daemon, select the STA network,
+// wait for association, then run a one-shot dhclient. It does not evaluate
+// connectivity beyond that — the layered Check owns that.
 func (d *mode2Driver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	d.sta = sta
-	if err := d.writeConf(); err != nil {
+	if err := staAttempt(ctx, d.r, d.iface, sta, d.writeFile, d.sleep); err != nil {
 		return fmt.Errorf("net: mode2: AttemptSTA: %w", err)
-	}
-	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "reconfigure"); err != nil {
-		return fmt.Errorf("net: mode2: AttemptSTA: reconfigure: %w", err)
-	}
-	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "select_network", "0"); err != nil {
-		return fmt.Errorf("net: mode2: AttemptSTA: select_network 0: %w", err)
-	}
-	if err := d.pollStatus(ctx, func(kv map[string]string) bool {
-		return kv["wpa_state"] == "COMPLETED"
-	}, "STA not associated"); err != nil {
-		return fmt.Errorf("net: mode2: AttemptSTA: %w", err)
-	}
-	if _, err := d.r.Run(ctx, "dhclient", "-1", "-v", d.iface); err != nil {
-		return fmt.Errorf("net: mode2: AttemptSTA: dhclient: %w", err)
 	}
 	return nil
 }
