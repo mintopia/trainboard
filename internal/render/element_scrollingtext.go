@@ -38,9 +38,10 @@ func (s *ScrollingText) ensure() {
 
 // scrollOffset is the pure integer-pixel viewport offset for a tick. Returns
 // 0 while the text fits the box. Cycle: hold at 0 for pause ticks (text
-// visible, left-aligned), then advance 1px/tick until the text has fully
-// scrolled out of the box (offset tw), then wrap and pause again — matching
-// the reference's crop-window scroller.
+// visible, left-aligned), advance 1px/tick until the text has fully scrolled
+// out of the box (offset tw), hold blank there for another pause, then wrap
+// back to the start — matching the reference's crop-window scroller, which
+// pauses both at reset and after finishing the scroll.
 func scrollOffset(tw, boxW, pause, tick int) int {
 	if tw <= boxW {
 		return 0
@@ -48,12 +49,15 @@ func scrollOffset(tw, boxW, pause, tick int) int {
 	if pause <= 0 {
 		pause = defaultPauseTicks
 	}
-	cycle := pause + tw + 1 // +1: one fully-blank tick before the reset pause
+	cycle := pause + tw + pause // start pause + travel + end pause
 	t := tick % cycle
 	if t < pause {
 		return 0
 	}
-	return t - pause
+	if off := t - pause; off < tw {
+		return off
+	}
+	return tw // end pause: fully scrolled out, hold blank before reset
 }
 
 // Render composites the (possibly scrolled) text into fb.
