@@ -426,6 +426,6 @@ func TestServiceConnectivityNilSeamsSafe(t *testing.T) {
 	if svc.Hotspot() != nil || svc.LastSTAError() != "" {
 		t.Fatal("nil seams must read as inactive")
 	}
-	svc.WifiRetryNow()      // must not panic
-	svc.MarkProvisioning()  // must not panic
+	svc.WifiRetryNow()     // must not panic
+	svc.MarkProvisioning() // must not panic
 }
