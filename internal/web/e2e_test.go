@@ -75,12 +75,17 @@ func TestE2EFullJourney(t *testing.T) {
 	}
 
 	// 2. POST /setup (password+origin, blank token keeps the stored one) ->
-	// session issued; /setup then 404s.
+	// 200 restart page with a session issued and Actions.Apply scheduled,
+	// exactly like handleConfigPost's apply-by-restart — this Service's Apply
+	// is a channel send rather than a real os.Exit, so the session created
+	// here stays valid for step 3 instead of the process actually restarting;
+	// /setup then 404s.
 	setupForm := url.Values{"password": {e2ePassword}, "confirm": {e2ePassword}, "origin": {"PAD"}, "token": {""}}
 	recSetup := postForm(t, h, "/setup", setupForm)
-	if recSetup.Code != http.StatusFound || recSetup.Header().Get("Location") != "/" {
-		t.Fatalf("step2 POST /setup: want 302 /, got %d body=%s", recSetup.Code, recSetup.Body.String())
+	if recSetup.Code != http.StatusOK {
+		t.Fatalf("step2 POST /setup: want 200 restart page, got %d body=%s", recSetup.Code, recSetup.Body.String())
 	}
+	awaitApply(t, applyCh)
 	cookies := recSetup.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("step2: want exactly 1 Set-Cookie, got %d", len(cookies))

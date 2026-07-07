@@ -165,6 +165,8 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	switch page {
 	case "setup":
 		t = setupTemplate
+	case "setupDone":
+		t = setupDoneTemplate
 	case "login":
 		t = loginTemplate
 	case "index":
@@ -216,6 +218,21 @@ func (s *Server) handleSetupGet(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, "setup", setupPageData{})
 }
 
+// handleSetupPost validates and stores the submitted first-boot config
+// (admin password, origin, Darwin token) on success. Unlike the old
+// redirect-to-/ behaviour, a success does NOT hand the browser straight into
+// an authed "/" — this device was, until this call, running
+// runConfigErrorLoop's static E04 snapshot with no poller at all, so
+// something must actually restart the process for the newly-valid config to
+// take effect and E04 to clear. That is exactly what handleConfigPost's
+// scheduleApply() does for later config saves, so setup schedules the same
+// apply-by-restart here and renders a "setup done, restarting" page instead
+// of redirecting — mirroring handleConfigPost/handleActionsRestart's
+// render-then-scheduleApply shape rather than diverging from it. The session
+// cookie is still issued (harmless: it is an in-memory session that dies
+// with the process either way), so a browser that reloads before the restart
+// completes is still authed, and one that reloads after it lands on /login
+// per setupGate.
 func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
@@ -237,7 +254,8 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 
 	tok, _ := s.sessions.Create()
 	setSessionCookie(w, tok)
-	http.Redirect(w, r, "/", http.StatusFound)
+	s.render(w, "setupDone", basePage{LoggedIn: false, CSRF: csrfFrom(r)})
+	s.scheduleApply()
 }
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, _ *http.Request) {

@@ -7,6 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mintopia/trainboard/internal/board"
+	"github.com/mintopia/trainboard/internal/config"
+	"github.com/mintopia/trainboard/internal/obs"
 )
 
 // newTestServer wires a Server to a saved, otherwise-valid config (origin
@@ -44,6 +49,33 @@ func newTestServerWithPassword(t *testing.T, pw string) (*Server, *Service) {
 		t.Fatalf("SetInitialPassword: %v", err)
 	}
 	return srv, svc
+}
+
+// newTestServerWithApply is newTestServer plus a channel that receives a
+// value whenever this Server's wired Actions.Apply fires — used by the
+// setup-flow tests that must assert POST /setup's success path actually
+// schedules the same apply-by-restart handleConfigPost uses (newTestServer's
+// underlying newTestServiceAt wires a no-op Apply, which cannot prove that).
+func newTestServerWithApply(t *testing.T) (*Server, *Service, chan struct{}) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, validCfg()); err != nil {
+		t.Fatal(err)
+	}
+	applyCh := make(chan struct{}, 1)
+	src := Sources{
+		Snapshot:   func() *board.Snapshot { return nil },
+		Ring:       obs.NewRing(8),
+		PreviewPNG: func() []byte { return nil },
+		Version:    "vtest",
+		StartedAt:  time.Now(),
+	}
+	act := Actions{
+		Apply:  func() { applyCh <- struct{}{} },
+		Reboot: func() error { return nil },
+	}
+	svc := NewService(path, src, act, testLog())
+	return NewServer(svc, testLog()), svc, applyCh
 }
 
 // postForm issues a POST with an application/x-www-form-urlencoded body,
@@ -105,16 +137,22 @@ func TestServerSetupGateRedirectsWhenNoPassword(t *testing.T) {
 }
 
 // (b) POST /setup with password+confirm+origin creates the password (usable
-// via VerifyLogin), redirects to / with a session cookie, and /setup then
-// 404s.
+// via VerifyLogin), issues a session cookie, schedules Actions.Apply (the
+// same apply-by-restart handleConfigPost uses — this is what actually clears
+// a virgin device's E04 fault screen, since runConfigErrorLoop has no
+// poller), renders the restart page instead of redirecting to /, and /setup
+// then 404s.
 func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
-	srv, svc := newTestServer(t)
+	srv, svc, applyCh := newTestServerWithApply(t)
 	h := srv.Handler()
 
 	form := url.Values{"password": {"longenough1"}, "confirm": {"longenough1"}, "origin": {"pad"}}
 	rec := postForm(t, h, "/setup", form)
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
-		t.Fatalf("want 302 /, got %d %q", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 restart page, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "restarting") {
+		t.Fatalf("expected restart copy in body: %s", rec.Body.String())
 	}
 	if len(rec.Result().Cookies()) != 1 {
 		t.Fatalf("expected exactly one Set-Cookie, got %d", len(rec.Result().Cookies()))
@@ -122,6 +160,7 @@ func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 	if !svc.VerifyLogin("longenough1") {
 		t.Fatal("password was not stored by /setup")
 	}
+	awaitApply(t, applyCh)
 
 	rec2 := getPath(t, h, "/setup")
 	if rec2.Code != http.StatusNotFound {

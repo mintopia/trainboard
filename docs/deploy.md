@@ -53,10 +53,22 @@ admin password set yet, every route redirects to `/setup`, which collects:
 - **origin CRS** — the three-letter station code the board departs from
 - **Darwin token** — your National Rail Darwin OpenLDBWS access token
 
-Submitting `/setup` writes these into the config file, logs you in, and
-redirects to `/`. The board's E04 fault clears once the config becomes valid
-and Darwin starts responding (see the fault table below if it doesn't clear
-immediately).
+Submitting `/setup` writes these into the config file, issues you a session,
+and shows a "Setup complete, restarting" page — it does **not** drop you
+straight onto the status page. That's deliberate: the process that served
+`/setup` was running with no valid config at all (the OLED's static E04
+scene, no poller), so nothing would ever start fetching until something
+restarts it. Submitting `/setup` schedules that restart, the same
+apply-by-restart used by every `/config` save: `trainboard.service`'s
+`Restart=always` relaunches the process a couple of seconds later, it loads
+the config you just wrote, E04 clears, and the board starts fetching. Wait
+for the restart page's countdown to bounce you back to `/` — you'll land on
+`/login` — then log back in with the password you just set to fine-tune
+things at `/config`.
+
+Running the binary directly in dev mode (no systemd) instead just exits after
+`/setup`; nothing restarts it for you, so you'll need to relaunch it by
+hand.
 
 > The admin UI is served over **plain HTTP** — see
 > [ADR 0004](adr/0004-plain-http-admin-on-trusted-lan.md) for why, and what

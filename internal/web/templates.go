@@ -27,6 +27,7 @@ func parseTemplates() *template.Template {
 var (
 	baseTemplate      = parseTemplates()
 	setupTemplate     = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
+	setupDoneTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_done.html"))
 	loginTemplate     = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
 	statusTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
 	configTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config.html"))
