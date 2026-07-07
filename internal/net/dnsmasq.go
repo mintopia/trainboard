@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 )
 
 // Dnsmasq controls the AP-side DHCP + wildcard DNS (production requires the
@@ -53,18 +52,26 @@ func (d *Dnsmasq) Stop(ctx context.Context) error {
 	return nil
 }
 
+// exitCoder matches the standard library exec package's *ExitError type via
+// its promoted ExitCode method, structurally, without this file importing
+// that package directly — every OS side effect here goes through the
+// Runner seam (ADR 0003), and Runner.Run's production implementation
+// (ExecRunner, runner.go) is the only place that package may be imported.
+type exitCoder interface{ ExitCode() int }
+
 // Alive checks if dnsmasq is currently running. pkill -0 exiting non-zero
-// because no process matched (an *exec.ExitError) is the only "not alive"
-// case; any other error (pkill missing, permission denied, ...) means the
-// check itself failed and is returned to the caller rather than being
-// silently mapped to "not running".
+// because no process matched (an error satisfying exitCoder, i.e. a genuine
+// *ExitError from the Runner) is the only "not alive" case; any other
+// error (pkill missing, permission denied, ...) means the check itself
+// failed and is returned to the caller rather than being silently mapped to
+// "not running".
 func (d *Dnsmasq) Alive(ctx context.Context) (bool, error) {
 	_, err := d.r.Run(ctx, "pkill", "-0", "-F", "/run/trainboard-dnsmasq.pid")
 	if err == nil {
 		return true, nil
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	var ec exitCoder
+	if errors.As(err, &ec) {
 		return false, nil
 	}
 	return false, fmt.Errorf("could not check dnsmasq liveness: %w", err)

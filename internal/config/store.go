@@ -35,12 +35,36 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// Save validates c, then writes it atomically at mode 0600: a temp file in the
-// same directory is written, fsync'd, and renamed over path.
+// Save validates c with the full Validate() tier, then writes it atomically
+// at mode 0600: a temp file in the same directory is written, fsync'd, and
+// renamed over path. Use SaveConnectivity instead when c is only expected to
+// meet the lighter ValidateConnectivity bar (e.g. an unconfigured device
+// that hasn't been through /setup yet).
 func Save(path string, c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	return saveRaw(path, c)
+}
+
+// SaveConnectivity validates c against ValidateConnectivity (not the full
+// Validate) and writes it the same atomic way as Save. This is the tier
+// --manage-network wiring uses to persist a freshly generated
+// Provisioning.APPassword on a device that hasn't completed first-boot setup
+// (Board.Origin/Darwin.Token unset, so full Validate would reject it) — see
+// Task 12's report for the investigation this rests on: config.Save always
+// hard-validates, so a distinct save path was needed for the connectivity
+// tier rather than relaxing Save's existing contract.
+func SaveConnectivity(path string, c Config) error {
+	if err := c.ValidateConnectivity(); err != nil {
+		return err
+	}
+	return saveRaw(path, c)
+}
+
+// saveRaw writes c to path as an atomic rename-over, with no validation of
+// its own — callers (Save, SaveConnectivity) pick the validation tier.
+func saveRaw(path string, c Config) error {
 	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("config: encoding: %w", err)

@@ -3,22 +3,20 @@ package net
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"testing"
 )
 
-// realExitError runs a trivial failing command to obtain a genuine
-// *exec.ExitError, so Alive()'s error-type discrimination is tested against
-// the real thing rather than a hand-rolled string.
-func realExitError(t *testing.T) error {
-	t.Helper()
-	err := exec.Command("sh", "-c", "exit 1").Run()
-	if _, ok := err.(*exec.ExitError); !ok {
-		t.Fatalf("expected *exec.ExitError from test harness command, got %T: %v", err, err)
-	}
-	return err
-}
+// fakeExitError satisfies this package's exitCoder interface (the same
+// structural shape the standard library exec package's *ExitError type has
+// via its promoted ExitCode method), so Alive()'s error-type discrimination
+// can be tested without this test file importing that package itself —
+// every OS side effect goes through the Runner seam (ADR 0003); only
+// runner.go may exec.
+type fakeExitError struct{ code int }
+
+func (e fakeExitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e fakeExitError) ExitCode() int { return e.code }
 
 func TestDnsmasqStart(t *testing.T) {
 	// Start: write conf → dnsmasq --conf-file=/run/trainboard-dnsmasq.conf --pid-file=/run/trainboard-dnsmasq.pid
@@ -170,11 +168,11 @@ func TestDnsmasqAliveTrue(t *testing.T) {
 }
 
 func TestDnsmasqAliveFalse(t *testing.T) {
-	// Alive: pkill -0 -F exits non-zero (a genuine exec.ExitError, meaning
-	// "no process matched") → false, nil.
+	// Alive: pkill -0 -F exits non-zero (an exitCoder error, meaning "no
+	// process matched") → false, nil.
 	r := NewFakeRunner()
 	r.Script("dnsmasq --conf-file=/run/trainboard-dnsmasq.conf --pid-file=/run/trainboard-dnsmasq.pid", "", nil)
-	r.Script("pkill -0 -F /run/trainboard-dnsmasq.pid", "", realExitError(t))
+	r.Script("pkill -0 -F /run/trainboard-dnsmasq.pid", "", fakeExitError{code: 1})
 
 	writeFile := func(_ string, _ []byte) error {
 		return nil

@@ -17,9 +17,11 @@ type APConfig struct {
 // STAConfig is the target client network.
 type STAConfig struct{ SSID, PSK string }
 
-// apDriver abstracts "make the AP exist / attempt the STA network".
+// Driver abstracts "make the AP exist / attempt the STA network".
 // Implementations: mode2 (single wpa_supplicant), hostapd (fallback).
-type apDriver interface {
+// Exported (Task 12) so cmd/trainboard can name ManagerDeps.Driver's type
+// when wiring the production driver.
+type Driver interface {
 	// StartAP brings the AP up (and assigns APConfig.Addr to the iface).
 	StartAP(ctx context.Context, ap APConfig) error
 	// StopAP tears the AP down (does NOT start STA).
@@ -34,7 +36,7 @@ type apDriver interface {
 }
 
 // pollAttempts and pollInterval bound the wait for wpa_supplicant to reach
-// the wanted state after a select_network. Shared by both apDriver
+// the wanted state after a select_network. Shared by both Driver
 // implementations.
 const pollAttempts = 10
 

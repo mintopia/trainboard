@@ -25,7 +25,17 @@ type mode2Driver struct {
 	ap  APConfig
 }
 
-var _ apDriver = (*mode2Driver)(nil)
+var _ Driver = (*mode2Driver)(nil)
+
+// NewMode2Driver builds the production mode2 driver (cmd/trainboard, Task
+// 12): a single wpa_supplicant instance driving both STA and AP via
+// mode=2, evaluated as the M3a default pending the M3b hardware matrix
+// (spec/ADR 0003 addendum). writeFile and sleep default to os.WriteFile and
+// time.Sleep in production; pass nil for both to get those defaults, or
+// inject fakes (as the internal constructor's tests do).
+func NewMode2Driver(r Runner, iface string, writeFile func(string, []byte) error, sleep func(time.Duration)) Driver {
+	return newMode2Driver(r, iface, writeFile, sleep)
+}
 
 // newMode2Driver builds the mode2 driver. writeFile and sleep default to
 // os.WriteFile and time.Sleep in production; tests inject fakes.

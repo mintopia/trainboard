@@ -143,6 +143,7 @@ up a newly-copied binary or config without a full reboot.
 | `--preview-dir` | `./preview` | Where preview PNGs are written in non-production mode |
 | `--fixture` | *(none)* | Path to a JSON board fixture, bypassing live Darwin (dev only) |
 | `--http` | `:80` | Address the embedded config/status web server listens on |
+| `--manage-network` | `false` | Drive wlan0 (STA connect / AP fallback) via the connectivity manager. **Safety interlock — see §8 before enabling.** |
 | `--version` | | Print version and exit |
 
 The shipped unit runs `trainboard --production` with no `--http` override, so
@@ -162,6 +163,8 @@ scenes for field diagnosis (`internal/obs/faults.go`):
 | E02 | Darwin token rejected | The token entered at `/setup` or `/config` — re-check it's a valid, current OpenLDBWS token |
 | E03 | Waiting for time sync | The Pi hasn't got NTP time yet (common right after boot); wait, or check network/NTP reachability |
 | E04 | Configuration error | No config file yet, or the stored config fails validation — visit `/setup` (fresh install) or `/config` (existing install) to fix it |
+| E05 | WiFi radio blocked | wlan0 is rfkill soft-blocked or its regulatory domain is unset — only surfaced behind `--manage-network` (§8); check for a hardware kill switch, or run `rfkill unblock wifi` / `iw reg set GB` by hand |
+| E06 | Network connectivity | The layered connectivity check (association / DHCP / DNS / captive-portal) failed at the stage it names — only surfaced behind `--manage-network` (§8); the board falls back to its own AP hotspot rather than staying stuck here |
 
 ## 7. Troubleshooting
 
@@ -190,7 +193,57 @@ as a corrupted config, not routine first-boot: until `/setup` is completed,
 the device is claimable by anyone who can reach it on the LAN. Re-run setup
 promptly to restore a valid config and close that window.
 
-## 8. Benchmarks
+## 8. Connectivity & AP mode (M3, behind `--manage-network`)
+
+> **Do not enable `--manage-network` on any device whose WiFi you currently
+> rely on to reach it, until it has been through the M3b bench migration
+> below.** This is a one-way safety interlock, not a preference: the
+> connectivity manager takes wlan0 away from ifupdown/`wpa_supplicant`'s
+> normal system management and drives it directly (association, DHCP, AP
+> fallback), and it will happily tear down the very STA connection you're
+> SSH'd in over if the layered check decides it's unhealthy.
+
+The M3 connectivity manager owns wlan0 end to end: it attempts the WiFi
+network configured at `/config` (`wifi.ssid` / `wifi.psk`), verifies it with
+a layered check (association → DHCP → DNS → captive-portal detection), and
+falls back to the board's own WPA2 AP hotspot (`Trainboard-XXXX`, named from
+wlan0's MAC) when the configured network can't be reached or none is
+configured yet — including on a wholly fresh, unconfigured device (the E04
+boot path runs the manager too, purely for AP fallback). While the AP is up,
+the panel shows the hotspot's SSID/password/address instead of the normal
+departure board.
+
+This is **off by default** (`--manage-network=false`): the M3a bench Pi's
+WiFi stays ifupdown-managed until the M3b migration session explicitly hands
+wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
+`ExecStart` to add it) after that migration:
+
+1. Confirm the device is reachable some other way (ethernet, physical
+   console, or you're comfortable losing WiFi and driving it from the AP).
+2. Disable ifupdown/dhcpcd's management of wlan0 (M3b bench notes cover the
+   exact steps for the DietPi image in use).
+3. Add `--manage-network` to the unit's `ExecStart` and
+   `systemctl daemon-reload && systemctl restart trainboard`.
+4. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
+   fallback before disconnecting your other access path.
+
+**Fault codes E05/E06** (§6) are only ever surfaced behind this flag — with
+it off, wlan0 is left to the OS as before and neither can occur.
+
+**Watchdog:** `trainboard.service` already ships with `WatchdogSec=30` (see
+the unit file) regardless of `--manage-network`; the internal aggregator
+(`internal/obs.Watchdog`) only pets systemd once every 10s tick where the
+render loop, poller, *and* (when `--manage-network` is set) the connectivity
+manager have all beaten within their own deadlines. If the manager's `Run`
+loop ever exits — its own doc calls this "no safe software recovery from
+neither STA nor a verified AP coming up" — its heartbeat is deliberately
+never re-registered, so the next unhealthy watchdog tick lets systemd reboot
+the unit. That reboot is the intended escalation path, not a bug: don't
+"fix" a report of the board rebooting after a `manager Run exited` log line
+by silencing it without first checking what actually failed (radio,
+firmware, hardware).
+
+## 9. Benchmarks
 
 `cmd/bench` measures SSD1322 flush performance on real hardware and gates the
 render architecture (full-frame vs. dirty-region flush). Build, ship, and run

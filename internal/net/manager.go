@@ -71,7 +71,7 @@ type Status struct {
 // side effect goes through Driver/Check/Dnsmasq/Prereqs; Now/After are timer
 // seams for tests.
 type ManagerDeps struct {
-	Driver  apDriver
+	Driver  Driver
 	Check   *Check
 	Dnsmasq *Dnsmasq
 	Prereqs func(ctx context.Context) error

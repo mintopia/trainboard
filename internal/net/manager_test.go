@@ -15,7 +15,7 @@ type boolErr struct {
 	err    error
 }
 
-// fakeDriver is a scriptable apDriver test double: it records every call
+// fakeDriver is a scriptable Driver test double: it records every call
 // and returns per-method scripted errors (and, for APActive, a sequence of
 // (bool, error) results so tests can exercise the toAP retry path).
 type fakeDriver struct {

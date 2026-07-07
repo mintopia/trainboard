@@ -23,7 +23,7 @@ type hostapdDriver struct {
 	sleep     func(time.Duration)
 }
 
-var _ apDriver = (*hostapdDriver)(nil)
+var _ Driver = (*hostapdDriver)(nil)
 
 // newHostapdDriver builds the hostapd driver. writeFile and sleep default to
 // os.WriteFile and time.Sleep in production; tests inject fakes.
