@@ -204,7 +204,10 @@ func (m *Manager) Run(ctx context.Context) error {
 
 		switch phase {
 		case phaseBoot:
-			next, err := m.runBoot(ctx)
+			next, cancelled, err := m.runBoot(ctx)
+			if cancelled {
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -236,15 +239,22 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 // runBoot performs the single boot-time STA attempt, falling back to AP on
-// any failure (errNoWifiConfigured or a layered check failure).
-func (m *Manager) runBoot(ctx context.Context) (managerPhase, error) {
+// any failure (errNoWifiConfigured or a layered check failure). If ctx was
+// cancelled while either driver call was in flight, the resulting error is
+// treated as clean shutdown (best-effort AP teardown, cancelled=true), never
+// escalation — see Run's ctx-cancellation contract.
+func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled bool, err error) {
 	if err := m.toSTA(ctx); err == nil {
-		return phaseOnlineWait, nil
+		return phaseOnlineWait, false, nil
 	}
 	if err := m.toAP(ctx); err != nil {
-		return phaseBoot, fmt.Errorf("net: manager: boot: AP fallback failed: %w", err)
+		if ctx.Err() != nil {
+			m.cleanupOnCancel()
+			return phaseBoot, true, nil
+		}
+		return phaseBoot, false, fmt.Errorf("net: manager: boot: AP fallback failed: %w", err)
 	}
-	return phaseAPWait, nil
+	return phaseAPWait, false, nil
 }
 
 // runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
@@ -266,6 +276,10 @@ func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error)
 	}
 
 	if err := m.toAP(ctx); err != nil {
+		if ctx.Err() != nil {
+			m.cleanupOnCancel()
+			return phaseOnlineWait, true, nil
+		}
 		return phaseOnlineWait, false, fmt.Errorf("net: manager: online watch: AP fallback failed: %w", err)
 	}
 	return phaseAPWait, false, nil
@@ -302,6 +316,10 @@ func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 	}
 
 	if err := m.toAP(ctx); err != nil {
+		if ctx.Err() != nil {
+			m.cleanupOnCancel()
+			return phaseAPWait, true, nil
+		}
 		return phaseAPWait, false, fmt.Errorf("net: manager: AP fallback retry: AP restore failed: %w", err)
 	}
 

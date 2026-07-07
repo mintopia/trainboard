@@ -36,10 +36,20 @@ type fakeDriver struct {
 	// returns — lets Task 9's run-loop tests pause mid-retry to
 	// deterministically observe the transient ManagerSTARetry status.
 	stopAPBlock chan struct{}
+
+	// attemptSTABlockUntilCtxDone, if true, makes AttemptSTA block on
+	// <-ctx.Done() and return ctx.Err() — simulating a real driver whose
+	// underlying command is still in flight when ctx is cancelled.
+	attemptSTABlockUntilCtxDone bool
 }
 
-func (f *fakeDriver) StartAP(context.Context, APConfig) error {
+func (f *fakeDriver) StartAP(ctx context.Context, _ APConfig) error {
 	f.record("StartAP")
+	// Mirrors a real driver (exec.CommandContext): a cancelled ctx fails the
+	// call immediately rather than proceeding as if nothing happened.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return f.startAPErr
 }
 
@@ -51,13 +61,20 @@ func (f *fakeDriver) StopAP(context.Context) error {
 	return f.stopAPErr
 }
 
-func (f *fakeDriver) AttemptSTA(context.Context, STAConfig) error {
+func (f *fakeDriver) AttemptSTA(ctx context.Context, _ STAConfig) error {
 	f.record("AttemptSTA")
+	if f.attemptSTABlockUntilCtxDone {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return f.attemptSTAErr
 }
 
-func (f *fakeDriver) APActive(context.Context) (bool, error) {
+func (f *fakeDriver) APActive(ctx context.Context) (bool, error) {
 	f.record("APActive")
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.apActiveSeq) > 0 {
@@ -817,6 +834,37 @@ func TestManagerRunEscalatesWhenAPVerificationPermanentlyFails(t *testing.T) {
 	}
 	if got := m.Status(); got.State == ManagerAPFallback {
 		t.Fatalf("State = %v, want not APFallback after escalation", got.State)
+	}
+}
+
+// (i) ctx cancellation arriving while a driver call is in flight must still
+// produce a clean nil return, never escalation — even though the in-flight
+// call (and the subsequent AP fallback attempt it triggers) both fail with
+// context errors once ctx is done.
+func TestManagerRunCtxCancelMidSTAAttemptReturnsCleanly(t *testing.T) {
+	driver := &fakeDriver{attemptSTABlockUntilCtxDone: true}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-I", Addr: "192.168.4.1/24"},
+		After:   (&fakeAfter{}).After,
+		Now:     time.Now,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManagerAsync(ctx, m)
+
+	// Wait until Run is blocked inside AttemptSTA before cancelling, so the
+	// driver call genuinely races the ctx cancellation.
+	waitForCall(t, driver, "AttemptSTA")
+	cancel()
+
+	if err := waitRunDone(t, done); err != nil {
+		t.Fatalf("Run() err = %v, want nil (ctx cancel mid-transition must be a clean shutdown, not escalation)", err)
 	}
 }
 
