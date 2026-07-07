@@ -155,6 +155,56 @@ func TestManagerToSTAHappyPathPublishesOnlineAndCallsOnOnline(t *testing.T) {
 	}
 }
 
+// TestManagerToSTAPrereqsFailureSetsRadioBlockedThenClears pins the E05
+// on-glass contract: a Prereqs failure (rfkill soft-block / missing regulatory
+// domain) publishes RadioBlocked=true so the render loop can raise E05, and a
+// subsequent successful transition attempt clears it (each publish is a fresh
+// immutable Status, so the flag must not survive into Online).
+func TestManagerToSTAPrereqsFailureSetsRadioBlockedThenClears(t *testing.T) {
+	driver := &fakeDriver{}
+	dnsmasq, _ := newTestDnsmasq()
+	prereqErr := errors.New("rfkill soft blocked")
+	failPrereqs := true
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		Prereqs: func(context.Context) error {
+			if failPrereqs {
+				return prereqErr
+			}
+			return nil
+		},
+		STA:      func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		OnOnline: func() {},
+	})
+
+	if err := m.toSTA(context.Background()); !errors.Is(err, prereqErr) {
+		t.Fatalf("toSTA() err = %v, want %v", err, prereqErr)
+	}
+	got := m.Status()
+	if got.State != ManagerSTAConnecting {
+		t.Fatalf("State = %v, want ManagerSTAConnecting", got.State)
+	}
+	if !got.RadioBlocked {
+		t.Fatal("RadioBlocked = false, want true after a Prereqs failure")
+	}
+
+	// A subsequent successful transition attempt must clear RadioBlocked.
+	failPrereqs = false
+	if err := m.toSTA(context.Background()); err != nil {
+		t.Fatalf("toSTA() err = %v, want nil on the recovery attempt", err)
+	}
+	got = m.Status()
+	if got.State != ManagerOnline {
+		t.Fatalf("State = %v, want ManagerOnline", got.State)
+	}
+	if got.RadioBlocked {
+		t.Fatal("RadioBlocked = true, want false after a successful transition")
+	}
+}
+
 func TestManagerToSTADHCPFailurePublishesStageDHCP(t *testing.T) {
 	driver := &fakeDriver{}
 	dnsmasq, _ := newTestDnsmasq()

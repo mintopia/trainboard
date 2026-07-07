@@ -150,7 +150,7 @@ func run() error {
 	if *manageNetwork {
 		sta := staFromDisk(*cfgPath)
 		mgr := startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
-		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
+		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot }, connFault(mgr))
 		conn = newWebConnSeams(mgr, time.Now)
 	}
 
@@ -272,7 +272,7 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 			log.Warn("connectivity: raw config read failed; AP password won't carry over this boot", "err", rawErr.Error())
 		}
 		mgr := startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
-		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
+		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot }, connFault(mgr))
 		conn = newWebConnSeams(mgr, time.Now)
 	}
 

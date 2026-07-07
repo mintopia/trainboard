@@ -65,6 +65,11 @@ type Status struct {
 	// LastSTAErr preserves the most recent STA failure text across an AP
 	// restore, for the captive portal to display (M3b).
 	LastSTAErr string
+	// RadioBlocked is true when the STA Prereqs gate failed (wlan0
+	// rfkill-soft-blocked / regulatory domain unset) — the render loop raises
+	// E05 on-glass. Cleared on the next transition attempt (every publish is a
+	// fresh Status), so it never leaks into a later Online/AP state.
+	RadioBlocked bool
 }
 
 // ManagerDeps wires the Connectivity Manager to its collaborators. Every OS
@@ -443,7 +448,7 @@ func (m *Manager) toSTA(ctx context.Context) error {
 
 	if m.d.Prereqs != nil {
 		if err := m.d.Prereqs(ctx); err != nil {
-			m.publish(Status{State: ManagerSTAConnecting, LastSTAErr: err.Error()})
+			m.publish(Status{State: ManagerSTAConnecting, LastSTAErr: err.Error(), RadioBlocked: true})
 			return err
 		}
 	}

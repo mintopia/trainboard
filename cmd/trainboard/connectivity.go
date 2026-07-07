@@ -277,6 +277,20 @@ type webConnSeams struct {
 // simplification of the spec's lease-AND-HTTP pair; a mere association
 // without traffic still never suppresses (no HTTP request, no
 // NoteProvisioning call).
+// connFault adapts the connectivity manager to the fault seam the composite
+// snapshot source consumes: the current failing layer (Status.Stage) and
+// whether the STA Prereqs gate reported the radio blocked (Status.RadioBlocked).
+// Mapping net types to plain strings/bools here keeps internal/runtime free of
+// any internal/net dependency. Read through m.Status() on every call, matching
+// the other seams (the manager republishes an immutable snapshot as it moves
+// between STA and AP).
+func connFault(m connManager) func() (string, bool) {
+	return func() (string, bool) {
+		s := m.Status()
+		return string(s.Stage), s.RadioBlocked
+	}
+}
+
 func newWebConnSeams(m connManager, now func() time.Time) webConnSeams {
 	return webConnSeams{
 		hotspot:          func() *board.Hotspot { return m.Status().Hotspot },

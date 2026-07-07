@@ -46,11 +46,15 @@ type Hotspot struct {
 // Snapshot is the immutable unit the poller publishes and the render loop
 // consumes. Never mutate a published snapshot or anything reachable from it.
 type Snapshot struct {
-	Board     *data.Board
-	State     State
-	Fault     obs.FaultCode
-	FetchedAt time.Time
-	Hotspot   *Hotspot
+	Board *data.Board
+	State State
+	Fault obs.FaultCode
+	// FaultDetail is an optional short qualifier rendered under the fault
+	// message (e.g. the failing connectivity stage for E06). It is display
+	// text only and never participates in equality-sensitive logic.
+	FaultDetail string
+	FetchedAt   time.Time
+	Hotspot     *Hotspot
 }
 
 // BuildScene maps a snapshot to the scene to draw, enforcing the priority
@@ -68,7 +72,7 @@ func BuildScene(s *Snapshot, layout config.LayoutConfig, version string, f *Font
 	}
 	switch s.State {
 	case StateError:
-		return errorScene(s.Fault, f)
+		return errorScene(s.Fault, f, s.FaultDetail)
 	case StateClockNotSynced:
 		return clockNotSyncedScene(f)
 	case StateNoServices:

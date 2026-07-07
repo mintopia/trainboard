@@ -68,12 +68,18 @@ func faultCorner(fault obs.FaultCode, f *Fonts) render.Element {
 }
 
 // errorScene is shown on hard fetch failure after the stale grace expires.
-func errorScene(fault obs.FaultCode, f *Fonts) *render.Scene {
-	return &render.Scene{Elements: []render.Element{
+// An optional detail line (e.g. the failing connectivity stage for E06) is
+// rendered at y=36, between the message (24) and the fault corner (52).
+func errorScene(fault obs.FaultCode, f *Fonts, detail ...string) *render.Scene {
+	els := []render.Element{
 		centered(f.Bold, "Unable to fetch departures", 8),
 		centered(f.Regular, fault.Message(), 24),
-		faultCorner(fault, f),
-	}}
+	}
+	if len(detail) > 0 && detail[0] != "" {
+		els = append(els, centered(f.Regular, detail[0], 36))
+	}
+	els = append(els, faultCorner(fault, f))
+	return &render.Scene{Elements: els}
 }
 
 // clockNotSyncedScene is the pre-NTP transient; deliberately clockless.
