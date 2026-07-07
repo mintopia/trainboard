@@ -251,6 +251,18 @@ etc. — issue #13). The mode2-vs-hostapd verdict is **not** decided by this
 doc — it lands as an ADR 0003 addendum after that bench session runs, not
 before.
 
+Because this bench session runs *before* the ifupdown migration above,
+`eval-mode2.sh` detects that wlan0 is still ifupdown/system-managed and, once
+its own dead-man switch is armed and verified, stops the system
+`wpa_supplicant` and `ifdown`s wlan0 itself for the duration of the run so
+the driver under test isn't fighting the wrong daemon (see the script's step
+1b/2b). It hands wlan0 back to ifupdown on a normal exit, and the dead-man's
+standalone restore script does the same if the session itself goes
+sideways — either way a pre-migration Pi comes back ifupdown-managed. Treat
+the bench session itself like the migration's SSH warning above: drive it
+over ethernet/console, or accept that wlan0 is unavailable to you for its
+duration.
+
 **Fault codes E05/E06** (§6) are only ever surfaced behind this flag — with
 it off, wlan0 is left to the OS as before and neither can occur.
 

@@ -71,7 +71,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$MINUTES" =~ ^[0-9]+$ ]] || { echo "FATAL: --minutes must be a positive integer" >&2; exit 1; }
+(( MINUTES >= 1 )) || { echo "FATAL: --minutes must be >= 1 (0 would fire the dead-man immediately)" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "FATAL: run as root (this drives wlan0 directly)" >&2; exit 1; }
+
+# reject_quote NAME VALUE — production's renderConf (internal/net/driver_mode2.go)
+# rejects a literal double-quote in any network-block field; write_conf below
+# interpolates these three inputs into a heredoc unescaped, so an embedded
+# `"` would break out of the quoted ssid/psk value and corrupt the conf. Fail
+# fast with a clear message rather than writing a broken conf wpa_supplicant
+# would then mis-parse.
+reject_quote() {
+  local name="$1" val="$2"
+  [[ "$val" != *'"'* ]] || { echo "FATAL: $name must not contain a literal \" character (production renderConf rejects it too)" >&2; exit 1; }
+}
 
 if [[ -z "$AP_PASS" ]]; then
   printf "AP password for %s (hidden): " "$AP_SSID"
@@ -88,6 +100,9 @@ if [[ -z "$STA_PSK" ]]; then
   echo
 fi
 [[ ${#AP_PASS} -ge 8 ]] || { echo "FATAL: AP password must be at least 8 chars (WPA2-PSK)" >&2; exit 1; }
+reject_quote "--ap-pass" "$AP_PASS"
+reject_quote "--sta-ssid" "$STA_SSID"
+reject_quote "--sta-psk" "$STA_PSK"
 
 BACKUP_DIR="/root/bench-backup-$(date +%s)"
 LOG="$BACKUP_DIR/eval-mode2.log"
@@ -254,6 +269,37 @@ fi
 printf '%s\n' "${BACKUP_FILES[@]}" > "$BACKUP_DIR/manifest.txt"
 
 # ---------------------------------------------------------------------------
+# 1b. Detect pre-migration wlan0 ownership (detection only — no mutation yet)
+# ---------------------------------------------------------------------------
+#
+# docs/deploy.md §8 runs this bench BEFORE the ifupdown->manager migration, so
+# on the common case wlan0 still has a *system* wpa_supplicant attached to it
+# (started by ifupdown's wpa-conf hook and/or wpa_supplicant@<iface>.service),
+# answering on the same default control-socket path `wpa_cli -i "$IFACE"
+# status` looks at below. If that succeeds now, before we've started anything
+# of our own, whatever answered it is the system daemon, not ours. Left
+# alone, ensure_daemon()'s "already answering" branch would `reconfigure`
+# *that* daemon against *its own* conf (not $WPA_CONF) and `select_network 1`
+# would act on *its* network id — Experiment 1 would silently exercise the
+# wrong driver end to end. We only detect here; freeing wlan0 is itself a
+# wlan0 mutation, so it happens later, once the dead-man is armed+verified
+# and the in-process teardown trap is registered (step 2b).
+WLAN0_OWNED_BY_IFUPDOWN=0
+WPA_SERVICE_UNIT=""
+if wpa_cli -i "$IFACE" status >/dev/null 2>&1; then
+  WLAN0_OWNED_BY_IFUPDOWN=1
+  for unit in "wpa_supplicant@${IFACE}.service" "wpa_supplicant.service"; do
+    if systemctl is-active --quiet "$unit" 2>/dev/null; then
+      WPA_SERVICE_UNIT="$unit"
+      break
+    fi
+  done
+  log "$IFACE already has a live (system/ifupdown) wpa_supplicant — pre-migration device detected; will free it right after the dead-man arms (unit: ${WPA_SERVICE_UNIT:-<none found, will use ifdown/pkill>})"
+else
+  log "$IFACE has no live wpa_supplicant — either post-migration or radio idle; no ownership hand-off needed"
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Arm the dead-man switch — BEFORE any wlan0 mutation
 # ---------------------------------------------------------------------------
 
@@ -279,6 +325,12 @@ done < "$BACKUP_DIR/manifest.txt"
 pkill -9 -f "wpa_supplicant.*$WPA_CONF" 2>/dev/null || true
 pkill -9 -F "$DNSMASQ_PID" 2>/dev/null || true
 ip addr flush dev "$IFACE" 2>/dev/null || true
+if [[ "$WLAN0_OWNED_BY_IFUPDOWN" == "1" ]]; then
+  ifup "$IFACE" 2>/dev/null || true
+  if [[ -n "$WPA_SERVICE_UNIT" ]]; then
+    systemctl start "$WPA_SERVICE_UNIT" 2>/dev/null || true
+  fi
+fi
 systemctl restart networking 2>/dev/null || ifup "$IFACE" 2>/dev/null || true
 reboot
 EOF
@@ -323,6 +375,29 @@ print_verdict() {
   } | tee -a "$LOG"
 }
 
+# verify_restored — bounded poll (matches POLL_ATTEMPTS/POLL_INTERVAL's
+# cadence) confirming wlan0 actually came back after teardown's restore
+# commands, rather than trusting their exit codes: carrier up, an IPv4
+# address present, or wpa_supplicant reporting an association, any one of
+# which is a real sign the interface is alive again (covers both the
+# ifupdown-managed pre-migration case and a post-migration manager-owned
+# case). Bounded so teardown can't hang forever against a dead radio.
+verify_restored() {
+  local i carrier addr_count state
+  for ((i = 0; i < POLL_ATTEMPTS; i++)); do
+    carrier=$(cat "/sys/class/net/$IFACE/carrier" 2>/dev/null || echo 0)
+    addr_count=$(ip -4 addr show dev "$IFACE" 2>/dev/null | grep -c "inet ")
+    state=$(wpa_field wpa_state)
+    if [[ "$carrier" == "1" ]] || (( addr_count > 0 )) || [[ "$state" == "COMPLETED" ]]; then
+      log "  restore verified: carrier=$carrier addr_count=$addr_count wpa_state=${state:-<none>}"
+      return 0
+    fi
+    (( i < POLL_ATTEMPTS - 1 )) && sleep "$POLL_INTERVAL"
+  done
+  log "  restore NOT verified after ${POLL_ATTEMPTS} attempts: carrier=$carrier addr_count=$addr_count wpa_state=${state:-<none>}"
+  return 1
+}
+
 teardown() {
   local rc=$?
   log "== Teardown (exit code $rc) =="
@@ -330,14 +405,62 @@ teardown() {
   pkill -f "wpa_supplicant.*$WPA_CONF" 2>/dev/null || true
   ip addr flush dev "$IFACE" 2>/dev/null || true
   restore_files
+
+  if [[ "$WLAN0_OWNED_BY_IFUPDOWN" == "1" ]]; then
+    log "  re-enabling ifupdown/system ownership of $IFACE"
+    if [[ -n "$WPA_SERVICE_UNIT" ]]; then
+      systemctl start "$WPA_SERVICE_UNIT" 2>/dev/null || true
+    fi
+    ifup "$IFACE" 2>/dev/null || true
+  fi
   systemctl restart networking 2>/dev/null || ifup "$IFACE" 2>/dev/null || true
+
   print_verdict
-  systemctl stop bench-deadman.timer 2>/dev/null || true
-  systemctl reset-failed 2>/dev/null || true
-  log "dead-man disarmed. Backup + log kept at $BACKUP_DIR for the record."
+
+  # Dead-man disarm is gated on a VERIFIED restore, not on the restore
+  # commands' exit codes (they're all best-effort `|| true`, so a silent
+  # failure there must never surrender the backstop). On failure we exit
+  # nonzero and leave bench-deadman.timer running: it is now the only thing
+  # standing between this box and a wedged wlan0, and it will reboot-restore
+  # on its own within the remaining budget.
+  if verify_restored; then
+    systemctl stop bench-deadman.timer 2>/dev/null || true
+    systemctl reset-failed 2>/dev/null || true
+    log "restore verified; dead-man disarmed. Backup + log kept at $BACKUP_DIR for the record."
+  else
+    log "!! RESTORE NOT VERIFIED — dead-man switch left ARMED on purpose."
+    log "!! bench-deadman.timer will reboot-restore this box automatically within its"
+    log "!! remaining budget. Do not assume wlan0 is back; investigate now. Backup +"
+    log "!! log kept at $BACKUP_DIR."
+    (( rc == 0 )) && rc=1
+  fi
   exit "$rc"
 }
 trap teardown EXIT
+
+# ---------------------------------------------------------------------------
+# 2b. Free wlan0 from ifupdown/system ownership (pre-migration devices only)
+# ---------------------------------------------------------------------------
+#
+# The first actual wlan0 mutation in the script, deliberately placed after
+# BOTH the dead-man is armed+verified AND this trap is registered, so it has
+# two independent backstops. See step 1b for why this is needed at all.
+if [[ "$WLAN0_OWNED_BY_IFUPDOWN" == "1" ]]; then
+  log "== Freeing $IFACE from ifupdown/system wpa_supplicant (pre-migration device) =="
+  if [[ -n "$WPA_SERVICE_UNIT" ]]; then
+    log "  stopping $WPA_SERVICE_UNIT"
+    systemctl stop "$WPA_SERVICE_UNIT" 2>/dev/null || true
+  fi
+  log "  ifdown $IFACE"
+  ifdown "$IFACE" 2>/dev/null || true
+  pkill -f "wpa_supplicant.*$IFACE" 2>/dev/null || true
+  sleep 1
+  if wpa_cli -i "$IFACE" status >/dev/null 2>&1; then
+    echo "FATAL: could not free $IFACE — a wpa_supplicant control socket still answers after stopping the system daemon. Refusing to continue (dead-man will restore/reboot within ${MINUTES}m)." >&2
+    exit 1
+  fi
+  log "  $IFACE freed; only this script's own wpa_supplicant/dnsmasq will own it from here"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Experiment 1 — AP bring-up
@@ -379,6 +502,14 @@ log "Experiment 1: $EXP1_RESULT — $EXP1_DETAIL"
 # ---------------------------------------------------------------------------
 
 log "== Experiment 2: AP<->STA toggle x10 =="
+# dnsmasq is bound (bind-interfaces) to the AP address Experiment 1 assigned;
+# the toggle loop below repeatedly flushes and reassigns that address out
+# from under it, which leaves it running against a stale/flushed bind rather
+# than cleanly stopped. Make the lifecycle explicit: stop it for the whole
+# toggle loop (this experiment doesn't assert on dnsmasq at all) and let
+# Experiment 3 start it fresh when it asserts the AP-restore invariant.
+log "  stopping dnsmasq for the toggle loop (Experiment 1 left it bound to an address we're about to flush repeatedly)"
+stop_dnsmasq
 EXP2_RESULT=PASS
 consecutive_wedges=0
 toggle_log=()
@@ -445,6 +576,9 @@ wpa_cli -i "$IFACE" select_network 1 >/dev/null
 if restore_elapsed=$(wait_state COMPLETED AP); then
   ip addr flush dev "$IFACE"
   ip addr add "$AP_ADDR" dev "$IFACE"
+  # dnsmasq has been stopped since Experiment 2's toggle loop; this is the
+  # explicit "restart it" half of that lifecycle — start it fresh against
+  # the address we just reassigned rather than reusing a stale bind.
   stop_dnsmasq
   start_dnsmasq
   sleep 1
