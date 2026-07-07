@@ -316,6 +316,84 @@ func TestManagerToSTABoundsAttemptAndClassifiesTimeoutAsOrdinaryFailure(t *testi
 	}
 }
 
+// TestManagerRunOnlineWaitBoundsCheckEvaluateAndClassifiesTimeoutAsDegradation
+// is the failing-first TDD test for "bound the online recheck": runOnlineWait
+// calls m.d.Check.Evaluate directly (not through toSTA), so a probe that only
+// returns once ITS ctx dies must not be able to hang the online-watch phase
+// forever — it must be bounded by staAttemptBound exactly as toSTA's own
+// AttemptSTA/Evaluate calls are, and the resulting timeout must be treated as
+// an ordinary degradation (proceeding to a full toSTA reattempt), never
+// mistaken for parent ctx cancellation.
+func TestManagerRunOnlineWaitBoundsCheckEvaluateAndClassifiesTimeoutAsDegradation(t *testing.T) {
+	withShrunkSTAAttemptBound(t, 10*time.Millisecond)
+
+	driver := &fakeDriver{apActiveDefault: true}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	after := &fakeAfter{}
+
+	// blockingCheck's Assoc probe hangs until ITS ctx (the bounded child
+	// runOnlineWait must construct) is done — mirroring a real probe (e.g. a
+	// hanging wpa_cli invocation) that only returns on ctx death.
+	blockingCheck := NewCheckWithProbes(Probes{
+		Assoc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		DHCP:    func(context.Context) error { return nil },
+		DNS:     func(context.Context) error { return nil },
+		Captive: func(context.Context) error { return nil },
+	})
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   blockingCheck,
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-Z", Addr: "192.168.4.1/24"},
+		After:   after.After,
+		Now:     time.Now,
+	})
+
+	type result struct {
+		next      managerPhase
+		cancelled bool
+		err       error
+	}
+	resultCh := make(chan result, 1)
+	parentCtx := context.Background()
+	go func() {
+		next, cancelled, err := m.runOnlineWait(parentCtx)
+		resultCh <- result{next, cancelled, err}
+	}()
+
+	// Let runOnlineWait past its onlineRecheckInterval wait so it reaches the
+	// Check.Evaluate call under test.
+	fire(t, after.nth(t, 1))
+
+	select {
+	case res := <-resultCh:
+		if res.cancelled {
+			t.Fatal("runOnlineWait misclassified a bounded Check.Evaluate timeout as ctx cancellation")
+		}
+		if res.err != nil {
+			t.Fatalf("runOnlineWait() err = %v, want nil (the toSTA reattempt's own AttemptSTA succeeds; only Check.Evaluate hangs)", res.err)
+		}
+		// blockingCheck also fails toSTA's own Evaluate call, so the
+		// reattempt fails too and Run falls all the way back to AP.
+		if res.next != phaseAPWait {
+			t.Fatalf("next phase = %v, want phaseAPWait (STA reattempt also failed via the same blocking probe)", res.next)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runOnlineWait did not return within 2s — Check.Evaluate was not bounded by staAttemptBound")
+	}
+	if parentCtx.Err() != nil {
+		t.Fatal("parent ctx must remain uncancelled — only the internal recheck ctx should have timed out")
+	}
+	if got := m.Status().State; got != ManagerAPFallback {
+		t.Fatalf("Status().State = %v, want ManagerAPFallback", got)
+	}
+}
+
 // TestManagerRunSTAAttemptTimeoutFallsBackToAPNotCancellation confirms Run
 // treats a bounded-attempt timeout as an ordinary STA failure (falling back
 // to AP), never confusing it with the parent-ctx-cancellation path that

@@ -281,6 +281,14 @@ func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled boo
 // runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
 // re-checks connectivity: a cheap direct Check.Evaluate first, escalating to
 // a full toSTA reattempt and finally toAP on repeated failure.
+//
+// Check.Evaluate runs under a child context bounded to staAttemptBound —
+// exactly the same parent-vs-child cancel discipline toSTA's own
+// AttemptSTA/Check.Evaluate calls use (see toSTA's doc comment): a hanging
+// probe must not be able to block the run loop indefinitely, but a plain
+// attempt-bound timeout only ever expires the CHILD, so callers must keep
+// checking the parent ctx (not any context this method constructs) to tell
+// clean shutdown apart from an ordinary recheck failure.
 func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error) {
 	select {
 	case <-ctx.Done():
@@ -288,7 +296,10 @@ func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error)
 	case <-m.d.After(onlineRecheckInterval):
 	}
 
-	if stage, _ := m.d.Check.Evaluate(ctx); stage == StageOK {
+	recheckCtx, cancel := context.WithTimeout(ctx, staAttemptBound)
+	stage, _ := m.d.Check.Evaluate(recheckCtx)
+	cancel()
+	if stage == StageOK {
 		return phaseOnlineWait, false, nil
 	}
 
