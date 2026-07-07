@@ -3,9 +3,22 @@ package net
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
+
+// realExitError runs a trivial failing command to obtain a genuine
+// *exec.ExitError, so Alive()'s error-type discrimination is tested against
+// the real thing rather than a hand-rolled string.
+func realExitError(t *testing.T) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", "exit 1").Run()
+	if _, ok := err.(*exec.ExitError); !ok {
+		t.Fatalf("expected *exec.ExitError from test harness command, got %T: %v", err, err)
+	}
+	return err
+}
 
 func TestDnsmasqStart(t *testing.T) {
 	// Start: write conf → dnsmasq --conf-file=/run/trainboard-dnsmasq.conf --pid-file=/run/trainboard-dnsmasq.pid
@@ -157,10 +170,11 @@ func TestDnsmasqAliveTrue(t *testing.T) {
 }
 
 func TestDnsmasqAliveFalse(t *testing.T) {
-	// Alive: pkill -0 -F exits non-zero → false
+	// Alive: pkill -0 -F exits non-zero (a genuine exec.ExitError, meaning
+	// "no process matched") → false, nil.
 	r := NewFakeRunner()
 	r.Script("dnsmasq --conf-file=/run/trainboard-dnsmasq.conf --pid-file=/run/trainboard-dnsmasq.pid", "", nil)
-	r.Script("pkill -0 -F /run/trainboard-dnsmasq.pid", "", fmt.Errorf("exit status 1"))
+	r.Script("pkill -0 -F /run/trainboard-dnsmasq.pid", "", realExitError(t))
 
 	writeFile := func(_ string, _ []byte) error {
 		return nil
@@ -174,6 +188,30 @@ func TestDnsmasqAliveFalse(t *testing.T) {
 		t.Fatalf("Alive() = _, %v, want _, nil", err)
 	}
 	if alive {
-		t.Fatal("Alive() = true, want false when pkill -0 fails")
+		t.Fatal("Alive() = true, want false when pkill -0 exits non-zero")
+	}
+}
+
+func TestDnsmasqAliveCheckError(t *testing.T) {
+	// Alive: pkill -0 -F fails for a reason other than "no such process"
+	// (e.g. pkill binary missing, permission denied) → the caller must be
+	// told the check itself failed, not that dnsmasq is down.
+	r := NewFakeRunner()
+	r.Script("dnsmasq --conf-file=/run/trainboard-dnsmasq.conf --pid-file=/run/trainboard-dnsmasq.pid", "", nil)
+	r.Script("pkill -0 -F /run/trainboard-dnsmasq.pid", "", fmt.Errorf("exec: \"pkill\": executable file not found in $PATH"))
+
+	writeFile := func(_ string, _ []byte) error {
+		return nil
+	}
+
+	d := NewDnsmasq(r, writeFile)
+	_ = d.Start(context.Background())
+
+	alive, err := d.Alive(context.Background())
+	if err == nil {
+		t.Fatal("Alive() = _, nil, want a non-nil error when the liveness check itself fails")
+	}
+	if alive {
+		t.Fatal("Alive() = true, want false alongside the error")
 	}
 }

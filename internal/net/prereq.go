@@ -26,19 +26,24 @@ func CheckPrereqs(ctx context.Context, r Runner, readFile func(string) ([]byte, 
 	return nil
 }
 
-// checkRfkill verifies that no wlan rfkill device is soft-blocked.
+// checkRfkill verifies that no wlan rfkill device is soft-blocked. Zero
+// matches for the glob pattern (typeFiles == nil, err == nil) means no
+// rfkill devices exist at all — nothing to block, so that's a genuine pass.
+// A glob (or read) error is a different thing entirely: it means we could
+// not determine the device list/state, so we cannot vouch for it being
+// unblocked and must fail loudly instead of assuming the best.
 func checkRfkill(_ context.Context, readFile func(string) ([]byte, error), writeFile func(string, []byte) error, glob func(string) ([]string, error)) error {
 	// Glob all rfkill type files
-	typeFiles, err := glob("/sys/class/rfkill/rfkill*/type")
+	pattern := "/sys/class/rfkill/rfkill*/type"
+	typeFiles, err := glob(pattern)
 	if err != nil {
-		// If no devices exist, that's OK
-		return nil
+		return fmt.Errorf("could not enumerate rfkill devices (glob %s failed): %w", pattern, err)
 	}
 
 	for _, typeFile := range typeFiles {
 		typeData, err := readFile(typeFile)
 		if err != nil {
-			continue
+			return fmt.Errorf("could not read rfkill type file %s: %w", typeFile, err)
 		}
 
 		// Only care about wlan devices
@@ -53,7 +58,7 @@ func checkRfkill(_ context.Context, readFile func(string) ([]byte, error), write
 		// Check if soft-blocked
 		softData, err := readFile(softFile)
 		if err != nil {
-			continue
+			return fmt.Errorf("could not read rfkill soft-block state %s: %w", softFile, err)
 		}
 
 		if strings.TrimSpace(string(softData)) == "1" {
@@ -82,8 +87,7 @@ func checkRegulatory(ctx context.Context, r Runner) error {
 	// Get current regulatory domain
 	out, err := r.Run(ctx, "iw", "reg", "get")
 	if err != nil {
-		// If iw fails, we can't check; don't fail
-		return nil
+		return fmt.Errorf("could not check regulatory domain (iw reg get failed): %w", err)
 	}
 
 	// Check if country is 00 (unset)

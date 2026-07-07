@@ -201,6 +201,136 @@ func TestCheckPrereqsCountryUnset(t *testing.T) {
 	}
 }
 
+func TestCheckPrereqsGlobError(t *testing.T) {
+	// glob failing means we can't tell whether any device is blocked at
+	// all — that must surface as an error, not a silent pass.
+	r := NewFakeRunner()
+
+	readFile := func(path string) ([]byte, error) {
+		return nil, fmt.Errorf("unexpected read: %s", path)
+	}
+
+	glob := func(_ string) ([]string, error) {
+		return nil, fmt.Errorf("lstat /sys/class/rfkill: permission denied")
+	}
+
+	writeFile := func(_ string, _ []byte) error {
+		return fmt.Errorf("unexpected write")
+	}
+
+	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	if err == nil {
+		t.Fatal("CheckPrereqs() = nil, want error when rfkill glob fails")
+	}
+	if !strings.Contains(err.Error(), "rfkill") {
+		t.Fatalf("error message missing rfkill context: %v", err)
+	}
+}
+
+func TestCheckPrereqsTypeFileReadError(t *testing.T) {
+	// An unreadable type file must surface as an error, not be skipped.
+	r := NewFakeRunner()
+
+	readFile := func(path string) ([]byte, error) {
+		return nil, fmt.Errorf("read %s: permission denied", path)
+	}
+
+	glob := func(pattern string) ([]string, error) {
+		if pattern == "/sys/class/rfkill/rfkill*/type" {
+			return []string{"/sys/class/rfkill/rfkill0/type"}, nil
+		}
+		return nil, fmt.Errorf("unexpected glob: %s", pattern)
+	}
+
+	writeFile := func(_ string, _ []byte) error {
+		return fmt.Errorf("unexpected write")
+	}
+
+	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	if err == nil {
+		t.Fatal("CheckPrereqs() = nil, want error when the rfkill type file can't be read")
+	}
+	if !strings.Contains(err.Error(), "rfkill0/type") {
+		t.Fatalf("error message missing the offending path: %v", err)
+	}
+}
+
+func TestCheckPrereqsSoftFileReadError(t *testing.T) {
+	// An unreadable soft file must surface as an error, not be skipped.
+	r := NewFakeRunner()
+
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/sys/class/rfkill/rfkill0/type":
+			return []byte("wlan"), nil
+		case "/sys/class/rfkill/rfkill0/soft":
+			return nil, fmt.Errorf("read %s: permission denied", path)
+		default:
+			return nil, fmt.Errorf("unexpected read: %s", path)
+		}
+	}
+
+	glob := func(pattern string) ([]string, error) {
+		if pattern == "/sys/class/rfkill/rfkill*/type" {
+			return []string{"/sys/class/rfkill/rfkill0/type"}, nil
+		}
+		return nil, fmt.Errorf("unexpected glob: %s", pattern)
+	}
+
+	writeFile := func(_ string, _ []byte) error {
+		return fmt.Errorf("unexpected write")
+	}
+
+	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	if err == nil {
+		t.Fatal("CheckPrereqs() = nil, want error when the rfkill soft file can't be read")
+	}
+	if !strings.Contains(err.Error(), "rfkill0/soft") {
+		t.Fatalf("error message missing the offending path: %v", err)
+	}
+}
+
+func TestCheckPrereqsIwExecError(t *testing.T) {
+	// iw failing to run (not installed, permission denied, etc.) must
+	// surface as an error rather than being treated as "country is fine".
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/sys/class/rfkill/rfkill0/type":
+			return []byte("wlan"), nil
+		case "/sys/class/rfkill/rfkill0/soft":
+			return []byte("0"), nil
+		default:
+			return nil, fmt.Errorf("unexpected read: %s", path)
+		}
+	}
+
+	glob := func(pattern string) ([]string, error) {
+		if pattern == "/sys/class/rfkill/rfkill*/type" {
+			return []string{"/sys/class/rfkill/rfkill0/type"}, nil
+		}
+		return nil, fmt.Errorf("unexpected glob: %s", pattern)
+	}
+
+	writeFile := func(_ string, _ []byte) error {
+		return fmt.Errorf("unexpected write")
+	}
+
+	r := &statefulRunner{
+		calls: make([]string, 0),
+		run: func(_ context.Context, _ ...string) (string, error) {
+			return "", fmt.Errorf("exec: \"iw\": executable file not found in $PATH")
+		},
+	}
+
+	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	if err == nil {
+		t.Fatal("CheckPrereqs() = nil, want error when iw fails to run")
+	}
+	if !strings.Contains(err.Error(), "regulatory") {
+		t.Fatalf("error message should mention regulatory; got: %v", err)
+	}
+}
+
 // statefulRunner is a test helper for tracking calls with custom behavior
 type statefulRunner struct {
 	calls []string

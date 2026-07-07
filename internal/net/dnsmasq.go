@@ -2,8 +2,9 @@ package net
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
+	"os/exec"
 )
 
 // Dnsmasq controls the AP-side DHCP + wildcard DNS (production requires the
@@ -52,19 +53,19 @@ func (d *Dnsmasq) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Alive checks if dnsmasq is currently running.
+// Alive checks if dnsmasq is currently running. pkill -0 exiting non-zero
+// because no process matched (an *exec.ExitError) is the only "not alive"
+// case; any other error (pkill missing, permission denied, ...) means the
+// check itself failed and is returned to the caller rather than being
+// silently mapped to "not running".
 func (d *Dnsmasq) Alive(ctx context.Context) (bool, error) {
 	_, err := d.r.Run(ctx, "pkill", "-0", "-F", "/run/trainboard-dnsmasq.pid")
-	if err != nil {
-		// If pkill -0 fails, the process is not running
-		// Check if it's an actual error or just a "not found" exit code
-		if strings.Contains(err.Error(), "exit status") {
-			// This is the expected case when process is not running
-			return false, nil
-		}
-		// Some other error occurred
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
 		return false, nil
 	}
-	// If pkill -0 succeeds, the process is running
-	return true, nil
+	return false, fmt.Errorf("could not check dnsmasq liveness: %w", err)
 }
