@@ -40,6 +40,17 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: powersaving.brightness %d out of range 0-255", c.Powersaving.Brightness)
 		}
 	}
+	if c.Wifi.PSK != "" {
+		if n := len(c.Wifi.PSK); n < 8 || n > 63 {
+			return fmt.Errorf("config: wifi.psk must be 8-63 characters, got %d", n)
+		}
+		if c.Wifi.SSID == "" {
+			return fmt.Errorf("config: wifi.ssid is required when wifi.psk is set")
+		}
+	}
+	if len(c.Wifi.SSID) > 32 {
+		return fmt.Errorf("config: wifi.ssid exceeds 32 bytes")
+	}
 	return nil
 }
 

@@ -1,0 +1,172 @@
+package web
+
+import (
+	"errors"
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
+)
+
+// actionsTestPassword is the admin password newActionsTestServer sets up.
+const actionsTestPassword = "longenough1"
+
+// newActionsTestServer wires a Server over a valid, saved config with
+// channels that receive a value each time the fake Actions.Apply/Reboot
+// fire, and a way to make Reboot fail on demand (rebootErr).
+func newActionsTestServer(t *testing.T) (srv *Server, applyCh, rebootCh chan struct{}, setRebootErr func(error)) {
+	t.Helper()
+	applyCh = make(chan struct{}, 1)
+	rebootCh = make(chan struct{}, 1)
+
+	var rebootErr error
+	setRebootErr = func(err error) { rebootErr = err }
+
+	svc, _ := newTestService(t, validCfg())
+	svc.act = Actions{
+		Apply: func() { applyCh <- struct{}{} },
+		Reboot: func() error {
+			rebootCh <- struct{}{}
+			return rebootErr
+		},
+	}
+	if err := svc.SetInitialPassword(actionsTestPassword, "PAD", ""); err != nil {
+		t.Fatalf("SetInitialPassword: %v", err)
+	}
+	return NewServer(svc, testLog()), applyCh, rebootCh, setRebootErr
+}
+
+// (a) unauthenticated GET /actions redirects to /login.
+func TestActionsGetUnauthenticatedRedirects(t *testing.T) {
+	srv, _, _, _ := newActionsTestServer(t)
+	rec := getPath(t, srv.Handler(), "/actions")
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// (b) authed GET /actions shows all three forms: restart, reboot (with its
+// confirm() guard), and the disabled update-firmware button.
+func TestActionsGetShowsThreeForms(t *testing.T) {
+	srv, _, _, _ := newActionsTestServer(t)
+	cookie, _ := loginAs(t, srv, actionsTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/actions", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `action="/actions/restart"`) {
+		t.Fatalf("expected restart form action in body: %s", body)
+	}
+	if !strings.Contains(body, `action="/actions/reboot"`) {
+		t.Fatalf("expected reboot form action in body: %s", body)
+	}
+	if !strings.Contains(body, `onsubmit="return confirm('Reboot the device?')"`) {
+		t.Fatalf("expected reboot confirm() guard in body: %s", body)
+	}
+	if !strings.Contains(body, "disabled") || !strings.Contains(body, "coming in a later release") {
+		t.Fatalf("expected disabled update-firmware button in body: %s", body)
+	}
+}
+
+// (c) authed POST /actions/restart with the session's CSRF token fires
+// Actions.Apply and renders the applied-style page.
+func TestActionsRestartAuthedFiresApply(t *testing.T) {
+	srv, applyCh, _, _ := newActionsTestServer(t)
+	cookie, csrf := loginAs(t, srv, actionsTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/actions/restart", url.Values{"csrf": {csrf}}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+}
+
+// (d) unauthenticated POST /actions/restart redirects to /login.
+func TestActionsRestartUnauthenticatedRedirects(t *testing.T) {
+	srv, _, _, _ := newActionsTestServer(t)
+	rec := postForm(t, srv.Handler(), "/actions/restart", url.Values{})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// (e) authed POST /actions/restart missing/wrong csrf is rejected 403, and
+// Actions.Apply is never fired.
+func TestActionsRestartMissingCSRFRejected(t *testing.T) {
+	srv, applyCh, _, _ := newActionsTestServer(t)
+	cookie, _ := loginAs(t, srv, actionsTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/actions/restart", url.Values{}, cookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// (f) authed POST /actions/reboot with the session's CSRF token fires
+// Actions.Reboot and renders the "Rebooting…" page.
+func TestActionsRebootAuthedFiresReboot(t *testing.T) {
+	srv, _, rebootCh, _ := newActionsTestServer(t)
+	cookie, csrf := loginAs(t, srv, actionsTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/actions/reboot", url.Values{"csrf": {csrf}}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Rebooting") {
+		t.Fatalf("expected 'Rebooting' in body: %s", rec.Body.String())
+	}
+	select {
+	case <-rebootCh:
+	default:
+		t.Fatal("Actions.Reboot was not called")
+	}
+}
+
+// (g) unauthenticated POST /actions/reboot redirects to /login.
+func TestActionsRebootUnauthenticatedRedirects(t *testing.T) {
+	srv, _, _, _ := newActionsTestServer(t)
+	rec := postForm(t, srv.Handler(), "/actions/reboot", url.Values{})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// (h) authed POST /actions/reboot missing/wrong csrf is rejected 403, and
+// Actions.Reboot is never fired.
+func TestActionsRebootMissingCSRFRejected(t *testing.T) {
+	srv, _, rebootCh, _ := newActionsTestServer(t)
+	cookie, _ := loginAs(t, srv, actionsTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/actions/reboot", url.Values{}, cookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-rebootCh:
+		t.Fatal("Actions.Reboot must not be called")
+	default:
+	}
+}
+
+// (i) a Reboot error is surfaced as a 500 page, not the "Rebooting…" page.
+func TestActionsRebootErrorRenders500(t *testing.T) {
+	srv, _, rebootCh, setRebootErr := newActionsTestServer(t)
+	setRebootErr(errors.New("boom: reboot command failed"))
+	cookie, csrf := loginAs(t, srv, actionsTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/actions/reboot", url.Values{"csrf": {csrf}}, cookie)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "boom: reboot command failed") {
+		t.Fatalf("expected error message in body: %s", rec.Body.String())
+	}
+	select {
+	case <-rebootCh:
+	default:
+		t.Fatal("Actions.Reboot was not called")
+	}
+}

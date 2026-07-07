@@ -1,0 +1,28 @@
+{{define "title"}}status — trainboard{{end}}
+{{define "content"}}
+<h2>Status</h2>
+<section class="panel-preview">
+  <img id="preview" src="/preview.png" alt="live panel preview" width="512" height="128">
+  <script>
+    setInterval(function () {
+      document.getElementById('preview').src = '/preview.png?' + Date.now();
+    }, 1000);
+  </script>
+</section>
+<dl class="facts">
+  <dt>State</dt><dd class="state">{{.Status.State}}{{if .Status.Fault}} ({{.Status.Fault}}){{end}}</dd>
+  <dt>Version</dt><dd>{{.Status.Version}}</dd>
+  <dt>Uptime</dt><dd>{{.UptimeText}}</dd>
+  <dt>Last fetch</dt><dd>{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</dd>
+  <dt>Addresses</dt><dd>{{range .Status.IPs}}{{.}} {{end}}</dd>
+</dl>
+<h3>Recent events</h3>
+<div id="events" hx-get="/events" hx-trigger="every 5s" hx-swap="innerHTML">
+  {{template "eventlist" .Status.Events}}
+</div>
+{{end}}
+{{define "eventlist"}}
+<table class="events"><tbody>
+{{range .}}<tr data-level="{{.Level}}"><td>{{.Time.Format "15:04:05"}}</td><td>{{.Level}}</td><td>{{.Msg}}</td></tr>{{end}}
+</tbody></table>
+{{end}}

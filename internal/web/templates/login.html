@@ -1,0 +1,9 @@
+{{define "title"}}login — trainboard{{end}}
+{{define "content"}}
+<h2>Log in</h2>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="/login">
+  <label>Admin password <input type="password" name="password" required autofocus></label>
+  <button type="submit" class="primary">Log in</button>
+</form>
+{{end}}
