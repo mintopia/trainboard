@@ -36,16 +36,20 @@ func newConfigTestServer(t *testing.T) (srv *Server, svc *Service, path string, 
 		t.Fatal(err)
 	}
 	applyCh = make(chan struct{}, 1)
+	var soakRem time.Duration // harness soak fake: StartSoak stores, Cancel zeroes
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
+		Snapshot:      func() *board.Snapshot { return nil },
+		Ring:          obs.NewRing(8),
+		PreviewPNG:    func() []byte { return nil },
+		Version:       "vtest",
+		StartedAt:     time.Now(),
+		SoakRemaining: func() time.Duration { return soakRem },
 	}
 	act := Actions{
-		Apply:  func() { applyCh <- struct{}{} },
-		Reboot: func() error { return nil },
+		Apply:      func() { applyCh <- struct{}{} },
+		Reboot:     func() error { return nil },
+		SoakStart:  func(d time.Duration) { soakRem = d },
+		SoakCancel: func() { soakRem = 0 },
 	}
 	svc = NewService(path, src, act, testLog())
 	if err := svc.SetInitialPassword(configTestPassword, "PAD", ""); err != nil {

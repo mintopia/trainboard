@@ -3,9 +3,11 @@ package web
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // actionsTestPassword is the admin password newActionsTestServer sets up.
@@ -168,5 +170,90 @@ func TestActionsRebootErrorRenders500(t *testing.T) {
 	case <-rebootCh:
 	default:
 		t.Fatal("Actions.Reboot was not called")
+	}
+}
+
+func TestActionsSoakStartCancelFlow(t *testing.T) {
+	srv, svc, _, _ := newConfigTestServer(t)
+	h := srv.Handler()
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	// Start with a valid duration: 302 back to /actions.
+	form := url.Values{"duration": {"4h"}, "csrf": {csrf}}
+	req := httptest.NewRequest(http.MethodPost, "/actions/soak", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/actions" {
+		t.Fatalf("start soak: got %d -> %q, want 302 -> /actions", rec.Code, rec.Header().Get("Location"))
+	}
+	if got := svc.SoakRemaining(); got != 4*time.Hour {
+		t.Fatalf("SoakRemaining = %v, want 4h", got)
+	}
+
+	// Actions page now shows the running soak + cancel form.
+	req = httptest.NewRequest(http.MethodGet, "/actions", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "/actions/soak/cancel") {
+		t.Fatal("actions page while soaking: no cancel form rendered")
+	}
+
+	// Cancel: 302 back, soak gone.
+	form = url.Values{"csrf": {csrf}}
+	req = httptest.NewRequest(http.MethodPost, "/actions/soak/cancel", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/actions" {
+		t.Fatalf("cancel soak: got %d -> %q, want 302 -> /actions", rec.Code, rec.Header().Get("Location"))
+	}
+	if got := svc.SoakRemaining(); got != 0 {
+		t.Fatalf("after cancel: SoakRemaining = %v, want 0", got)
+	}
+}
+
+func TestActionsSoakInvalidDurationRerendersWithError(t *testing.T) {
+	srv, svc, _, _ := newConfigTestServer(t)
+	h := srv.Handler()
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := url.Values{"duration": {"12h"}, "csrf": {csrf}}
+	req := httptest.NewRequest(http.MethodPost, "/actions/soak", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invalid duration: got %d, want 200 re-rendered form", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid soak duration") {
+		t.Fatal("invalid duration: error message not rendered")
+	}
+	if got := svc.SoakRemaining(); got != 0 {
+		t.Fatalf("invalid duration must not start a soak; SoakRemaining = %v", got)
+	}
+}
+
+func TestStatusPageShowsSoakCountdown(t *testing.T) {
+	srv, svc, _, _ := newConfigTestServer(t)
+	h := srv.Handler()
+	cookie, _ := loginAs(t, srv, configTestPassword)
+	if err := svc.StartSoak("1h"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "Soak") {
+		t.Fatal("status page: no soak row while soaking")
+	}
+	if !strings.Contains(rec.Body.String(), "1h0m") {
+		t.Fatalf("status page: remaining time not rendered; body: %.400s", rec.Body.String())
 	}
 }

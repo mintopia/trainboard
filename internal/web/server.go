@@ -78,6 +78,10 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("POST /actions/reboot", chain(http.HandlerFunc(s.handleActionsReboot),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/soak", chain(http.HandlerFunc(s.handleActionsSoak),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/soak/cancel", chain(http.HandlerFunc(s.handleActionsSoakCancel),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 
 	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
 	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
@@ -94,6 +98,10 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /api/actions/restart", chain(http.HandlerFunc(s.handleAPIActionsRestart),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 	s.mux.Handle("POST /api/actions/reboot", chain(http.HandlerFunc(s.handleAPIActionsReboot),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/soak", chain(http.HandlerFunc(s.handleAPIActionsSoak),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/soak/cancel", chain(http.HandlerFunc(s.handleAPIActionsSoakCancel),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 
 	return s

@@ -46,14 +46,16 @@ const rfc3339 = "2006-01-02T15:04:05Z07:00"
 // carries no json tags (it is the HTML template's data type, not an API
 // type), so the mapping happens here.
 type statusJSON struct {
-	Version     string      `json:"version"`
-	Uptime      string      `json:"uptime"`
-	State       string      `json:"state"`
-	Fault       string      `json:"fault"`
-	LastFetch   string      `json:"lastFetch"`
-	HasSnapshot bool        `json:"hasSnapshot"`
-	IPs         []string    `json:"ips"`
-	Events      []eventJSON `json:"events"`
+	Version       string      `json:"version"`
+	Uptime        string      `json:"uptime"`
+	State         string      `json:"state"`
+	Fault         string      `json:"fault"`
+	LastFetch     string      `json:"lastFetch"`
+	HasSnapshot   bool        `json:"hasSnapshot"`
+	IPs           []string    `json:"ips"`
+	Events        []eventJSON `json:"events"`
+	SoakActive    bool        `json:"soakActive"`
+	SoakRemaining string      `json:"soakRemaining"`
 }
 
 func toStatusJSON(st StatusData) statusJSON {
@@ -62,14 +64,16 @@ func toStatusJSON(st StatusData) statusJSON {
 		events[i] = toEventJSON(e)
 	}
 	return statusJSON{
-		Version:     st.Version,
-		Uptime:      st.Uptime.String(),
-		State:       st.State,
-		Fault:       st.Fault,
-		LastFetch:   st.LastFetch.Format(rfc3339),
-		HasSnapshot: st.HasSnapshot,
-		IPs:         st.IPs,
-		Events:      events,
+		Version:       st.Version,
+		Uptime:        st.Uptime.String(),
+		State:         st.State,
+		Fault:         st.Fault,
+		LastFetch:     st.LastFetch.Format(rfc3339),
+		HasSnapshot:   st.HasSnapshot,
+		IPs:           st.IPs,
+		Events:        events,
+		SoakActive:    st.SoakRemaining > 0,
+		SoakRemaining: st.SoakRemaining.String(),
 	}
 }
 
@@ -170,6 +174,34 @@ func (s *Server) handleAPIActionsReboot(w http.ResponseWriter, _ *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "rebooting"})
+}
+
+// soakStartJSON is POST /api/actions/soak's request body.
+type soakStartJSON struct {
+	Duration string `json:"duration"`
+}
+
+// handleAPIActionsSoak is POST /api/actions/soak: mirrors the HTML actions
+// page's start-soak form. Duration validation lives in Service.StartSoak so
+// both surfaces reject the same inputs.
+func (s *Server) handleAPIActionsSoak(w http.ResponseWriter, r *http.Request) {
+	var body soakStartJSON
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if err := s.svc.StartSoak(body.Duration); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "soaking"})
+}
+
+// handleAPIActionsSoakCancel is POST /api/actions/soak/cancel: mirrors the
+// HTML cancel form. Idle cancel is a no-op 200, matching the HTML surface.
+func (s *Server) handleAPIActionsSoakCancel(w http.ResponseWriter, _ *http.Request) {
+	s.svc.CancelSoak()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 // responseBuffer is an in-memory http.ResponseWriter used by apiJSONErrors

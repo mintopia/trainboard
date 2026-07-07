@@ -51,6 +51,8 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	soak := &runtime.Soak{} // shared burn-in soak state: web starts/cancels, loop renders
+
 	fonts, err := board.LoadFonts()
 	if err != nil {
 		return err
@@ -98,7 +100,7 @@ func run() error {
 		// on-screen and idle; the operator fixes the file via the embedded
 		// web UI's /setup and /config, which stay reachable in this path
 		// too. systemd keeps us alive.
-		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, err)
+		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, err)
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
 
@@ -116,9 +118,10 @@ func run() error {
 	poller := runtime.NewPoller(fetcher, cfg, log)
 	go poller.Run(ctx)
 
-	startWebServer(ctx, *cfgPath, *httpAddr, poller.Snapshot, ring, previewLatest, startedAt, log)
+	startWebServer(ctx, *cfgPath, *httpAddr, poller.Snapshot, ring, previewLatest, startedAt, soak, log)
 
 	loop := runtime.NewLoop(poller.Snapshot, fl, cfg, fonts, buildinfo.Version(), log)
+	loop.UseSoak(soak)
 	log.Info("starting render loop", "version", buildinfo.Version())
 	return loop.Run(ctx)
 }
@@ -133,7 +136,7 @@ func run() error {
 // side of Apply must not add a second delay of its own. systemd is expected
 // to restart the process. Reboot shells out to systemctl and reports the
 // error rather than the web handler having to guess.
-func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, log *slog.Logger) {
+func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, log *slog.Logger) {
 	actions := web.Actions{
 		Apply: func() {
 			log.Info("applying config: exiting for restart")
@@ -142,13 +145,16 @@ func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func
 		Reboot: func() error {
 			return exec.Command("systemctl", "reboot").Run()
 		},
+		SoakStart:  func(d time.Duration) { soak.Start(d, time.Now()) },
+		SoakCancel: soak.Cancel,
 	}
 	sources := web.Sources{
-		Snapshot:   snapshot,
-		Ring:       ring,
-		PreviewPNG: previewLatest,
-		Version:    buildinfo.Version(),
-		StartedAt:  startedAt,
+		Snapshot:      snapshot,
+		Ring:          ring,
+		PreviewPNG:    previewLatest,
+		Version:       buildinfo.Version(),
+		StartedAt:     startedAt,
+		SoakRemaining: func() time.Duration { return soak.Remaining(time.Now()) },
 	}
 	svc := web.NewService(cfgPath, sources, actions, log)
 	srv := web.NewServer(svc, log)
@@ -184,13 +190,14 @@ func loadConfig(path string) (config.Config, error) {
 // fresh-install case where Default() doesn't pass Validate). The web server
 // still runs here, over the SAME config path, so a virgin or broken device
 // can be fixed from /setup or /config without needing physical access.
-func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, err error) error {
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, err error) error {
 	log.Error("config error", "err", err.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
 	staticSnapshot := func() *board.Snapshot { return snap }
 
-	startWebServer(ctx, path, httpAddr, staticSnapshot, ring, previewLatest, startedAt, log)
+	startWebServer(ctx, path, httpAddr, staticSnapshot, ring, previewLatest, startedAt, soak, log)
 
 	loop := runtime.NewLoop(staticSnapshot, fl, config.Default(), fonts, buildinfo.Version(), log)
+	loop.UseSoak(soak)
 	return loop.Run(ctx)
 }

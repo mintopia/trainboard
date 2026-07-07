@@ -299,12 +299,16 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/actions                       | GET    | 302 /login   | 200
 //	/actions/restart               | POST   | 302 /login   | 200
 //	/actions/reboot                | POST   | 302 /login   | 200
+//	/actions/soak                  | POST   | 302 /login   | 302 /actions
+//	/actions/soak/cancel           | POST   | 302 /login   | 302 /actions
 //	/api/status                    | GET    | 401 JSON     | 200
 //	/api/config                    | GET    | 401 JSON     | 200
 //	/api/config                    | PUT    | 401 JSON     | 200
 //	/api/events                    | GET    | 401 JSON     | 200
 //	/api/actions/restart           | POST   | 401 JSON     | 200
 //	/api/actions/reboot            | POST   | 401 JSON     | 200
+//	/api/actions/soak              | POST   | 401 JSON     | 200
+//	/api/actions/soak/cancel       | POST   | 401 JSON     | 200
 //	/logout                        | POST   | 302 /login   | 302 /login (destroys session; kept LAST)
 func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	srv, _, _, applyCh := newConfigTestServer(t)
@@ -332,12 +336,16 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "GET /actions", method: http.MethodGet, path: "/actions", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /actions/restart", method: http.MethodPost, path: "/actions/restart", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK, appliesAsync: true},
 		{name: "POST /actions/reboot", method: http.MethodPost, path: "/actions/reboot", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},
+		{name: "POST /actions/soak", method: http.MethodPost, path: "/actions/soak", body: htmlForm(url.Values{"duration": {"1h"}}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
+		{name: "POST /actions/soak/cancel", method: http.MethodPost, path: "/actions/soak/cancel", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
 		{name: "GET /api/status", method: http.MethodGet, path: "/api/status", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /api/config", method: http.MethodGet, path: "/api/config", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "PUT /api/config", method: http.MethodPut, path: "/api/config", isAPI: true, body: apiBody(apiCfgPayload), wantAuthedStatus: http.StatusOK, appliesAsync: true},
 		{name: "GET /api/events", method: http.MethodGet, path: "/api/events", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /api/actions/restart", method: http.MethodPost, path: "/api/actions/restart", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK, appliesAsync: true},
 		{name: "POST /api/actions/reboot", method: http.MethodPost, path: "/api/actions/reboot", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
+		{name: "POST /api/actions/soak", method: http.MethodPost, path: "/api/actions/soak", isAPI: true, body: apiBody([]byte(`{"duration":"1h"}`)), wantAuthedStatus: http.StatusOK},
+		{name: "POST /api/actions/soak/cancel", method: http.MethodPost, path: "/api/actions/soak/cancel", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
 		{name: "POST /logout", method: http.MethodPost, path: "/logout", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/login"},
 	}
 

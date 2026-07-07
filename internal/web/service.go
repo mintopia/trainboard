@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -20,6 +21,9 @@ type Sources struct {
 	PreviewPNG func() []byte
 	Version    string
 	StartedAt  time.Time
+	// SoakRemaining reports the burn-in soak's remaining time (0 =
+	// inactive). Optional: nil reads as never-soaking.
+	SoakRemaining func() time.Duration
 }
 
 // Actions are the write-side callbacks main wires up. Apply is invoked after
@@ -27,6 +31,10 @@ type Sources struct {
 type Actions struct {
 	Apply  func()
 	Reboot func() error
+	// SoakStart / SoakCancel drive the burn-in soak (runtime.Soak in
+	// production). Optional: a nil SoakStart makes StartSoak error.
+	SoakStart  func(d time.Duration)
+	SoakCancel func()
 }
 
 // Service is the logic behind both the HTML pages and the JSON API.
@@ -44,14 +52,15 @@ func NewService(cfgPath string, src Sources, act Actions, log *slog.Logger) *Ser
 
 // StatusData is everything the status page/endpoint shows.
 type StatusData struct {
-	Version     string
-	Uptime      time.Duration
-	State       string
-	Fault       string
-	LastFetch   time.Time
-	HasSnapshot bool
-	IPs         []string
-	Events      []obs.Event
+	Version       string
+	Uptime        time.Duration
+	State         string
+	Fault         string
+	LastFetch     time.Time
+	HasSnapshot   bool
+	IPs           []string
+	Events        []obs.Event
+	SoakRemaining time.Duration
 }
 
 const maxStatusEvents = 50
@@ -69,6 +78,7 @@ func (s *Service) Status() StatusData {
 	for i := len(events) - 1; i >= 0 && len(st.Events) < maxStatusEvents; i-- {
 		st.Events = append(st.Events, events[i])
 	}
+	st.SoakRemaining = s.SoakRemaining()
 	st.IPs = localIPs()
 	return st
 }
@@ -239,4 +249,41 @@ func (s *Service) RegenerateAPPassword() (string, error) {
 		return "", err
 	}
 	return pw, nil
+}
+
+// soakDurations are the only soak lengths the UI offers; both the HTML form
+// and the JSON API validate against this set (spec: 1h/4h/8h, picked at
+// start).
+var soakDurations = map[string]time.Duration{
+	"1h": time.Hour,
+	"4h": 4 * time.Hour,
+	"8h": 8 * time.Hour,
+}
+
+// StartSoak validates the requested duration key and starts the soak.
+func (s *Service) StartSoak(key string) error {
+	d, ok := soakDurations[key]
+	if !ok {
+		return fmt.Errorf("invalid soak duration %q (want 1h, 4h or 8h)", key)
+	}
+	if s.act.SoakStart == nil {
+		return errors.New("soak is not available")
+	}
+	s.act.SoakStart(d)
+	return nil
+}
+
+// CancelSoak ends any running soak; idle cancel is a no-op.
+func (s *Service) CancelSoak() {
+	if s.act.SoakCancel != nil {
+		s.act.SoakCancel()
+	}
+}
+
+// SoakRemaining reports the running soak's remaining time (0 = inactive).
+func (s *Service) SoakRemaining() time.Duration {
+	if s.src.SoakRemaining == nil {
+		return 0
+	}
+	return s.src.SoakRemaining()
 }

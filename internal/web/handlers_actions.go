@@ -5,10 +5,30 @@ import (
 	"time"
 )
 
-// handleActionsGet renders the actions page: restart, reboot, and the
-// (currently disabled) firmware-update button.
+// actionsPageData renders the actions page: base nav/CSRF plus the burn-in
+// soak block's state.
+type actionsPageData struct {
+	basePage
+	// SoakRemaining is the humanised remaining time ("3h12m"); "" = no soak
+	// running (renders the start form instead of the cancel form).
+	SoakRemaining string
+	// SoakError re-renders the start form with a validation message.
+	SoakError string
+}
+
+// handleActionsGet renders the actions page: restart, reboot, the burn-in
+// soak block, and the (currently disabled) firmware-update button.
 func (s *Server) handleActionsGet(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "actions", basePage{LoggedIn: true, CSRF: csrfFrom(r)})
+	s.render(w, "actions", s.actionsData(r, ""))
+}
+
+// actionsData assembles actionsPageData with the live soak state.
+func (s *Server) actionsData(r *http.Request, soakError string) actionsPageData {
+	d := actionsPageData{basePage: basePage{LoggedIn: true, CSRF: csrfFrom(r)}, SoakError: soakError}
+	if rem := s.svc.SoakRemaining(); rem > 0 {
+		d.SoakRemaining = humanUptime(rem)
+	}
+	return d
 }
 
 // scheduleApply fires Actions.Apply after applyDelay, once the caller's
@@ -40,4 +60,28 @@ func (s *Server) handleActionsReboot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "rebooting", basePage{LoggedIn: true, CSRF: csrfFrom(r)})
+}
+
+// handleActionsSoak starts a burn-in soak with the form's duration
+// (1h/4h/8h, validated by Service.StartSoak) and redirects back to the
+// actions page, which now shows the countdown + cancel form (PRG — unlike
+// restart/reboot there is no terminal "applied" page here; the natural next
+// view is the actions page's running-soak state).
+func (s *Server) handleActionsSoak(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	if err := s.svc.StartSoak(r.PostFormValue("duration")); err != nil {
+		s.render(w, "actions", s.actionsData(r, err.Error()))
+		return
+	}
+	http.Redirect(w, r, "/actions", http.StatusFound)
+}
+
+// handleActionsSoakCancel ends any running soak (idle cancel is a no-op)
+// and redirects back to the actions page.
+func (s *Server) handleActionsSoakCancel(w http.ResponseWriter, r *http.Request) {
+	s.svc.CancelSoak()
+	http.Redirect(w, r, "/actions", http.StatusFound)
 }

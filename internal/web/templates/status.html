@@ -15,6 +15,7 @@
   <dt>Uptime</dt><dd>{{.UptimeText}}</dd>
   <dt>Last fetch</dt><dd>{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</dd>
   <dt>Addresses</dt><dd>{{range .Status.IPs}}{{.}} {{end}}</dd>
+  {{if .SoakRemainingText}}<dt>Soak</dt><dd>{{.SoakRemainingText}} remaining</dd>{{end}}
 </dl>
 <h3>Recent events</h3>
 <div id="events" hx-get="/events" hx-trigger="every 5s" hx-swap="innerHTML">
