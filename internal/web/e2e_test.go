@@ -277,10 +277,17 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 }
 
 // TestRouteSecurityInvariantMatrix is the tripwire test: it enumerates EVERY
-// route NewServer registers except /setup, /login, and /static/* (those
-// three are governed by the setup-gate/no-auth exception in spec invariant
-// 1, not by session auth — see TestServerSetupGateRedirectsWhenNoPassword and
-// TestServerStaticServesWithoutAuth for their own coverage). Each route is
+// route NewServer registers except /setup, /login, /static/*, and the three
+// captive-portal probe endpoints (/generate_204, /hotspot-detect.html,
+// /ncsi.txt) — all six are governed by the setup-gate/no-auth exception in
+// spec invariant 1, not by session auth. /setup, /login, /static/* have
+// their own coverage in TestServerSetupGateRedirectsWhenNoPassword and
+// TestServerStaticServesWithoutAuth; the three probes are deliberately
+// pre-auth AND pre-CSRF by design — a just-associated phone has no session
+// and never will until a human deliberately visits /setup — and are pinned
+// instead by TestPortalProbeMatrix (handlers_portal_test.go), whose two arms
+// (AP mode / not AP mode) play the role this table's (no session / valid
+// session) arms play here. Each route is
 // checked twice: with no session (must be blocked — 302 for HTML, 401 JSON
 // for /api/*) and with a valid session (must succeed with its normal,
 // documented response).

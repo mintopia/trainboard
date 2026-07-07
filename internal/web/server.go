@@ -73,6 +73,12 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
+	// Captive-portal probe endpoints (handlers_portal.go): NO auth, NO CSRF
+	// by design — see isPortalProbePath's doc comment and setupGate below.
+	s.mux.HandleFunc("GET /generate_204", s.handleGenerate204)
+	s.mux.HandleFunc("GET /hotspot-detect.html", s.handleHotspotDetect)
+	s.mux.HandleFunc("GET /ncsi.txt", s.handleNCSI)
+
 	s.mux.Handle("GET /actions", chain(http.HandlerFunc(s.handleActionsGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /actions/restart", chain(http.HandlerFunc(s.handleActionsRestart),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
@@ -111,17 +117,33 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	return s
 }
 
-// setupGate redirects every request but /setup and /static/ to /setup while
-// no admin password is stored; once one exists, /setup itself 404s.
+// setupGate redirects every request but /setup, /static/, and the
+// captive-portal probe endpoints to /setup while no admin password is
+// stored; once one exists, /setup itself 404s. The probe endpoints are
+// exempted like /static/ so they always reach their own AP-mode-aware
+// handlers instead of setupGate's generic redirect, which cannot answer the
+// OS-specific bodies those probes expect (see handlers_portal.go).
+//
+// While a password is still needed, the redirect target is normally the
+// relative "/setup" — but in AP mode (svc.Hotspot() != nil) a
+// probe-following phone arrives with an unrelated Host header (e.g.
+// connectivitycheck.gstatic.com), against which a relative Location would
+// resolve to the wrong origin entirely. In that case the target is instead
+// the absolute apSetupURL, matching the address the CNA/browser actually
+// displays.
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") {
+		if strings.HasPrefix(r.URL.Path, "/static/") || isPortalProbePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if s.needsSetup() {
 			if r.URL.Path != "/setup" {
-				http.Redirect(w, r, "/setup", http.StatusFound)
+				loc := "/setup"
+				if s.svc.Hotspot() != nil {
+					loc = apSetupURL
+				}
+				http.Redirect(w, r, loc, http.StatusFound)
 				return
 			}
 			next.ServeHTTP(w, r)
