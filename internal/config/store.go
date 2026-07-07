@@ -41,11 +41,12 @@ func Load(path string) (Config, error) {
 // Board.Origin has since gone stale). A missing file returns Default() with
 // a nil error, same as Load.
 //
-// This exists ONLY to let the E04 (config error) boot path recover a
-// previously-configured device's persisted Provisioning.APPassword and
-// Web.PasswordHash even though the document fails full Validate — see
-// resolveE04Config in cmd/trainboard/connectivity.go, its only caller. It
-// MUST NOT be used to feed normal operation: the poller/render loop/web
+// This exists ONLY to support connectivity wiring: the E04 (config error)
+// boot path uses it via resolveE04Config to recover a previously-configured
+// device's persisted Provisioning.APPassword and Web.PasswordHash, and
+// staFromDisk uses it to read fresh STA credentials on every connection
+// attempt (enabling credential handoff from the portal without restart).
+// It MUST NOT be used to feed normal operation: the poller/render loop/web
 // service all require a config that has passed Validate (see loadConfig in
 // cmd/trainboard/main.go), and LoadRaw's whole point is to skip that check.
 func LoadRaw(path string) (Config, error) {

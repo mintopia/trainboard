@@ -18,7 +18,6 @@ import (
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/data"
 	"github.com/mintopia/trainboard/internal/display"
-	netconn "github.com/mintopia/trainboard/internal/net"
 	"github.com/mintopia/trainboard/internal/obs"
 	"github.com/mintopia/trainboard/internal/runtime"
 	"github.com/mintopia/trainboard/internal/web"
@@ -148,7 +147,7 @@ func run() error {
 
 	snapshotSrc := poller.Snapshot
 	if *manageNetwork {
-		sta := func() netconn.STAConfig { return netconn.STAConfig{SSID: cfg.Wifi.SSID, PSK: cfg.Wifi.PSK} }
+		sta := staFromDisk(*cfgPath)
 		mgr := startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot })
 	}
@@ -249,7 +248,7 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 	snapshotSrc := func() *board.Snapshot { return snap }
 
 	if manageNetwork {
-		sta := func() netconn.STAConfig { return netconn.STAConfig{} } // no wifi configured here: straight to AP
+		sta := staFromDisk(path)
 		raw, rawErr := config.LoadRaw(path)
 		if rawErr != nil {
 			log.Warn("connectivity: raw config read failed; AP password won't carry over this boot", "err", rawErr.Error())

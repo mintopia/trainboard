@@ -127,6 +127,21 @@ func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) stri
 	return pw
 }
 
+// staFromDisk returns a closure that reads config.LoadRaw(cfgPath) on EVERY
+// call, extracting and returning its STA credentials (SSID and PSK). This
+// enables the credential-handoff flow: portal saves new WiFi creds, then
+// Manager calls STA() → fresh creds without a process restart. A read error
+// returns a zero STAConfig (graceful fallback to AP mode).
+func staFromDisk(cfgPath string) func() netconn.STAConfig {
+	return func() netconn.STAConfig {
+		raw, err := config.LoadRaw(cfgPath)
+		if err != nil {
+			return netconn.STAConfig{} // zero on read error; graceful fallback
+		}
+		return netconn.STAConfig{SSID: raw.Wifi.SSID, PSK: raw.Wifi.PSK}
+	}
+}
+
 // resolveE04Config picks the config to feed startConnectivityManager from
 // the E04 (config error) boot path, given the result of a tolerant
 // config.LoadRaw(path) read. When the raw read succeeded (rawErr == nil) it

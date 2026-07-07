@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/mintopia/trainboard/internal/config"
+	netconn "github.com/mintopia/trainboard/internal/net"
 )
 
 func TestMacTailNormalMAC(t *testing.T) {
@@ -86,5 +88,52 @@ func TestResolveE04ConfigFallsBackOnRawError(t *testing.T) {
 	want := config.Default()
 	if got.Provisioning.APPassword != want.Provisioning.APPassword || got.Board.Services != want.Board.Services {
 		t.Fatalf("resolveE04Config on rawErr != nil = %+v, want config.Default() %+v", got, want)
+	}
+}
+
+// TestSTAFromDiskReadsOnEveryCall proves that staFromDisk returns a closure
+// that re-reads the config from disk on every call — the core of the
+// credential-handoff flow: portal saves new WiFi creds, staFromDisk closure
+// returns them on the next call without a process restart.
+func TestSTAFromDiskReadsOnEveryCall(t *testing.T) {
+	tmpdir := t.TempDir()
+	cfgPath := tmpdir + "/config.json"
+
+	// Helper: write a config with given SSID/PSK, with Web.PasswordHash set
+	// so config.SaveConnectivity can validate it (connectivity tier).
+	writeTestConfig := func(ssid, psk string) {
+		cfg := config.Default()
+		cfg.Web.PasswordHash = "$argon2id$v=19$m=19456,t=2,p=1$testhashabcdefgh$testhashabcdefghij"
+		cfg.Wifi.SSID = ssid
+		cfg.Wifi.PSK = psk
+		if err := config.SaveConnectivity(cfgPath, cfg); err != nil {
+			t.Fatalf("SaveConnectivity failed: %v", err)
+		}
+	}
+
+	sta := staFromDisk(cfgPath)
+
+	// First write: initial creds
+	writeTestConfig("InitialSSID", "initialPSK")
+	first := sta()
+	if first.SSID != "InitialSSID" || first.PSK != "initialPSK" {
+		t.Fatalf("First call: got %+v, want SSID=InitialSSID PSK=initialPSK", first)
+	}
+
+	// Overwrite file: new creds
+	writeTestConfig("UpdatedSSID", "updatedPSK")
+	second := sta()
+	if second.SSID != "UpdatedSSID" || second.PSK != "updatedPSK" {
+		t.Fatalf("Second call after file update: got %+v, want SSID=UpdatedSSID PSK=updatedPSK", second)
+	}
+
+	// Missing file: zero STAConfig
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+	third := sta()
+	zero := netconn.STAConfig{}
+	if third != zero {
+		t.Fatalf("Missing file call: got %+v, want zero STAConfig %+v", third, zero)
 	}
 }
