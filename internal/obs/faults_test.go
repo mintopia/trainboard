@@ -16,3 +16,12 @@ func TestFaultMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestM3FaultCodes(t *testing.T) {
+	if FaultRadioBlocked != "E05" || FaultRadioBlocked.Message() != "WiFi radio blocked" {
+		t.Fatalf("E05 wrong: %q %q", FaultRadioBlocked, FaultRadioBlocked.Message())
+	}
+	if FaultConnectivity != "E06" || FaultConnectivity.Message() != "Network connectivity" {
+		t.Fatalf("E06 wrong: %q %q", FaultConnectivity, FaultConnectivity.Message())
+	}
+}
