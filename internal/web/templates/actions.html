@@ -5,5 +5,24 @@
   <button type="submit">Restart board software</button></form>
 <form method="post" action="/actions/reboot" onsubmit="return confirm('Reboot the device?')"><input type="hidden" name="csrf" value="{{.CSRF}}">
   <button type="submit">Reboot device</button></form>
+<h3>Burn-in soak</h3>
+{{if .SoakError}}<p class="error">{{.SoakError}}</p>{{end}}
+{{if .SoakRemaining}}
+<p>Soak running — {{.SoakRemaining}} remaining. The panel is cycling white/black; departures resume when it ends.</p>
+<form method="post" action="/actions/soak/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Cancel soak</button></form>
+{{else}}
+<form method="post" action="/actions/soak" onsubmit="return confirm('Start a burn-in soak? The board will cycle white/black instead of departures until it finishes or is cancelled.')">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Duration
+    <select name="duration">
+      <option value="1h">1 hour</option>
+      <option value="4h">4 hours</option>
+      <option value="8h" selected>8 hours</option>
+    </select>
+  </label>
+  <button type="submit">Start soak</button>
+</form>
+{{end}}
 <form><button type="button" disabled title="coming in a later release">Update firmware</button></form>
 {{end}}

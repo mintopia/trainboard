@@ -14,6 +14,9 @@ type statusPageData struct {
 	basePage
 	Status     StatusData
 	UptimeText string
+	// SoakRemainingText is the humanised running-soak countdown; "" hides
+	// the row.
+	SoakRemainingText string
 }
 
 // handleIndex renders the authed status page: board state/fault, version,
@@ -29,11 +32,15 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.svc.Status()
-	s.render(w, "index", statusPageData{
+	data := statusPageData{
 		basePage:   basePage{LoggedIn: true, CSRF: csrfFrom(r)},
 		Status:     st,
 		UptimeText: humanUptime(st.Uptime),
-	})
+	}
+	if st.SoakRemaining > 0 {
+		data.SoakRemainingText = humanUptime(st.SoakRemaining)
+	}
+	s.render(w, "index", data)
 }
 
 // humanUptime renders a duration the way an operator wants to read it on the
