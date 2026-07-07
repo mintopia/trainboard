@@ -1,39 +1,59 @@
 package render
 
-import "time"
+import (
+	"image"
+	"time"
+)
 
 const defaultPauseTicks = 60 // reference paused 60 frames before scrolling
 
 var _ Element = (*ScrollingText)(nil)
 
 // ScrollingText renders one line inside a box. If the text is wider than the
-// box it scrolls right-to-left at one pixel per tick after an initial pause;
-// otherwise it is left-aligned and static.
+// box it is shown left-aligned during an initial pause, then scrolls left at
+// one pixel per tick until it has fully exited the box, then wraps back to
+// the left-aligned pause. Otherwise it is left-aligned and static.
 type ScrollingText struct {
 	Font       *Font
 	Text       string
 	X, Y, W, H int
 	Level      byte
 	PauseTicks int // 0 ⇒ defaultPauseTicks
+
+	// img/tw cache the rasterization: elements are rebuilt on scene change,
+	// so rasterize-once-per-element satisfies ADR 0002's "cached per text
+	// change, not per frame".
+	img *image.Alpha
+	tw  int
 }
 
-// scrollOffset is the pure integer-pixel scroll offset for a given tick.
-// Returns 0 while the text fits the box. During [0,pause) the offset is 0;
-// after that it advances one pixel per tick, wrapping so the scroll loops.
-func scrollOffset(f *Font, text string, boxW, pause, tick int) int {
-	tw, _ := f.Measure(text)
+// ensure lazily rasterizes s.Text into s.img/s.tw, once per element lifetime.
+func (s *ScrollingText) ensure() {
+	if s.img != nil {
+		return
+	}
+	s.img = s.Font.RenderText(s.Text)
+	s.tw = s.img.Bounds().Dx()
+}
+
+// scrollOffset is the pure integer-pixel viewport offset for a tick. Returns
+// 0 while the text fits the box. Cycle: hold at 0 for pause ticks (text
+// visible, left-aligned), then advance 1px/tick until the text has fully
+// scrolled out of the box (offset tw), then wrap and pause again — matching
+// the reference's crop-window scroller.
+func scrollOffset(tw, boxW, pause, tick int) int {
 	if tw <= boxW {
 		return 0
 	}
 	if pause <= 0 {
 		pause = defaultPauseTicks
 	}
-	if tick < pause {
+	cycle := pause + tw + 1 // +1: one fully-blank tick before the reset pause
+	t := tick % cycle
+	if t < pause {
 		return 0
 	}
-	// Total travel: text scrolls until it has fully passed, then repeats.
-	travel := tw + boxW
-	return (tick - pause) % travel
+	return t - pause
 }
 
 // Render composites the (possibly scrolled) text into fb.
@@ -41,14 +61,22 @@ func (s *ScrollingText) Render(fb *Framebuffer, tick int, _ time.Time) {
 	if s.Text == "" {
 		return
 	}
-	img := s.Font.RenderText(s.Text)
-	tw := img.Bounds().Dx()
-	if tw <= s.W {
-		fb.BlitAlpha(img, s.X, s.Y, s.Level) // left-aligned, static
+	s.ensure()
+	if s.tw <= s.W {
+		fb.BlitAlpha(s.img, s.X, s.Y, s.Level) // fits: static, left-aligned
 		return
 	}
-	off := scrollOffset(s.Font, s.Text, s.W, s.PauseTicks, tick)
-	// Draw so the text enters from the right and exits left: start at box
-	// right edge, move left by off.
-	fb.BlitAlpha(img, s.X+s.W-off, s.Y, s.Level)
+	off := scrollOffset(s.tw, s.W, s.PauseTicks, tick)
+	// Viewport crop [off, off+W) of the text, drawn at the box origin —
+	// the text starts beside the label and exits left; nothing ever
+	// draws outside the box (the crop IS the clip).
+	srcX1 := off + s.W
+	if srcX1 > s.tw {
+		srcX1 = s.tw
+	}
+	if srcX1 <= off {
+		return // fully scrolled out (the blank wrap tick)
+	}
+	sub, _ := s.img.SubImage(image.Rect(off, 0, srcX1, s.img.Bounds().Dy())).(*image.Alpha)
+	fb.BlitAlpha(sub, s.X, s.Y, s.Level)
 }
