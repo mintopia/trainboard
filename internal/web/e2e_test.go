@@ -419,3 +419,75 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		})
 	}
 }
+
+// --- Test 3: the partial-setup (AP-mode) finish-provisioning journey -------
+
+// TestE2EPartialSetupLoginAndFinishConfig is the end-to-end guard for Gap 1:
+// a device provisioned through the AP portal has an admin password + WiFi
+// creds on disk but no Board.Origin/Darwin.Token yet (connectivity-valid,
+// board-invalid). After it joins the LAN, the operator must be able to log in
+// and reach /config to finish provisioning — the exact path config.Load's
+// full validation used to break with a redirect loop. This drives that whole
+// journey over the real middleware stack: setup gate lifts, login works,
+// /config renders, and finishing (origin + token) promotes the document to
+// fully board-valid on disk without losing the portal-supplied WiFi creds.
+func TestE2EPartialSetupLoginAndFinishConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	hash, err := HashPassword(e2ePassword)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	partial := config.Default() // empty origin/token: fails full Validate
+	partial.Web.PasswordHash = hash
+	partial.Wifi.SSID = "HomeNet"
+	partial.Wifi.PSK = "supersecret"
+	if err := config.SaveConnectivity(path, partial); err != nil {
+		t.Fatalf("seed partial-setup config: %v", err)
+	}
+
+	svc, applyCh := e2eNewService(t, path)
+	srv := NewServer(svc, testLog())
+	h := srv.Handler()
+
+	// 1. Setup gate lifts: a password exists, so /setup 404s and an
+	// unauthenticated request routes to /login (NOT /setup).
+	if rec := getPath(t, h, "/setup"); rec.Code != http.StatusNotFound {
+		t.Fatalf("partial-setup: /setup must 404 once a password exists, got %d", rec.Code)
+	}
+	if rec := getPath(t, h, "/"); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("partial-setup: GET / want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	// 2. Login with the portal-set password works.
+	cookie, csrf := loginAs(t, srv, e2ePassword)
+
+	// 3. GET /config renders the finish-provisioning page.
+	if rec := getPath(t, h, "/config", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("partial-setup: GET /config want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 4. Finish provisioning: supply the missing origin + token (WiFi SSID
+	// arrives pre-filled in the real form, so submit it back as-is), which
+	// promotes the document to fully board-valid and saves it.
+	form := baseConfigForm()
+	form.Set("board.origin", "PAD")
+	form.Set("darwin.token", "tok-finish")
+	form.Set("wifi.ssid", "HomeNet") // mirrors the pre-filled, non-secret SSID input
+	form.Set("csrf", csrf)
+	recCfg := postForm(t, h, "/config", form, cookie)
+	if recCfg.Code != http.StatusOK {
+		t.Fatalf("partial-setup: POST /config want 200, got %d body=%s", recCfg.Code, recCfg.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path) // must now pass the full Validate
+	if err != nil {
+		t.Fatalf("partial-setup: config must be fully board-valid after finishing: %v", err)
+	}
+	if cur.Board.Origin != "PAD" || cur.Darwin.Token != "tok-finish" {
+		t.Fatalf("partial-setup: finish didn't persist origin/token: %+v", cur)
+	}
+	if cur.Wifi.SSID != "HomeNet" || cur.Wifi.PSK != "supersecret" {
+		t.Fatalf("partial-setup: finish must keep the portal-supplied wifi creds: %+v", cur.Wifi)
+	}
+}

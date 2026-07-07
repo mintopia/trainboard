@@ -107,9 +107,16 @@ func localIPs() []string {
 	return out
 }
 
-// ConfigRedacted loads the stored config with all secrets masked.
+// ConfigRedacted loads the stored config with all secrets masked. It loads
+// via config.LoadRaw (tolerant of a connectivity-valid-but-board-invalid
+// document, e.g. a device that has only completed AP-mode partial setup):
+// config.Load's internal Validate would otherwise error here, leaving the
+// /config page unable to render at all for a partially-provisioned device
+// that needs it most (to supply the missing origin/token). A genuinely
+// unparseable/unreadable file still surfaces as an error, so the page can
+// show it.
 func (s *Service) ConfigRedacted() (config.Config, error) {
-	c, err := config.Load(s.cfgPath)
+	c, err := config.LoadRaw(s.cfgPath)
 	if err != nil {
 		return config.Config{}, err
 	}
@@ -127,8 +134,18 @@ type ConfigUpdate struct {
 
 // UpdateConfig merges, validates, and transactionally saves. Nothing is
 // written unless Validate passes.
+//
+// The initial read is config.LoadRaw, not config.Load: a device that only
+// completed AP-mode partial setup has a connectivity-valid-but-board-invalid
+// config on disk (password hash + WiFi, no origin/token), and config.Load's
+// full Validate would reject it — blocking the very save that finishes
+// provisioning. LoadRaw tolerates that document while still surfacing a
+// genuinely unparseable/unreadable file as an error. The save side is
+// unchanged: next.Validate() below still gates writes on the FULL tier, and
+// config.Save re-validates, so an incomplete document can never be persisted
+// as if it were a runnable board config.
 func (s *Service) UpdateConfig(u ConfigUpdate) error {
-	cur, err := config.Load(s.cfgPath)
+	cur, err := config.LoadRaw(s.cfgPath)
 	if err != nil {
 		return err
 	}
@@ -181,16 +198,19 @@ func (s *Service) SetInitialPassword(pw, originCRS, token string) error {
 	if len(pw) < 8 {
 		return errors.New("password must be at least 8 characters")
 	}
-	// config.Load validates internally, so a present-but-invalid file (e.g.
-	// an installer-written config.Default() with no origin/token yet, or a
-	// corrupted/unreadable file) errors here rather than returning a usable
-	// document. Falling back to Default() in every such case is deliberate:
-	// first-boot setup's whole job is turning an invalid-or-absent document
-	// into a valid one, and a config file this method can't even parse is
-	// treated the same as "no config yet" — fresh setup over an unrecoverable
-	// file, rather than surfacing a load error the operator can't act on
-	// from this form.
-	cur, err := config.Load(s.cfgPath)
+	// config.LoadRaw parses without the full board Validate, so a
+	// present-but-board-invalid file (e.g. an AP-mode partial-setup config
+	// carrying a password hash + WiFi but no origin/token) still returns its
+	// real stored fields — critical for the already-set guard below: with the
+	// old config.Load read, such a file errored, the Default() fallback wiped
+	// the stored hash from view, and this method would overwrite the password
+	// (and drop the stored WiFi creds on save). Falling back to Default() on
+	// a LoadRaw error remains deliberate: first-boot setup's whole job is
+	// turning an invalid-or-absent document into a valid one, and a config
+	// file this method can't even parse is treated the same as "no config
+	// yet" — fresh setup over an unrecoverable file, rather than surfacing a
+	// load error the operator can't act on from this form.
+	cur, err := config.LoadRaw(s.cfgPath)
 	if err != nil {
 		cur = config.Default()
 	}
@@ -234,10 +254,11 @@ func (s *Service) SetupConnectivity(pw, ssid, psk string) error {
 	if ssid == "" {
 		return errors.New("wifi network name is required")
 	}
-	// See SetInitialPassword's doc comment: an unparseable-or-absent config
-	// is treated the same as "no config yet" for this load-tolerant setup
-	// flow, not surfaced as a load error.
-	cur, err := config.Load(s.cfgPath)
+	// See SetInitialPassword's doc comment: the tolerant config.LoadRaw read
+	// keeps the already-set guard honest against a board-invalid document,
+	// and an unparseable-or-absent config is treated the same as "no config
+	// yet" for this load-tolerant setup flow, not surfaced as a load error.
+	cur, err := config.LoadRaw(s.cfgPath)
 	if err != nil {
 		cur = config.Default()
 	}
@@ -258,23 +279,30 @@ func (s *Service) SetupConnectivity(pw, ssid, psk string) error {
 }
 
 // NeedsSetup reports whether first-boot setup still needs to run, i.e. no
-// admin password is stored yet. It must not go through ConfigRedacted:
-// config.Load validates internally and errors on a virgin or otherwise
-// invalid on-disk file, which is exactly the state setup exists to fix. So
-// this loads tolerantly instead: any Load error (missing-but-invalid,
-// unparseable, failing Validate) is treated as "setup needed"; a successful
-// Load needs setup iff no password hash is stored.
+// admin password is stored yet. It loads via config.LoadRaw, not config.Load:
+// a device that finished only AP-mode partial setup has a password hash + WiFi
+// but no origin/token, so config.Load's full Validate would reject it and this
+// would wrongly report setup-needed — re-arming the /setup gate and trapping
+// the LAN user in a redirect loop away from /config. LoadRaw reads the stored
+// hash regardless of board-validity: any LoadRaw error (unparseable/unreadable
+// file) is still treated as "setup needed"; a successful read needs setup iff
+// no password hash is stored.
 func (s *Service) NeedsSetup() bool {
-	cur, err := config.Load(s.cfgPath)
+	cur, err := config.LoadRaw(s.cfgPath)
 	if err != nil {
 		return true
 	}
 	return cur.Web.PasswordHash == ""
 }
 
-// VerifyLogin checks a login attempt against the stored hash.
+// VerifyLogin checks a login attempt against the stored hash. It loads via
+// config.LoadRaw for the same reason as NeedsSetup: an admin password set by
+// AP-mode partial setup lives in a config that fails the full board Validate,
+// and config.Load would refuse to return it — locking the operator out of the
+// device they just provisioned. An unparseable/unreadable file (LoadRaw error)
+// or an unset hash denies the login.
 func (s *Service) VerifyLogin(pw string) bool {
-	cur, err := config.Load(s.cfgPath)
+	cur, err := config.LoadRaw(s.cfgPath)
 	if err != nil || cur.Web.PasswordHash == "" {
 		return false
 	}
@@ -286,6 +314,14 @@ func (s *Service) VerifyLogin(pw string) bool {
 // itself lives in config.GenerateAPPassword (Task 12 refactor) so the
 // --manage-network wiring in cmd/trainboard can mint one the same way
 // without depending on this package.
+//
+// Deliberately the ONLY service path left on the full-tier config.Load read
+// (see the LoadRaw callers audit, task 5b): its save side is config.Save,
+// which re-runs the full Validate, so a tolerant read would just move the
+// same rejection from load to save on a partially-provisioned device.
+// Regenerating from /config is a fully-provisioned-device feature; a partial
+// device's AP password is minted and persisted by cmd/trainboard's
+// resolveAPPassword over the SaveConnectivity tier instead.
 func (s *Service) RegenerateAPPassword() (string, error) {
 	pw, err := config.GenerateAPPassword()
 	if err != nil {
