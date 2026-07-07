@@ -121,3 +121,92 @@ func TestRunPollsUntilCancelled(t *testing.T) {
 		t.Fatal("Run must publish after its immediate first poll")
 	}
 }
+
+// TestNextDelay exercises the pure backoff function directly: 2s, 5s, 10s,
+// then 10s forever while in error state, capped at the configured interval,
+// and reset to the full interval once the failure streak is broken.
+func TestNextDelay(t *testing.T) {
+	tests := []struct {
+		name                string
+		consecutiveFailures int
+		interval            time.Duration
+		want                time.Duration
+	}{
+		{"no failures uses configured interval", 0, 60 * time.Second, 60 * time.Second},
+		{"first failure", 1, 60 * time.Second, 2 * time.Second},
+		{"second failure", 2, 60 * time.Second, 5 * time.Second},
+		{"third failure", 3, 60 * time.Second, 10 * time.Second},
+		{"fourth failure holds at 10s", 4, 60 * time.Second, 10 * time.Second},
+		{"tenth failure still holds at 10s", 10, 60 * time.Second, 10 * time.Second},
+		{"third failure capped by a short interval", 3, 8 * time.Second, 8 * time.Second},
+		{"first failure never exceeds interval", 1, 60 * time.Second, 2 * time.Second},
+		{"negative failures treated as none", -1, 30 * time.Second, 30 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextDelay(tt.consecutiveFailures, tt.interval); got != tt.want {
+				t.Fatalf("nextDelay(%d, %s) = %s, want %s", tt.consecutiveFailures, tt.interval, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPollOnceTracksConsecutiveFailures verifies the failure streak used to
+// drive the backoff resets to zero the moment a poll leaves StateError.
+func TestPollOnceTracksConsecutiveFailures(t *testing.T) {
+	f := &scriptFetcher{results: []fetchResult{
+		{err: errors.New("boom")},
+		{err: errors.New("boom")},
+		{b: goodBoard(1)},
+		{err: errors.New("boom")},
+	}}
+	p, _ := newTestPoller(f)
+	p.now = func() time.Time { return t0 }
+
+	p.pollOnce(context.Background())
+	if p.failures != 1 {
+		t.Fatalf("after 1st error, failures = %d, want 1", p.failures)
+	}
+	p.pollOnce(context.Background())
+	if p.failures != 2 {
+		t.Fatalf("after 2nd error, failures = %d, want 2", p.failures)
+	}
+	p.pollOnce(context.Background())
+	if p.failures != 0 {
+		t.Fatalf("after recovery, failures = %d, want reset to 0", p.failures)
+	}
+	// Push past the stale grace so the next error actually reclassifies to
+	// StateError instead of holding the last-good snapshot.
+	p.now = func() time.Time { return t0.Add(StaleGrace + time.Minute) }
+	p.pollOnce(context.Background())
+	if p.failures != 1 {
+		t.Fatalf("after a fresh error, failures = %d, want 1", p.failures)
+	}
+}
+
+// TestRunRetriesFastAfterError proves the fix end-to-end: a failed poll is
+// followed by a retry well inside the short backoff window rather than
+// waiting out the full (much longer) configured refresh interval.
+func TestRunRetriesFastAfterError(t *testing.T) {
+	f := &scriptFetcher{results: []fetchResult{{err: errors.New("boom")}, {b: goodBoard(1)}}}
+	p, _ := newTestPoller(f) // testCfg's interval is 15s; the backoff must beat that by a wide margin
+	done := make(chan struct{}, 8)
+	p.pollDone = done
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+
+	<-done // first, immediate poll: fails
+	if s := p.Snapshot(); s == nil || s.State != board.StateError {
+		t.Fatalf("snapshot after first poll = %+v, want error state", s)
+	}
+
+	select {
+	case <-done: // fast retry after the 2s backoff
+	case <-time.After(4 * time.Second):
+		t.Fatal("expected a fast retry within the error backoff window, got none")
+	}
+	if s := p.Snapshot(); s == nil || s.State != board.StateDepartures {
+		t.Fatalf("snapshot after retry = %+v, want departures", s)
+	}
+}

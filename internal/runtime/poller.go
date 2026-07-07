@@ -13,8 +13,8 @@ import (
 
 // fetchTimeout bounds one Darwin round-trip. Polls can never overlap — not
 // because of this value, but because Run calls pollOnce synchronously from a
-// single goroutine; a fetch outlasting the refresh interval only delays the
-// next tick (cadence drift, never concurrency).
+// single goroutine; a fetch outlasting the refresh interval only pushes the
+// next poll back by its own duration (cadence drift, never concurrency).
 const fetchTimeout = 30 * time.Second
 
 // Fetcher is the data-client seam; *data.Client satisfies it.
@@ -33,9 +33,44 @@ type Poller struct {
 	log      *slog.Logger
 	snap     atomic.Pointer[board.Snapshot]
 
+	// failures counts consecutive polls that have left the snapshot in
+	// StateError. It drives the fast-retry backoff in Run and resets to
+	// zero the moment a poll lands in any non-error state.
+	failures int
+
 	// test seams
 	now      func() time.Time
 	pollDone chan<- struct{}
+}
+
+// errorBackoffSteps are the delays applied for the 1st, 2nd and 3rd+
+// consecutive poll failures (StateError), per issue #40: 2s, then 5s, then
+// 10s forever until recovery. Index 0 is unused (zero failures means the
+// normal configured interval applies, handled separately in nextDelay).
+var errorBackoffSteps = [...]time.Duration{
+	0, 2 * time.Second, 5 * time.Second, 10 * time.Second,
+}
+
+// nextDelay computes how long Run should wait before the next poll, given
+// how many consecutive polls have just left the snapshot in StateError.
+// consecutiveFailures <= 0 means the last poll was healthy: the normal
+// configured interval applies. Otherwise the short backoff table above
+// applies (holding at its last step, 10s, for every failure beyond the
+// third), always capped so the retry never waits longer than the configured
+// interval — a short RefreshSeconds must not be defeated by the backoff.
+func nextDelay(consecutiveFailures int, interval time.Duration) time.Duration {
+	if consecutiveFailures <= 0 {
+		return interval
+	}
+	step := consecutiveFailures
+	if step >= len(errorBackoffSteps) {
+		step = len(errorBackoffSteps) - 1
+	}
+	backoff := errorBackoffSteps[step]
+	if backoff > interval {
+		return interval
+	}
+	return backoff
 }
 
 // NewPoller derives the Darwin request and client-side filter from cfg.
@@ -70,14 +105,27 @@ func (p *Poller) Snapshot() *board.Snapshot {
 	return p.snap.Load()
 }
 
-// Run polls immediately, then on every interval tick until ctx is cancelled.
+// Run polls immediately, then repeats until ctx is cancelled. While the
+// snapshot is healthy, polls follow the configured interval; while it's in
+// StateError, Run retries on a short backoff (2s, 5s, then every 10s, see
+// nextDelay) so a boot-time fetch failure — e.g. WiFi not yet associated —
+// recovers within seconds of connectivity rather than waiting out a full
+// refresh interval.
+//
+// This uses a fresh time.NewTimer per iteration rather than a single
+// time.Ticker, because the wait between polls is no longer constant: the
+// interval is now measured poll-to-poll (start the wait once pollOnce
+// returns) rather than on fixed wall-clock ticks. A slow fetch therefore
+// pushes the next poll back by its own duration instead of the ticker
+// silently dropping a tick — acceptable drift for a display refresh, and it
+// keeps the one-poll-at-a-time invariant obvious from the code.
 func (p *Poller) Run(ctx context.Context) {
 	p.pollOnce(ctx)
-	t := time.NewTicker(p.interval)
-	defer t.Stop()
 	for {
+		t := time.NewTimer(nextDelay(p.failures, p.interval))
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 			p.pollOnce(ctx)
@@ -97,6 +145,12 @@ func (p *Poller) pollOnce(ctx context.Context) {
 	prev := p.snap.Load()
 	next := Classify(b, err, prev, p.now())
 	p.snap.Store(next)
+
+	if next.State == board.StateError {
+		p.failures++
+	} else {
+		p.failures = 0
+	}
 
 	switch {
 	case err != nil:
