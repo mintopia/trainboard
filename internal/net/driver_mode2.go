@@ -149,11 +149,19 @@ func (d *mode2Driver) StopAP(ctx context.Context) error {
 
 // AttemptSTA switches to the client network using the shared staAttempt
 // flow: reconfigure the (already-running) daemon, select the STA network,
-// wait for association, then run a one-shot dhclient. It does not evaluate
-// connectivity beyond that — the layered Check owns that.
+// wait for association, then run a one-shot dhclient. The conf staAttempt
+// writes retains d.ap's (disabled) block alongside the STA block — mode2's
+// single conf file always holds both networks (see the package doc comment
+// above), so a reconfigure here must not drop the AP one out from under a
+// later StartAP. It does not evaluate connectivity beyond that — the
+// layered Check owns that.
 func (d *mode2Driver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	d.sta = sta
-	if err := staAttempt(ctx, d.r, d.iface, sta, d.writeFile, d.sleep); err != nil {
+	render := func(s STAConfig) ([]byte, error) {
+		body, err := renderConf(s, d.ap)
+		return []byte(body), err
+	}
+	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, d.sleep); err != nil {
 		return fmt.Errorf("net: mode2: AttemptSTA: %w", err)
 	}
 	return nil

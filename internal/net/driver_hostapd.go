@@ -101,13 +101,21 @@ func (d *hostapdDriver) StopAP(ctx context.Context) error {
 	return nil
 }
 
+// renderSTAOnlyConf adapts renderSTAConf to staAttempt's renderConf shape:
+// the hostapd driver has no AP block of its own to retain (hostapd owns the
+// AP separately, via renderHostapdConf), so this file is STA-only.
+func renderSTAOnlyConf(sta STAConfig) ([]byte, error) {
+	body, err := renderSTAConf(sta)
+	return []byte(body), err
+}
+
 // AttemptSTA stops the AP (freeing the radio for wpa_supplicant) then runs
-// the shared wpa_cli/dhclient STA flow.
+// the shared wpa_cli/dhclient STA flow, writing an STA-only conf.
 func (d *hostapdDriver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	if err := d.StopAP(ctx); err != nil {
 		return fmt.Errorf("net: hostapd: AttemptSTA: %w", err)
 	}
-	if err := staAttempt(ctx, d.r, d.iface, sta, d.writeFile, d.sleep); err != nil {
+	if err := staAttempt(ctx, d.r, d.iface, sta, renderSTAOnlyConf, d.writeFile, d.sleep); err != nil {
 		return fmt.Errorf("net: hostapd: AttemptSTA: %w", err)
 	}
 	return nil

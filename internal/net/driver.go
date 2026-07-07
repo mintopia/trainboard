@@ -79,16 +79,19 @@ network={
 }
 
 // staAttempt runs the "switch to the STA network and obtain a DHCP lease"
-// flow shared by both apDriver implementations: persist the STA-only conf,
-// tell wpa_supplicant to reload it, select network 0, wait for association,
-// then run a one-shot dhclient. It does not evaluate connectivity beyond
-// dhclient's exit — the layered Check owns that.
-func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, writeFile func(string, []byte) error, sleep func(time.Duration)) error {
-	body, err := renderSTAConf(sta)
+// flow shared by both apDriver implementations: render the conf via
+// renderConf (letting each driver decide what else belongs in the file —
+// mode2Driver retains its AP block, hostapdDriver renders STA-only since
+// hostapd owns the AP separately), persist it, tell wpa_supplicant to reload
+// it, select network 0, wait for association, then run a one-shot dhclient.
+// It does not evaluate connectivity beyond dhclient's exit — the layered
+// Check owns that.
+func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, renderConf func(STAConfig) ([]byte, error), writeFile func(string, []byte) error, sleep func(time.Duration)) error {
+	body, err := renderConf(sta)
 	if err != nil {
 		return fmt.Errorf("net: staAttempt: %w", err)
 	}
-	if err := writeFile(wpaConfPath, []byte(body)); err != nil {
+	if err := writeFile(wpaConfPath, body); err != nil {
 		return fmt.Errorf("net: staAttempt: write conf: %w", err)
 	}
 	if _, err := r.Run(ctx, "wpa_cli", "-i", iface, "reconfigure"); err != nil {

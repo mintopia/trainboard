@@ -152,8 +152,20 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	if len(calls) == 0 || calls[len(calls)-1] != "dhclient -1 -v wlan0" {
 		t.Fatalf("last call = %q, want %q (calls: %v)", calls[len(calls)-1], "dhclient -1 -v wlan0", calls)
 	}
-	if len(fw.writes()) != 1 {
-		t.Fatalf("writeFile called %d times, want 1", len(fw.writes()))
+	writes := fw.writes()
+	if len(writes) != 1 {
+		t.Fatalf("writeFile called %d times, want 1", len(writes))
+	}
+
+	// The mode2 conf is a single file holding both the STA and AP network
+	// blocks (switched between via select_network) — see mode2Driver's doc
+	// comment. A live reconfigure during AttemptSTA must not drop the AP
+	// block, or a subsequent StartAP would have nothing to select.
+	conf := string(writes[0].data)
+	for _, want := range []string{`id_str="sta"`, `id_str="ap"`, "mode=2"} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("AttemptSTA conf missing %q; conf must retain the AP block:\n%s", want, conf)
+		}
 	}
 }
 
