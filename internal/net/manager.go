@@ -436,7 +436,7 @@ func (m *Manager) attemptAP(ctx context.Context) error {
 
 	m.publish(Status{
 		State:   ManagerAPFallback,
-		Hotspot: &board.Hotspot{SSID: m.d.AP.SSID, Addr: "192.168.4.1"},
+		Hotspot: &board.Hotspot{SSID: m.d.AP.SSID, Password: m.d.AP.Password, Addr: "192.168.4.1"},
 	})
 	return nil
 }

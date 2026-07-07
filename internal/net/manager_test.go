@@ -230,6 +230,9 @@ func TestManagerToAPHappyPathPublishesAPFallback(t *testing.T) {
 	if got.Hotspot.Addr != "192.168.4.1" {
 		t.Fatalf("Hotspot.Addr = %q, want 192.168.4.1", got.Hotspot.Addr)
 	}
+	if got.Hotspot.Password != "hunter22" {
+		t.Fatalf("Hotspot.Password = %q, want hunter22", got.Hotspot.Password)
+	}
 }
 
 func TestManagerToAPRetriesFullCycleWhenVerificationFirstFails(t *testing.T) {

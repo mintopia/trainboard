@@ -67,6 +67,18 @@ func TestClockNotSyncedGolden(t *testing.T) {
 }
 
 func TestHotspotInfoGolden(t *testing.T) {
-	s := hotspotInfoScene("trainboard-setup", "192.168.4.1", mustFonts(t))
+	s := hotspotInfoScene("trainboard-setup", "hunter22", "192.168.4.1", mustFonts(t))
 	rendertest.AssertGolden(t, "testdata", "scene_hotspot", frame(t, s, 0))
+}
+
+func TestHotspotInfoShowsPassword(t *testing.T) {
+	s := hotspotInfoScene("trainboard-setup", "hunter22", "192.168.4.1", mustFonts(t))
+	withPass := frame(t, s, 0)
+
+	s2 := hotspotInfoScene("trainboard-setup", "different", "192.168.4.1", mustFonts(t))
+	withOtherPass := frame(t, s2, 0)
+
+	if string(withPass.Pix) == string(withOtherPass.Pix) {
+		t.Fatal("changing the password must change the rendered frame")
+	}
 }

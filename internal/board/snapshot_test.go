@@ -51,9 +51,9 @@ func TestBuildScenePerState(t *testing.T) {
 
 func TestHotspotOverridesEverything(t *testing.T) {
 	f := mustFonts(t)
-	hs := &Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
+	hs := &Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
 	want := render.New(W, H)
-	hotspotInfoScene(hs.SSID, hs.Addr, f).Render(want, 0, fixedNow)
+	hotspotInfoScene(hs.SSID, hs.Password, hs.Addr, f).Render(want, 0, fixedNow)
 	for _, st := range []State{StateDepartures, StateError, StateClockNotSynced, StateNoServices} {
 		snap := &Snapshot{State: st, Board: fixtureBoard(), Hotspot: hs, Fault: obs.FaultDarwinUnreachable}
 		if !pixEq(build(t, snap), want) {

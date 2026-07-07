@@ -40,7 +40,7 @@ func (s State) String() string {
 // Hotspot carries AP-mode identity; populated only by M3's connectivity
 // manager. Non-nil Hotspot outranks every state.
 type Hotspot struct {
-	SSID, Addr string
+	SSID, Password, Addr string
 }
 
 // Snapshot is the immutable unit the poller publishes and the render loop
@@ -59,12 +59,12 @@ type Snapshot struct {
 func BuildScene(s *Snapshot, layout config.LayoutConfig, version string, f *Fonts) *render.Scene {
 	if s == nil || s.State == StateInitialising {
 		if s != nil && s.Hotspot != nil {
-			return hotspotInfoScene(s.Hotspot.SSID, s.Hotspot.Addr, f)
+			return hotspotInfoScene(s.Hotspot.SSID, s.Hotspot.Password, s.Hotspot.Addr, f)
 		}
 		return initialisingScene(version, f)
 	}
 	if s.Hotspot != nil {
-		return hotspotInfoScene(s.Hotspot.SSID, s.Hotspot.Addr, f)
+		return hotspotInfoScene(s.Hotspot.SSID, s.Hotspot.Password, s.Hotspot.Addr, f)
 	}
 	switch s.State {
 	case StateError:
