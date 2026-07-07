@@ -220,12 +220,36 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
 
 1. Confirm the device is reachable some other way (ethernet, physical
    console, or you're comfortable losing WiFi and driving it from the AP).
-2. Disable ifupdown/dhcpcd's management of wlan0 (M3b bench notes cover the
-   exact steps for the DietPi image in use).
-3. Add `--manage-network` to the unit's `ExecStart` and
-   `systemctl daemon-reload && systemctl restart trainboard`.
-4. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
+2. Install `dnsmasq` if it isn't already present (`apt-get install -y
+   dnsmasq`) — M3a never runs it; the connectivity manager's AP fallback
+   needs it for DHCP + captive DNS on wlan0.
+3. Hand wlan0 over from ifupdown to the connectivity manager — this is a
+   one-way step, do it in this order:
+   1. Comment out the `iface wlan0 ...` block (and any `wpa-conf`/
+      `wpa-ssid` lines under it) in `/etc/network/interfaces`.
+   2. `systemctl disable --now ifup@wlan0.service` (or `ifdown wlan0`
+      followed by disabling whatever wlan0 unit DietPi's ifupdown
+      generated — check `systemctl list-units 'ifup@wlan0*'` if the exact
+      unit name differs).
+   3. **Only then** add `--manage-network` to the unit's `ExecStart`.
+4. `systemctl daemon-reload && systemctl restart trainboard`.
+5. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
    fallback before disconnecting your other access path.
+
+From this point on, wlan0 is manager-owned at boot: ifupdown will not touch
+it again unless the interfaces-file edit from step 3.1 is reverted, so a
+crash-looped `trainboard.service` means wlan0 sits idle rather than falling
+back to ifupdown's own DHCP client.
+
+**Before running the migration on real hardware**, run the bench protocol in
+[`deploy/bench/`](../deploy/bench/): `eval-mode2.sh` exercises AP bring-up,
+10x AP↔STA toggling, and the bad-PSK AP-restore invariant behind a dead-man
+switch that restores the pre-bench network config and reboots on its own if
+the session goes sideways, and `destructive-matrix.md` walks the harder
+failure-injection rows (daemon crashes, DHCP timeout, reboot mid-transition,
+etc. — issue #13). The mode2-vs-hostapd verdict is **not** decided by this
+doc — it lands as an ADR 0003 addendum after that bench session runs, not
+before.
 
 **Fault codes E05/E06** (§6) are only ever surfaced behind this flag — with
 it off, wlan0 is left to the OS as before and neither can occur.
