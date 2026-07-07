@@ -14,6 +14,10 @@ type actionsPageData struct {
 	SoakRemaining string
 	// SoakError re-renders the start form with a validation message.
 	SoakError string
+	// HotspotActive reports whether the board is currently in AP mode
+	// (Service.Hotspot() != nil); the page shows the wifi-retry-now form
+	// only while this is true.
+	HotspotActive bool
 }
 
 // handleActionsGet renders the actions page: restart, reboot, the burn-in
@@ -28,6 +32,7 @@ func (s *Server) actionsData(r *http.Request, soakError string) actionsPageData 
 	if rem := s.svc.SoakRemaining(); rem > 0 {
 		d.SoakRemaining = humanUptime(rem)
 	}
+	d.HotspotActive = s.svc.Hotspot() != nil
 	return d
 }
 
@@ -83,5 +88,14 @@ func (s *Server) handleActionsSoak(w http.ResponseWriter, r *http.Request) {
 // and redirects back to the actions page.
 func (s *Server) handleActionsSoakCancel(w http.ResponseWriter, r *http.Request) {
 	s.svc.CancelSoak()
+	http.Redirect(w, r, "/actions", http.StatusFound)
+}
+
+// handleActionsWifiRetry asks the connectivity manager to attempt the
+// configured WiFi immediately (Service.WifiRetryNow; tears the AP down for
+// ~20s) and redirects back to the actions page — PRG, like the soak
+// start/cancel handlers, since there is no terminal "applied" page here.
+func (s *Server) handleActionsWifiRetry(w http.ResponseWriter, r *http.Request) {
+	s.svc.WifiRetryNow()
 	http.Redirect(w, r, "/actions", http.StatusFound)
 }

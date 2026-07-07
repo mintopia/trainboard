@@ -296,6 +296,35 @@ func TestLogRequestsOmitsQueryString(t *testing.T) {
 // (status < 400) requests must log below the obs tee logger's Info
 // threshold — producing zero ring events — while failures (status >= 400)
 // must still log at Warn, so they remain visible in the ring.
+// TestNoteProvisioningCountsAPSubnetRequests pins noteProvisioning's parsing
+// rule: only a RemoteAddr whose host parses inside 192.168.4.0/24 counts as
+// live provisioning activity. Every request counts, including plain GETs
+// (probes/static) — the middleware never filters by method or path.
+func TestNoteProvisioningCountsAPSubnetRequests(t *testing.T) {
+	cases := []struct {
+		name       string
+		remoteAddr string
+		want       int
+	}{
+		{"AP subnet", "192.168.4.55:41000", 1},
+		{"outside AP subnet", "192.168.3.10:5", 0},
+		{"garbage RemoteAddr (no port)", "garbage", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, svc, _, _, conn := newConnTestServer(t)
+			h := chain(okHandler(), noteProvisioning(svc))
+			r := httptest.NewRequest("GET", "/preview.png", nil)
+			r.RemoteAddr = tc.remoteAddr
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if _, p := conn.counts(); p != tc.want {
+				t.Fatalf("provNotes = %d, want %d", p, tc.want)
+			}
+		})
+	}
+}
+
 func TestLogRequestsKeepsRoutineTrafficOutOfRing(t *testing.T) {
 	ring := obs.NewRing(256)
 	log := obs.NewLogger(io.Discard, ring, slog.LevelInfo)

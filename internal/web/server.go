@@ -82,6 +82,8 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("POST /actions/soak/cancel", chain(http.HandlerFunc(s.handleActionsSoakCancel),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/wifi-retry", chain(http.HandlerFunc(s.handleActionsWifiRetry),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 
 	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
 	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
@@ -102,6 +104,8 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /api/actions/soak", chain(http.HandlerFunc(s.handleAPIActionsSoak),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 	s.mux.Handle("POST /api/actions/soak/cancel", chain(http.HandlerFunc(s.handleAPIActionsSoakCancel),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/wifi-retry", chain(http.HandlerFunc(s.handleAPIActionsWifiRetry),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 
 	return s
@@ -132,10 +136,11 @@ func (s *Server) setupGate(next http.Handler) http.Handler {
 }
 
 // Handler is the outermost handler: recoverPanics wraps everything (per its
-// doc comment), then logRequests, then originCheck, then the first-boot
-// setup gate, then the route table.
+// doc comment), then logRequests, then noteProvisioning (every request
+// counts as provisioning activity if it comes from the AP subnet), then
+// originCheck, then the first-boot setup gate, then the route table.
 func (s *Server) Handler() http.Handler {
-	return chain(s.mux, recoverPanics(s.log), logRequests(s.log), originCheck(s.log), s.setupGate)
+	return chain(s.mux, recoverPanics(s.log), logRequests(s.log), noteProvisioning(s.svc), originCheck(s.log), s.setupGate)
 }
 
 // Run serves Handler() on addr until ctx is cancelled, then shuts down

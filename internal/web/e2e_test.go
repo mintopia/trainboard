@@ -301,6 +301,7 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/actions/reboot                | POST   | 302 /login   | 200
 //	/actions/soak                  | POST   | 302 /login   | 302 /actions
 //	/actions/soak/cancel           | POST   | 302 /login   | 302 /actions
+//	/actions/wifi-retry            | POST   | 302 /login   | 302 /actions
 //	/api/status                    | GET    | 401 JSON     | 200
 //	/api/config                    | GET    | 401 JSON     | 200
 //	/api/config                    | PUT    | 401 JSON     | 200
@@ -309,6 +310,7 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/api/actions/reboot            | POST   | 401 JSON     | 200
 //	/api/actions/soak              | POST   | 401 JSON     | 200
 //	/api/actions/soak/cancel       | POST   | 401 JSON     | 200
+//	/api/actions/wifi-retry        | POST   | 401 JSON     | 200
 //	/logout                        | POST   | 302 /login   | 302 /login (destroys session; kept LAST)
 func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	srv, _, _, applyCh := newConfigTestServer(t)
@@ -338,6 +340,7 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "POST /actions/reboot", method: http.MethodPost, path: "/actions/reboot", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},
 		{name: "POST /actions/soak", method: http.MethodPost, path: "/actions/soak", body: htmlForm(url.Values{"duration": {"1h"}}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
 		{name: "POST /actions/soak/cancel", method: http.MethodPost, path: "/actions/soak/cancel", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
+		{name: "POST /actions/wifi-retry", method: http.MethodPost, path: "/actions/wifi-retry", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
 		{name: "GET /api/status", method: http.MethodGet, path: "/api/status", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /api/config", method: http.MethodGet, path: "/api/config", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "PUT /api/config", method: http.MethodPut, path: "/api/config", isAPI: true, body: apiBody(apiCfgPayload), wantAuthedStatus: http.StatusOK, appliesAsync: true},
@@ -346,6 +349,7 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "POST /api/actions/reboot", method: http.MethodPost, path: "/api/actions/reboot", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
 		{name: "POST /api/actions/soak", method: http.MethodPost, path: "/api/actions/soak", isAPI: true, body: apiBody([]byte(`{"duration":"1h"}`)), wantAuthedStatus: http.StatusOK},
 		{name: "POST /api/actions/soak/cancel", method: http.MethodPost, path: "/api/actions/soak/cancel", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
+		{name: "POST /api/actions/wifi-retry", method: http.MethodPost, path: "/api/actions/wifi-retry", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
 		{name: "POST /logout", method: http.MethodPost, path: "/logout", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/login"},
 	}
 
