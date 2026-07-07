@@ -82,6 +82,26 @@ func TestStatusPageUnauthenticatedRedirects(t *testing.T) {
 	}
 }
 
+// (a2) authed GET to an unknown path (e.g. /nonexistent, /favicon.ico) must
+// 404, not fall through to the status page: GET / is a catch-all
+// registration in net/http's mux, so without an explicit path guard
+// handleIndex would render the status page as 200 for any authed request to
+// any unregistered path.
+func TestStatusPageAuthedUnknownPathIs404(t *testing.T) {
+	srv, _ := newTestServerWithSources(t, statusTestSources(t))
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/nonexistent", cookie)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = getPath(t, srv.Handler(), "/", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ must still be 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // (b) authed GET / shows the departures state, the version string, and
 // lists the newest event before the oldest (newest-first ordering visible
 // in the rendered HTML).

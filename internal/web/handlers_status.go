@@ -18,7 +18,16 @@ type statusPageData struct {
 
 // handleIndex renders the authed status page: board state/fault, version,
 // uptime, last fetch time, local addresses, and the recent-events feed.
+//
+// It is registered on GET / — net/http's catch-all pattern — so without the
+// path guard below, any authed request to an unregistered path (e.g.
+// /favicon.ico, /nonexistent) would silently render the status page as a
+// 200 instead of a 404.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
 	st := s.svc.Status()
 	s.render(w, "index", statusPageData{
 		basePage:   basePage{LoggedIn: true, CSRF: csrfFrom(r)},

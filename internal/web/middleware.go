@@ -190,13 +190,25 @@ func (sw *statusWriter) WriteHeader(code int) {
 
 // logRequests emits one line per request. The query string is deliberately
 // omitted: it could carry secrets.
+//
+// Routine (status < 400) requests log at DEBUG — below the obs tee logger's
+// Info threshold, so they never reach the diagnostics ring or the journal.
+// Without this, the status page's own polling (/preview.png every second,
+// /events every five seconds) floods the ring's fixed capacity within
+// minutes, evicting the rare events an operator actually needs. Failures
+// (status >= 400) log at WARN, so they stay visible in both places alongside
+// the csrf/origin/rate-limit middleware's own Warns.
 func logRequests(log *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			start := time.Now()
 			next.ServeHTTP(sw, r)
-			log.Info("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "ms", time.Since(start).Milliseconds())
+			level := slog.LevelDebug
+			if sw.status >= 400 {
+				level = slog.LevelWarn
+			}
+			log.Log(r.Context(), level, "http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "ms", time.Since(start).Milliseconds())
 		})
 	}
 }

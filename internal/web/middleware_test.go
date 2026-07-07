@@ -274,7 +274,10 @@ func TestRateLimitMiddleware429(t *testing.T) {
 
 func TestLogRequestsOmitsQueryString(t *testing.T) {
 	var sb strings.Builder
-	log := slog.New(slog.NewTextHandler(&sb, nil))
+	// okHandler returns 200, which logRequests now logs at Debug (see
+	// TestLogRequestsKeepsRoutineTrafficOutOfRing) — the handler must accept
+	// Debug records for this test to observe the line at all.
+	log := slog.New(slog.NewTextHandler(&sb, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	h := chain(okHandler(), logRequests(log))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/config?token=SECRET", nil))
@@ -283,5 +286,36 @@ func TestLogRequestsOmitsQueryString(t *testing.T) {
 	}
 	if !strings.Contains(sb.String(), "/config") {
 		t.Fatalf("path missing from log: %s", sb.String())
+	}
+}
+
+// TestLogRequestsKeepsRoutineTrafficOutOfRing guards against ring flooding:
+// the status page polls /preview.png every second and /events every five
+// seconds, so if logRequests logged every request at Info, an open tab would
+// evict real diagnostics from the bounded ring within minutes. Routine
+// (status < 400) requests must log below the obs tee logger's Info
+// threshold — producing zero ring events — while failures (status >= 400)
+// must still log at Warn, so they remain visible in the ring.
+func TestLogRequestsKeepsRoutineTrafficOutOfRing(t *testing.T) {
+	ring := obs.NewRing(256)
+	log := obs.NewLogger(io.Discard, ring, slog.LevelInfo)
+	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+
+	h := chain(okHandler(), logRequests(log))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/preview.png", nil))
+	if n := ring.Len(); n != 0 {
+		t.Fatalf("200 response: want 0 ring events, got %d: %+v", n, ring.Events())
+	}
+
+	h = chain(notFound, logRequests(log))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/nonexistent", nil))
+	events := ring.Events()
+	if len(events) != 1 {
+		t.Fatalf("404 response: want exactly 1 ring event, got %d: %+v", len(events), events)
+	}
+	if events[0].Msg != "http" || events[0].Level != slog.LevelWarn {
+		t.Fatalf("want http Warn event, got %+v", events[0])
 	}
 }

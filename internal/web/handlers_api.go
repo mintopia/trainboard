@@ -226,7 +226,7 @@ func apiJSONErrors(next http.Handler) http.Handler {
 			msg := strings.TrimSpace(rec.body.String())
 			body, _ := json.Marshal(apiError{Error: msg})
 			dst.Set("Content-Type", "application/json")
-			dst.Del("X-Content-Type-Options")
+			dst.Set("X-Content-Type-Options", "nosniff")
 			dst.Set("Content-Length", strconv.Itoa(len(body)))
 			w.WriteHeader(rec.status)
 			_, _ = w.Write(body)

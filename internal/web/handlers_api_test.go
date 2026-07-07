@@ -423,4 +423,9 @@ func TestAPIRateLimitedRespondsJSON(t *testing.T) {
 		t.Fatalf("want 429 on the 31st rapid request, got %d", lastCode)
 	}
 	decodeAPIError(t, lastRec)
+	// apiJSONErrors rewrote the rate limiter's plain-text 403 body into JSON
+	// here, so it must also set nosniff on the rewritten response (N7).
+	if xcto := lastRec.Header().Get("X-Content-Type-Options"); xcto != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", xcto)
+	}
 }

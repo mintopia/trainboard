@@ -170,6 +170,15 @@ overridden) a typo'd address.
 **mDNS (`trainboard.local`) not resolving:** fall back to finding the Pi's IP
 via your router's DHCP client list and browse to that directly.
 
+**Board unexpectedly shows E04 and the web UI offers `/setup` again on an
+already-configured device:** a missing config file is expected on a fresh
+install, but on a device that's been running, this combination means the
+config file has become corrupted or unreadable, and the board has
+deliberately reopened first-boot provisioning so it can be fixed. Treat this
+as a corrupted config, not routine first-boot: until `/setup` is completed,
+the device is claimable by anyone who can reach it on the LAN. Re-run setup
+promptly to restore a valid config and close that window.
+
 ## 8. Benchmarks
 
 `cmd/bench` measures SSD1322 flush performance on real hardware and gates the
