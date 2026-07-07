@@ -45,6 +45,15 @@ func (s *Server) scheduleApply() {
 	time.AfterFunc(applyDelay, s.svc.act.Apply)
 }
 
+// scheduleWifiRetry fires Service.WifiRetryNow after applyDelay, once the
+// caller's response has been written — the same render-then-delay shape as
+// scheduleApply, used by the AP-mode partial setup's credential-handoff
+// success path (handleSetupPostAPMode) so the phone receives the "hotspot is
+// about to drop" page before the AP actually tears down.
+func (s *Server) scheduleWifiRetry() {
+	time.AfterFunc(applyDelay, s.svc.WifiRetryNow)
+}
+
 // handleActionsRestart renders the same applied page config save uses (its
 // "saved, restarting" copy is accurate here too — a software restart, not a
 // config change) and schedules Actions.Apply, exactly like handleConfigPost.

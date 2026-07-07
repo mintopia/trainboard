@@ -212,6 +212,51 @@ func (s *Service) SetInitialPassword(pw, originCRS, token string) error {
 	return config.Save(s.cfgPath, cur)
 }
 
+// SetupConnectivity completes the AP-mode partial setup flow: WiFi
+// credentials plus the admin password, with no origin/token collected (that
+// happens later, over LAN, at /config once the board has joined the
+// network). It mirrors SetInitialPassword's shape — load-tolerant, refuse
+// once a password already exists, hash the password — but targets the
+// lighter ValidateConnectivity/SaveConnectivity tier instead of
+// Validate/Save, since a device provisioned this way has no origin/token yet
+// and is not expected to.
+//
+// ssid is required here (unlike config.validateWifi's "empty is fine" rule,
+// which exists for the general config form where WiFi is optional): this
+// method's whole purpose is joining WiFi, so a blank network name is
+// rejected up front with a form-friendly message rather than falling through
+// to validateWifi's "both fields must agree" checks. psk length (8-63) is
+// still enforced by ValidateConnectivity's validateWifi call.
+func (s *Service) SetupConnectivity(pw, ssid, psk string) error {
+	if len(pw) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+	if ssid == "" {
+		return errors.New("wifi network name is required")
+	}
+	// See SetInitialPassword's doc comment: an unparseable-or-absent config
+	// is treated the same as "no config yet" for this load-tolerant setup
+	// flow, not surfaced as a load error.
+	cur, err := config.Load(s.cfgPath)
+	if err != nil {
+		cur = config.Default()
+	}
+	if cur.Web.PasswordHash != "" {
+		return errors.New("admin password is already set")
+	}
+	h, err := HashPassword(pw)
+	if err != nil {
+		return err
+	}
+	cur.Web.PasswordHash = h
+	cur.Wifi.SSID = ssid
+	cur.Wifi.PSK = psk
+	if err := cur.ValidateConnectivity(); err != nil {
+		return err
+	}
+	return config.SaveConnectivity(s.cfgPath, cur)
+}
+
 // NeedsSetup reports whether first-boot setup still needs to run, i.e. no
 // admin password is stored yet. It must not go through ConfigRedacted:
 // config.Load validates internally and errors on a virgin or otherwise

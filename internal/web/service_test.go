@@ -279,6 +279,87 @@ func TestSetInitialPasswordBlankTokenKeepsStoredToken(t *testing.T) {
 	}
 }
 
+// TestSetupConnectivityHappyPath covers the AP-mode partial setup: WiFi
+// credentials plus an admin password, on a virgin device (no origin/token
+// collected here — that happens later at /config over LAN).
+func TestSetupConnectivityHappyPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	svc := newTestServiceAt(t, path)
+
+	if err := svc.SetupConnectivity("longenough1", "MyHomeWifi", "wifipassword1"); err != nil {
+		t.Fatalf("SetupConnectivity: %v", err)
+	}
+	stored, err := config.LoadRaw(path)
+	if err != nil {
+		t.Fatalf("stored config must parse: %v", err)
+	}
+	if !VerifyPassword(stored.Web.PasswordHash, "longenough1") {
+		t.Fatal("stored hash must verify")
+	}
+	if stored.Wifi.SSID != "MyHomeWifi" || stored.Wifi.PSK != "wifipassword1" {
+		t.Fatalf("wifi credentials not persisted: %+v", stored.Wifi)
+	}
+	if err := stored.ValidateConnectivity(); err != nil {
+		t.Fatalf("stored config must pass ValidateConnectivity: %v", err)
+	}
+}
+
+// TestSetupConnectivityBlankSSIDRejected pins the form-friendly message this
+// path uses instead of validateWifi's generic one — SSID is required here,
+// unlike the general config form where WiFi is optional.
+func TestSetupConnectivityBlankSSIDRejected(t *testing.T) {
+	svc := newTestServiceAt(t, filepath.Join(t.TempDir(), "config.json"))
+	err := svc.SetupConnectivity("longenough1", "", "wifipassword1")
+	if err == nil {
+		t.Fatal("blank ssid must be rejected")
+	}
+	if !strings.Contains(err.Error(), "wifi network name is required") {
+		t.Fatalf("expected blank-ssid message, got: %v", err)
+	}
+}
+
+// TestSetupConnectivityRejectsExistingPassword mirrors
+// TestSetInitialPasswordOnlyOnce: a device that already has an admin
+// password must refuse this path too.
+func TestSetupConnectivityRejectsExistingPassword(t *testing.T) {
+	svc, path := newTestService(t, validCfg())
+	if err := svc.SetInitialPassword("longenough1", "PAD", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetupConnectivity("another-pass", "MyHomeWifi", "wifipassword1"); err == nil {
+		t.Fatal("SetupConnectivity must be rejected once a password exists")
+	}
+	stored, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Wifi.SSID != "" {
+		t.Fatalf("rejected call must not persist wifi credentials, got %+v", stored.Wifi)
+	}
+}
+
+// TestSetupConnectivityShortPSKRejected pins that PSK length is enforced by
+// ValidateConnectivity's validateWifi call (8-63 chars), not a bespoke check.
+func TestSetupConnectivityShortPSKRejected(t *testing.T) {
+	svc := newTestServiceAt(t, filepath.Join(t.TempDir(), "config.json"))
+	err := svc.SetupConnectivity("longenough1", "MyHomeWifi", "short")
+	if err == nil {
+		t.Fatal("short psk must be rejected")
+	}
+	if !strings.Contains(err.Error(), "wifi.psk") {
+		t.Fatalf("expected wifi.psk message, got: %v", err)
+	}
+}
+
+// TestSetupConnectivityShortPasswordRejected mirrors SetInitialPassword's
+// admin-password length rule.
+func TestSetupConnectivityShortPasswordRejected(t *testing.T) {
+	svc := newTestServiceAt(t, filepath.Join(t.TempDir(), "config.json"))
+	if err := svc.SetupConnectivity("short", "MyHomeWifi", "wifipassword1"); err == nil {
+		t.Fatal("short admin password must be rejected")
+	}
+}
+
 // TestNeedsSetup covers the three states NeedsSetup must distinguish: a
 // virgin directory (no config file at all — config.Load's missing-file
 // fallback to Default() has an empty PasswordHash), a valid saved config with

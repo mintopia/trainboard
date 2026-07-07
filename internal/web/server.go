@@ -34,6 +34,23 @@ type basePage struct {
 type setupPageData struct {
 	basePage
 	Error string
+	// APMode selects setup.html's AP-mode content block (WiFi SSID/PSK +
+	// admin password, no origin/token) over the LAN-mode three-field form.
+	// Set from Service.Hotspot() != nil.
+	APMode bool
+	// LastError surfaces the most recent failed WiFi join (Service.LastSTAError)
+	// to a phone reconnecting to the hotspot after a bad attempt. Only
+	// rendered in the AP-mode block; always "" in LAN mode.
+	LastError string
+}
+
+// setupWifiDonePageData is setup_wifi_done.html's render data: the
+// credential-handoff page shown after a successful AP-mode partial setup.
+type setupWifiDonePageData struct {
+	basePage
+	// SSID is the network the board is about to attempt, named in the
+	// handoff copy so the user knows what to reconnect to if it fails.
+	SSID string
 }
 
 type loginPageData struct {
@@ -202,6 +219,8 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = setupTemplate
 	case "setupDone":
 		t = setupDoneTemplate
+	case "setupWifiDone":
+		t = setupWifiDoneTemplate
 	case "login":
 		t = loginTemplate
 	case "index":
@@ -249,30 +268,52 @@ func expireSessionCookie(w http.ResponseWriter) {
 	})
 }
 
+// handleSetupGet renders /setup: the LAN-mode three-field form (password,
+// origin, Darwin token) normally, or — while the connectivity manager
+// reports AP mode (Service.Hotspot() != nil) — the partial WiFi+password
+// form, with any previously-recorded STA join error surfaced for a phone
+// reconnecting to the hotspot after a failed attempt.
 func (s *Server) handleSetupGet(w http.ResponseWriter, _ *http.Request) {
-	s.render(w, "setup", setupPageData{})
+	s.render(w, "setup", setupPageData{
+		APMode:    s.svc.Hotspot() != nil,
+		LastError: s.svc.LastSTAError(),
+	})
 }
 
-// handleSetupPost validates and stores the submitted first-boot config
-// (admin password, origin, Darwin token) on success. Unlike the old
-// redirect-to-/ behaviour, a success does NOT hand the browser straight into
-// an authed "/" — this device was, until this call, running
-// runConfigErrorLoop's static E04 snapshot with no poller at all, so
-// something must actually restart the process for the newly-valid config to
-// take effect and E04 to clear. That is exactly what handleConfigPost's
-// scheduleApply() does for later config saves, so setup schedules the same
-// apply-by-restart here and renders a "setup done, restarting" page instead
-// of redirecting — mirroring handleConfigPost/handleActionsRestart's
-// render-then-scheduleApply shape rather than diverging from it. The session
-// cookie is still issued (harmless: it is an in-memory session that dies
-// with the process either way), so a browser that reloads before the restart
-// completes is still authed, and one that reloads after it lands on /login
-// per setupGate.
+// handleSetupPost validates and stores the submitted first-boot config on
+// success. It branches on AP mode (Service.Hotspot() != nil) at submit time,
+// matching whichever form handleSetupGet actually rendered:
+//
+//   - LAN mode (unchanged from before this AP-mode flow existed): admin
+//     password + origin + Darwin token. Unlike a redirect-to-/, a success does
+//     NOT hand the browser straight into an authed "/" — this device was,
+//     until this call, running runConfigErrorLoop's static E04 snapshot with
+//     no poller at all, so something must actually restart the process for
+//     the newly-valid config to take effect and E04 to clear. That is exactly
+//     what handleConfigPost's scheduleApply() does for later config saves, so
+//     setup schedules the same apply-by-restart here and renders a "setup
+//     done, restarting" page instead of redirecting — mirroring
+//     handleConfigPost/handleActionsRestart's render-then-scheduleApply shape
+//     rather than diverging from it. The session cookie is still issued
+//     (harmless: it is an in-memory session that dies with the process either
+//     way), so a browser that reloads before the restart completes is still
+//     authed, and one that reloads after it lands on /login per setupGate.
+//
+//   - AP mode: admin password + WiFi SSID/PSK only (see
+//     handleSetupPostAPMode) — no origin/token collected here, and
+//     deliberately NO scheduleApply/restart: the connectivity manager already
+//     re-reads STA credentials from disk on every join attempt (Task 4), so
+//     Service.WifiRetryNow alone is enough to make the new creds live.
 func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	if s.svc.Hotspot() != nil {
+		s.handleSetupPostAPMode(w, r)
+		return
+	}
+
 	pw := r.PostFormValue("password")
 	confirm := r.PostFormValue("confirm")
 	origin := strings.ToUpper(strings.TrimSpace(r.PostFormValue("origin")))
@@ -291,6 +332,36 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, tok)
 	s.render(w, "setupDone", basePage{LoggedIn: false, CSRF: csrfFrom(r)})
 	s.scheduleApply()
+}
+
+// handleSetupPostAPMode handles the AP-mode partial setup: admin password +
+// WiFi SSID/PSK, via Service.SetupConnectivity. On success it renders the
+// credential-handoff page (setup_wifi_done.html) — telling the user the
+// hotspot is about to drop — and only THEN, via scheduleWifiRetry (the same
+// render-then-time.AfterFunc shape as scheduleApply), calls
+// Service.WifiRetryNow, so the response reaches the phone before the AP
+// actually tears down. No session cookie is issued here: the browser is
+// about to lose its connection to this device's hotspot entirely, so an
+// AP-mode session cookie would just be dead weight; the LAN-side login that
+// finishes provisioning at /config happens fresh once the board rejoins the
+// network.
+func (s *Server) handleSetupPostAPMode(w http.ResponseWriter, r *http.Request) {
+	pw := r.PostFormValue("password")
+	confirm := r.PostFormValue("confirm")
+	ssid := strings.TrimSpace(r.PostFormValue("ssid"))
+	psk := r.PostFormValue("psk")
+
+	if pw != confirm {
+		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: "passwords do not match"})
+		return
+	}
+	if err := s.svc.SetupConnectivity(pw, ssid, psk); err != nil {
+		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: err.Error()})
+		return
+	}
+
+	s.render(w, "setupWifiDone", setupWifiDonePageData{basePage: basePage{CSRF: csrfFrom(r)}, SSID: ssid})
+	s.scheduleWifiRetry()
 }
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, _ *http.Request) {

@@ -2,6 +2,16 @@
 {{define "content"}}
 <h2>First-time setup</h2>
 {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{if .APMode}}
+{{if .LastError}}<p class="error">Previous attempt failed: {{.LastError}}</p>{{end}}
+<form method="post" action="/setup">
+  <label>WiFi network name (SSID) <input type="text" name="ssid" required maxlength="32"></label>
+  <label>WiFi password <input type="password" name="psk" required minlength="8" maxlength="63"></label>
+  <label>Admin password (min 8 chars) <input type="password" name="password" required minlength="8"></label>
+  <label>Confirm password <input type="password" name="confirm" required></label>
+  <button type="submit" class="primary">Save &amp; join WiFi — the hotspot will drop for ~20 seconds while the board tries your network. If it fails, rejoin the hotspot and this page will show the error.</button>
+</form>
+{{else}}
 <form method="post" action="/setup">
   <label>Admin password (min 8 chars) <input type="password" name="password" required minlength="8"></label>
   <label>Confirm password <input type="password" name="confirm" required></label>
@@ -9,4 +19,5 @@
   <label>Darwin API token (from the National Rail OpenLDBWS registration email) <input type="password" name="token" required autocomplete="off"></label>
   <button type="submit" class="primary">Save and continue</button>
 </form>
+{{end}}
 {{end}}
