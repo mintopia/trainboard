@@ -59,17 +59,21 @@ func TestScrollOffsetDefaultPause(t *testing.T) {
 	}
 }
 
-// TestScrollOffsetWraps: the offset reaches tw exactly at the blank wrap
-// tick, then the next tick resets to a fresh pause (offset 0 again).
+// TestScrollOffsetWraps: after the text fully scrolls out (offset tw) the
+// offset HOLDS there for a full end pause — blank, matching the reference's
+// 2s pause before reset — and only then wraps to a fresh start pause.
 func TestScrollOffsetWraps(t *testing.T) {
 	const tw, boxW, pause = 20, 10, 3
-	cycle := pause + tw + 1
+	cycle := pause + tw + pause // start pause + travel + end pause
 
 	if off := scrollOffset(tw, boxW, pause, pause+tw-1); off != tw-1 {
 		t.Fatalf("last visible tick: expected %d, got %d", tw-1, off)
 	}
 	if off := scrollOffset(tw, boxW, pause, pause+tw); off != tw {
-		t.Fatalf("blank wrap tick: expected offset %d, got %d", tw, off)
+		t.Fatalf("first blank tick: expected offset %d, got %d", tw, off)
+	}
+	if off := scrollOffset(tw, boxW, pause, pause+tw+pause-1); off != tw {
+		t.Fatalf("end pause must hold blank: expected %d, got %d", tw, off)
 	}
 	if off := scrollOffset(tw, boxW, pause, cycle); off != 0 {
 		t.Fatalf("wrapped tick: expected fresh pause (0), got %d", off)
@@ -147,9 +151,10 @@ func TestScrollingTextClipsToBox(t *testing.T) {
 	t.Run("near_exit", func(t *testing.T) { checkNoInkOutside(t, nearExitTick) })
 }
 
-// TestScrollingTextScrollsOutAndResets: at the blank wrap tick nothing is
-// drawn; at the next (wrapped) tick the text is back left-aligned, identical
-// to tick 0.
+// TestScrollingTextScrollsOutAndResets: once the text has fully scrolled out
+// it stays blank for a whole end pause (reference parity: pause after
+// finishing the scroll, before resetting), then the wrapped tick is back
+// left-aligned, identical to tick 0.
 func TestScrollingTextScrollsOutAndResets(t *testing.T) {
 	const boxX, boxW, pause = 42, 214, 5
 	f := mustFont(t, RegularTTF, 10)
@@ -160,22 +165,24 @@ func TestScrollingTextScrollsOutAndResets(t *testing.T) {
 		return &ScrollingText{Font: f, Text: text, X: boxX, Y: 0, W: boxW, H: 12, Level: 15, PauseTicks: pause}
 	}
 
-	blankTick := pause + tw
-	fbBlank := New(256, 12)
-	newEl().Render(fbBlank, blankTick, time.Time{})
-	for i, v := range fbBlank.Pix {
-		if v != 0 {
-			t.Fatalf("blank wrap tick %d: expected nothing drawn, pixel %d = %d", blankTick, i, v)
+	// Blank throughout the end pause: first blank tick and last blank tick.
+	for _, blankTick := range []int{pause + tw, pause + tw + pause - 1} {
+		fbBlank := New(256, 12)
+		newEl().Render(fbBlank, blankTick, time.Time{})
+		for i, v := range fbBlank.Pix {
+			if v != 0 {
+				t.Fatalf("end-pause tick %d: expected nothing drawn, pixel %d = %d", blankTick, i, v)
+			}
 		}
 	}
 
 	fb0 := New(256, 12)
 	newEl().Render(fb0, 0, time.Time{})
 	fbWrapped := New(256, 12)
-	newEl().Render(fbWrapped, blankTick+1, time.Time{})
+	newEl().Render(fbWrapped, pause+tw+pause, time.Time{}) // cycle start
 	for i := range fb0.Pix {
 		if fb0.Pix[i] != fbWrapped.Pix[i] {
-			t.Fatalf("wrapped tick %d differs from tick 0 at pixel %d: %d != %d", blankTick+1, i, fbWrapped.Pix[i], fb0.Pix[i])
+			t.Fatalf("wrapped tick %d differs from tick 0 at pixel %d: %d != %d", pause+tw+pause, i, fbWrapped.Pix[i], fb0.Pix[i])
 		}
 	}
 }
