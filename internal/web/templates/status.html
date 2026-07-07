@@ -10,7 +10,7 @@
   </script>
 </section>
 <dl class="facts">
-  <dt>State</dt><dd>{{.Status.State}}{{if .Status.Fault}} ({{.Status.Fault}}){{end}}</dd>
+  <dt>State</dt><dd class="state">{{.Status.State}}{{if .Status.Fault}} ({{.Status.Fault}}){{end}}</dd>
   <dt>Version</dt><dd>{{.Status.Version}}</dd>
   <dt>Uptime</dt><dd>{{.UptimeText}}</dd>
   <dt>Last fetch</dt><dd>{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</dd>

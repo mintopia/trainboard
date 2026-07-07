@@ -198,6 +198,7 @@ dl.facts {
 
 dl.facts dt { color: var(--amber-dim); }
 dl.facts dd { margin: 0; min-width: 0; color: var(--amber); overflow-wrap: anywhere; }
+dl.facts dd.state { font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
 
 /* Panel preview */
 .panel-preview { margin: 0 0 1.5rem; }
