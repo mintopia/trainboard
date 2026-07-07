@@ -7,6 +7,9 @@ Description=Train departure board
 # No After=network-online.target on purpose.
 
 [Service]
+# The embedded admin/config web UI listens on :80 by default (--http flag);
+# User=root above is what makes binding that port possible without extra
+# capability grants — see docs/deploy.md.
 ExecStart=/usr/local/bin/trainboard --production
 Restart=always
 RestartSec=2
