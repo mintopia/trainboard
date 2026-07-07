@@ -33,7 +33,10 @@ func TestFixtureFetcherLoadsBoardAndFreshensGeneratedAt(t *testing.T) {
 	// Each fetch returns an independent copy (published snapshots are immutable).
 	b2, _ := f.Fetch(context.Background(), data.Request{})
 	b.Departures[0].Platform = "MUTATED"
-	if b2.Departures[0].Platform == "MUTATED" || func() bool { b3, _ := f.Fetch(context.Background(), data.Request{}); return b3.Departures[0].Platform == "MUTATED" }() {
+	if b2.Departures[0].Platform == "MUTATED" || func() bool {
+		b3, _ := f.Fetch(context.Background(), data.Request{})
+		return b3.Departures[0].Platform == "MUTATED"
+	}() {
 		t.Fatal("fixture fetches must not alias each other")
 	}
 }
