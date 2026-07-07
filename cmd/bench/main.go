@@ -16,8 +16,8 @@ func main() {
 	frames := flag.Int("frames", 300, "frames per measurement")
 	hz := flag.Int64("hz", 16_000_000, "SPI clock in Hz")
 	spiPort := flag.String("spi", "SPI0.0", "SPI port name")
-	dc := flag.String("dc", "GPIO25", "D/C GPIO pin")
-	rst := flag.String("rst", "GPIO27", "reset GPIO pin")
+	dc := flag.String("dc", "GPIO24", "D/C GPIO pin")
+	rst := flag.String("rst", "GPIO25", "reset GPIO pin")
 	flag.Parse()
 
 	tr, err := display.OpenPeriph(display.PeriphConfig{SPIPort: *spiPort, DCPin: *dc, ResetPin: *rst, MaxHz: *hz})
