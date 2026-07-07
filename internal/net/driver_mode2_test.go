@@ -83,7 +83,7 @@ func TestMode2DriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	}
 
 	want := []string{
-		"wpa_cli -i wlan0 status",             // daemon check (already running)
+		"wpa_cli -i wlan0 status",              // daemon check (already running)
 		"wpa_cli -i wlan0 reconfigure",         // conf changed, reload
 		"wpa_cli -i wlan0 select_network 1",    // AP is network id 1
 		"wpa_cli -i wlan0 status",              // poll: satisfied first try
