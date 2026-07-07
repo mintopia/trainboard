@@ -52,14 +52,14 @@ func NewService(cfgPath string, src Sources, act Actions, log *slog.Logger) *Ser
 
 // StatusData is everything the status page/endpoint shows.
 type StatusData struct {
-	Version     string
-	Uptime      time.Duration
-	State       string
-	Fault       string
-	LastFetch   time.Time
-	HasSnapshot bool
-	IPs         []string
-	Events      []obs.Event
+	Version       string
+	Uptime        time.Duration
+	State         string
+	Fault         string
+	LastFetch     time.Time
+	HasSnapshot   bool
+	IPs           []string
+	Events        []obs.Event
 	SoakRemaining time.Duration
 }
 
