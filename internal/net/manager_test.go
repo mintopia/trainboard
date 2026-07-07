@@ -220,6 +220,87 @@ func TestManagerToSTANoWifiConfiguredReturnsSentinelWithoutDriver(t *testing.T) 
 	}
 }
 
+// withShrunkSTAAttemptBound temporarily shrinks the package-level
+// staAttemptBound so a test can exercise a real (deadline-based) timeout
+// without waiting out the production 45s, restoring it on cleanup.
+func withShrunkSTAAttemptBound(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := staAttemptBound
+	staAttemptBound = d
+	t.Cleanup(func() { staAttemptBound = orig })
+}
+
+// TestManagerToSTABoundsAttemptAndClassifiesTimeoutAsOrdinaryFailure is the
+// failing-first TDD test for the "bounded STA attempt" review finding: a
+// fakeDriver.AttemptSTA that only returns once ITS ctx dies must not be able
+// to hang toSTA past staAttemptBound, and the resulting error must be
+// timeout-flavoured while leaving the parent (caller's) ctx untouched.
+func TestManagerToSTABoundsAttemptAndClassifiesTimeoutAsOrdinaryFailure(t *testing.T) {
+	withShrunkSTAAttemptBound(t, 10*time.Millisecond)
+
+	driver := &fakeDriver{attemptSTABlockUntilCtxDone: true}
+	dnsmasq, _ := newTestDnsmasq()
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		Prereqs: func(context.Context) error { return nil },
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+	})
+
+	parentCtx := context.Background()
+	start := time.Now()
+	err := m.toSTA(parentCtx)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("toSTA took %v, want bounded by the shrunk staAttemptBound", elapsed)
+	}
+	if err == nil {
+		t.Fatal("toSTA() err = nil, want a timeout-flavoured error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("toSTA() err = %v, want context.DeadlineExceeded (timeout, not cancellation)", err)
+	}
+	if parentCtx.Err() != nil {
+		t.Fatalf("parent ctx.Err() = %v, want nil — only toSTA's internal attempt ctx should have timed out", parentCtx.Err())
+	}
+}
+
+// TestManagerRunSTAAttemptTimeoutFallsBackToAPNotCancellation confirms Run
+// treats a bounded-attempt timeout as an ordinary STA failure (falling back
+// to AP), never confusing it with the parent-ctx-cancellation path that
+// d23a7d7 already covers (TestManagerRunCtxCancelMidSTAAttemptReturnsCleanly,
+// which must stay green and is deliberately left untouched by this fix).
+func TestManagerRunSTAAttemptTimeoutFallsBackToAPNotCancellation(t *testing.T) {
+	withShrunkSTAAttemptBound(t, 10*time.Millisecond)
+
+	driver := &fakeDriver{attemptSTABlockUntilCtxDone: true, apActiveDefault: true}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-T", Addr: "192.168.4.1/24"},
+		After:   (&fakeAfter{}).After,
+		Now:     time.Now,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManagerAsync(ctx, m)
+
+	// If the timeout were misclassified as parent-ctx cancellation, Run
+	// would return nil almost immediately instead of ever publishing
+	// APFallback; waitForState's own deadline catches that.
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
+
+	cancel()
+	if err := waitRunDone(t, done); err != nil {
+		t.Fatalf("Run() err = %v, want nil", err)
+	}
+}
+
 func TestManagerToAPHappyPathPublishesAPFallback(t *testing.T) {
 	driver := &fakeDriver{apActiveDefault: true}
 	dnsmasq, _ := newTestDnsmasq()
@@ -388,6 +469,15 @@ func (c *fakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
+}
+
+// Advance moves the fake clock forward by d, mutex-guarded — used to
+// simulate real elapsed time for waitAPFallback's Now-tracked remaining
+// budget without waiting it out.
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
 }
 
 // runnerRecordingInto wraps a Runner and additionally records recognisable
@@ -587,7 +677,11 @@ func TestManagerRunFullFallbackRetrySuccessCycle(t *testing.T) {
 
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
+	// waitAPFallback wakes on a 30s heartbeat cadence well before the full
+	// 5-minute budget — advance the fake clock past the budget so this wake
+	// is recognised as the real retry timeout, not another heartbeat tick.
 	timer := after.nth(t, 1)
+	clock.Advance(apFallbackRetryWait)
 	fire(t, timer)
 
 	// StopAP blocks (stopAPBlock), so by the time it's recorded the
@@ -647,7 +741,10 @@ func TestManagerRunRetryFailureRestoresAP(t *testing.T) {
 
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
+	// See TestManagerRunFullFallbackRetrySuccessCycle: advance past the
+	// heartbeat-tracked budget so this wake is the real retry timeout.
 	timer := after.nth(t, 1)
+	clock.Advance(apFallbackRetryWait)
 	fire(t, timer)
 
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback && s.LastSTAErr != "" })
@@ -690,7 +787,12 @@ func TestManagerRunSuppressesRetryDuringActiveProvisioning(t *testing.T) {
 
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
+	// See TestManagerRunFullFallbackRetrySuccessCycle: advance past the
+	// heartbeat-tracked budget so this wake is the real retry timeout, then
+	// note provisioning against that same (advanced) "now" so it's still
+	// well inside the suppression window.
 	timer := after.nth(t, 1)
+	clock.Advance(apFallbackRetryWait)
 	m.NoteProvisioning(clock.Now())
 	fire(t, timer)
 
@@ -913,5 +1015,120 @@ func TestManagerRunCallsBeatEveryLoopIteration(t *testing.T) {
 	beatMu.Unlock()
 	if got < 3 {
 		t.Fatalf("Beat called %d times, want at least 3 (boot + two online-wait iterations)", got)
+	}
+}
+
+// --- watchdog reboot loop fix: waitAPFallback heartbeats -------------------
+
+// TestManagerWaitAPFallbackBeatsOnHeartbeatWithoutConsumingRetryBudget is the
+// failing-first TDD test for the AP-fallback watchdog reboot loop: a manager
+// parked in waitAPFallback is healthy and must keep beating well inside the
+// watchdog's deadline, without that heartbeat cadence itself triggering the
+// 5-minute STA retry early. Firing ONLY heartbeat ticks (never advancing the
+// fake clock anywhere near apFallbackRetryWait) must raise the Beat count
+// while waitAPFallback stays blocked (no retry, no cancellation).
+func TestManagerWaitAPFallbackBeatsOnHeartbeatWithoutConsumingRetryBudget(t *testing.T) {
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
+	var beats atomic.Int32
+
+	m := NewManager(ManagerDeps{
+		Now:   clock.Now,
+		After: after.After,
+		Beat:  func() { beats.Add(1) },
+	})
+
+	type result struct{ viaRetry, cancelled bool }
+	resultCh := make(chan result, 1)
+	go func() {
+		viaRetry, cancelled := m.waitAPFallback(context.Background())
+		resultCh <- result{viaRetry, cancelled}
+	}()
+
+	// Fire several heartbeat ticks without ever advancing the clock: with a
+	// frozen Now, every wake looks like "well short of the budget" and must
+	// be treated as a mere heartbeat (Beat + re-enter the wait), never the
+	// real 5-minute timeout.
+	const ticks = 5
+	for i := 1; i <= ticks; i++ {
+		fire(t, after.nth(t, i))
+	}
+	waitForCond(t, func() bool { return beats.Load() >= ticks })
+
+	select {
+	case res := <-resultCh:
+		t.Fatalf("waitAPFallback returned early (viaRetry=%v cancelled=%v) after only %d heartbeat ticks; want it still blocked", res.viaRetry, res.cancelled, ticks)
+	default:
+	}
+
+	// Confirm it is genuinely still parked waiting for a further After()
+	// call (i.e. it re-entered the wait loop) rather than having returned
+	// through some other path undetected above.
+	after.nth(t, ticks+1)
+}
+
+// TestManagerRunHeartbeatTicksDuringAPWaitDontBypassSuppression drives the
+// full Run loop through several heartbeat ticks (Beat rising, no retry
+// sequence started), then genuinely reaches the 5-minute mark while a
+// provisioning session is active — asserting the intervening heartbeat wakes
+// neither reset nor bypass the existing provisioning-suppression semantics
+// (TestManagerRunSuppressesRetryDuringActiveProvisioning's contract).
+func TestManagerRunHeartbeatTicksDuringAPWaitDontBypassSuppression(t *testing.T) {
+	driver := &fakeDriver{apActiveDefault: true}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(1_700_000_000, 0))
+	var beats atomic.Int32
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{} }, // no wifi -> straight to AP
+		AP:      APConfig{SSID: "Trainboard-J", Addr: "192.168.4.1/24"},
+		Beat:    func() { beats.Add(1) },
+		Now:     clock.Now,
+		After:   after.After,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManagerAsync(ctx, m)
+
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
+
+	// Two heartbeat ticks (clock never advanced): Beat rises, but the retry
+	// sequence (StopAP) must never start from these alone.
+	fire(t, after.nth(t, 1))
+	fire(t, after.nth(t, 2))
+	waitForCond(t, func() bool { return beats.Load() >= 2 })
+
+	for _, c := range driver.Calls() {
+		if c == "StopAP" {
+			t.Fatalf("StopAP called after mere heartbeat ticks: %v", driver.Calls())
+		}
+	}
+
+	// Now genuinely reach the 5-minute mark while provisioning is active:
+	// suppression must still apply, unweakened by the intervening heartbeat
+	// wakes.
+	timer := after.nth(t, 3)
+	clock.Advance(apFallbackRetryWait)
+	m.NoteProvisioning(clock.Now())
+	fire(t, timer)
+
+	after.nth(t, 4) // suppressed: Run looped back and is waiting again.
+
+	for _, c := range driver.Calls() {
+		if c == "StopAP" {
+			t.Fatalf("StopAP called despite suppression: %v", driver.Calls())
+		}
+	}
+	if got := m.Status(); got.State != ManagerAPFallback || got.Hotspot == nil {
+		t.Fatalf("Status = %+v, want unchanged ManagerAPFallback", got)
+	}
+
+	cancel()
+	if err := waitRunDone(t, done); err != nil {
+		t.Fatalf("Run() err = %v, want nil", err)
 	}
 }

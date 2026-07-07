@@ -148,11 +148,27 @@ const (
 	// apFallbackRetryWait is how long Run waits between STA retry attempts
 	// while ManagerAPFallback, absent a RetryNow nudge.
 	apFallbackRetryWait = 5 * time.Minute
+	// apFallbackHeartbeatInterval is the cadence at which waitAPFallback
+	// wakes up to call Beat while it's still short of apFallbackRetryWait —
+	// otherwise a manager parked in AP fallback (a perfectly healthy state)
+	// would go stale past the watchdog's managerBeatDeadline (cmd/trainboard
+	// wiring: 90s at the time of writing) and get rebooted by systemd every
+	// apFallbackRetryWait, wrecking provisioning. Must stay comfortably below
+	// managerBeatDeadline; see connectivity.go's arithmetic comment.
+	apFallbackHeartbeatInterval = 30 * time.Second
 	// provisioningSuppressWindow: a NoteProvisioning call within this long of
 	// a scheduled retry wake suppresses that cycle. RetryNow always bypasses
 	// it — the operator explicitly asked to retry right now.
 	provisioningSuppressWindow = 90 * time.Second
 )
+
+// staAttemptBound caps the AttemptSTA + Check.Evaluate transition inside
+// toSTA (M3a spec: "bounded STA attempt, ≤45s through the layers") — without
+// it, a hanging dhclient or an unbounded DNS LookupHost can block the run
+// loop indefinitely, well past the watchdog heartbeat deadline. A package
+// variable rather than a plain const purely so tests can shrink it instead
+// of waiting out the real 45s; production wiring never touches it.
+var staAttemptBound = 45 * time.Second
 
 // managerPhase tracks Run's own loop position; distinct from the published
 // Status (which is what callers such as the render loop or web UI observe).
@@ -329,16 +345,43 @@ func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 	return phaseAPWait, false, nil
 }
 
-// waitAPFallback blocks for apFallbackRetryWait, an immediate RetryNow nudge
-// (buffered-1, drained here by the receive itself), or ctx cancellation.
+// waitAPFallback blocks for up to apFallbackRetryWait, an immediate RetryNow
+// nudge (buffered-1, drained here by the receive itself), or ctx
+// cancellation — whichever comes first.
+//
+// A manager parked here is healthy (the AP is up and verified), but the
+// 5-minute budget alone is far longer than the watchdog's managerBeatDeadline
+// (Beat is otherwise only called once per Run loop iteration, at the top),
+// so this wakes on an apFallbackHeartbeatInterval cadence to call Beat and
+// re-enter the wait — tracking the remaining budget via m.d.Now (the
+// injected-clock seam, matching suppressed()) rather than consuming it. Each
+// heartbeat wake is otherwise inert: it does not touch suppression state and
+// is indistinguishable to the caller from having simply not woken yet.
 func (m *Manager) waitAPFallback(ctx context.Context) (viaRetry, cancelled bool) {
-	select {
-	case <-ctx.Done():
-		return false, true
-	case <-m.retry:
-		return true, false
-	case <-m.d.After(apFallbackRetryWait):
-		return false, false
+	start := m.d.Now()
+	for {
+		remaining := apFallbackRetryWait - m.d.Now().Sub(start)
+		if remaining < 0 {
+			remaining = 0
+		}
+		wait := remaining
+		if wait > apFallbackHeartbeatInterval {
+			wait = apFallbackHeartbeatInterval
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, true
+		case <-m.retry:
+			return true, false
+		case <-m.d.After(wait):
+			if m.d.Now().Sub(start) >= apFallbackRetryWait {
+				return false, false
+			}
+			if m.d.Beat != nil {
+				m.d.Beat()
+			}
+		}
 	}
 }
 
@@ -382,6 +425,16 @@ func (m *Manager) cleanupOnCancel() {
 // full success. Any failure is returned so the caller (Task 9) decides
 // whether to fall back to AP. Returns errNoWifiConfigured without touching
 // Prereqs or the driver if no SSID is configured.
+//
+// AttemptSTA and Check.Evaluate run under a child context bounded to
+// staAttemptBound (45s) — a hanging dhclient or an unbounded DNS lookup must
+// not be able to block the run loop indefinitely. The child is derived from
+// ctx (the caller's, ultimately Run's) so parent cancellation still
+// propagates immediately, but a plain attempt-bound timeout only ever
+// expires the CHILD: callers must keep checking the parent ctx (not any
+// context toSTA constructs) to tell clean shutdown apart from an ordinary
+// STA failure — see runBoot/runOnlineWait/runAPWait's ctx.Err() checks,
+// which already do this correctly since they only ever see the parent.
 func (m *Manager) toSTA(ctx context.Context) error {
 	sta := m.d.STA()
 	if sta.SSID == "" {
@@ -395,12 +448,15 @@ func (m *Manager) toSTA(ctx context.Context) error {
 		}
 	}
 
-	if err := m.d.Driver.AttemptSTA(ctx, sta); err != nil {
+	attemptCtx, cancel := context.WithTimeout(ctx, staAttemptBound)
+	defer cancel()
+
+	if err := m.d.Driver.AttemptSTA(attemptCtx, sta); err != nil {
 		m.publish(Status{State: ManagerSTAConnecting, LastSTAErr: err.Error()})
 		return err
 	}
 
-	stage, err := m.d.Check.Evaluate(ctx)
+	stage, err := m.d.Check.Evaluate(attemptCtx)
 	if stage != StageOK {
 		m.publish(Status{State: ManagerSTAConnecting, Stage: stage, LastSTAErr: err.Error()})
 		return err

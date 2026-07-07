@@ -36,7 +36,23 @@ const (
 	captiveProbeURL = "http://connectivitycheck.gstatic.com/generate_204"
 	// managerBeatDeadline is the watchdog liveness window for the
 	// connectivity manager's Run loop (Task 12 wiring rules).
-	managerBeatDeadline = 90 * time.Second
+	//
+	// Beat is called once per Run loop iteration, plus internally by
+	// waitAPFallback every 30s while merely waiting in AP fallback — so the
+	// binding case is the worst-case gap around a single STARetry-phase
+	// iteration (runAPWait, once waitAPFallback's budget is up): the final
+	// leftover leg of that 30s heartbeat cadence (<=30s) is immediately
+	// followed by StopAP (~5s) + Dnsmasq.Stop (~5s) + a toSTA attempt
+	// (Prereqs ~5s + the enforced staAttemptBound of 45s) + a toAP restore
+	// that may retry once internally (~30s) — none of Beat again until that
+	// whole chain finishes and Run loops back to the top:
+	//   30 (wait remainder) + 5 (StopAP) + 5 (Dnsmasq.Stop)
+	//   + 5 (Prereqs) + 45 (staAttemptBound) + 30 (toAP restore w/ retry)
+	//   = 120s worst case.
+	// 90s would already be exceeded by that chain alone, so this is bumped
+	// to 150s (~30s margin over the 120s worst case) rather than adding yet
+	// another mid-chain beat.
+	managerBeatDeadline = 150 * time.Second
 	// httpProbeTimeout bounds the captive-portal probe request.
 	httpProbeTimeout = 10 * time.Second
 )
