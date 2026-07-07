@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -427,5 +428,68 @@ func TestAPIRateLimitedRespondsJSON(t *testing.T) {
 	// here, so it must also set nosniff on the rewritten response (N7).
 	if xcto := lastRec.Header().Get("X-Content-Type-Options"); xcto != "nosniff" {
 		t.Fatalf("X-Content-Type-Options = %q, want nosniff", xcto)
+	}
+}
+
+func TestAPISoakStartCancelAndStatus(t *testing.T) {
+	srv, svc, _, _ := newConfigTestServer(t)
+	h := srv.Handler()
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	do := func(method, path string, body []byte) *httptest.ResponseRecorder {
+		var r io.Reader
+		if body != nil {
+			r = bytes.NewReader(body)
+		}
+		req := httptest.NewRequest(method, path, r)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", csrf)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Invalid duration: 400 with the uniform error shape.
+	rec := do(http.MethodPost, "/api/actions/soak", []byte(`{"duration":"90m"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid duration: got %d, want 400", rec.Code)
+	}
+	var apiErr struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &apiErr); err != nil || apiErr.Error == "" {
+		t.Fatalf("invalid duration: body %q is not the {\"error\":...} shape", rec.Body.String())
+	}
+
+	// Valid start.
+	rec = do(http.MethodPost, "/api/actions/soak", []byte(`{"duration":"1h"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start: got %d body %q, want 200", rec.Code, rec.Body.String())
+	}
+	if got := svc.SoakRemaining(); got != time.Hour {
+		t.Fatalf("SoakRemaining = %v, want 1h", got)
+	}
+
+	// Status reflects it.
+	rec = do(http.MethodGet, "/api/status", nil)
+	var st struct {
+		SoakActive    bool   `json:"soakActive"`
+		SoakRemaining string `json:"soakRemaining"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.SoakActive || st.SoakRemaining != "1h0m0s" {
+		t.Fatalf("status: soakActive=%v soakRemaining=%q, want true / 1h0m0s", st.SoakActive, st.SoakRemaining)
+	}
+
+	// Cancel.
+	rec = do(http.MethodPost, "/api/actions/soak/cancel", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel: got %d, want 200", rec.Code)
+	}
+	if got := svc.SoakRemaining(); got != 0 {
+		t.Fatalf("after cancel: SoakRemaining = %v, want 0", got)
 	}
 }

@@ -99,6 +99,10 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 	s.mux.Handle("POST /api/actions/reboot", chain(http.HandlerFunc(s.handleAPIActionsReboot),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/soak", chain(http.HandlerFunc(s.handleAPIActionsSoak),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/soak/cancel", chain(http.HandlerFunc(s.handleAPIActionsSoakCancel),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 
 	return s
 }
