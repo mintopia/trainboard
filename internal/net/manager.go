@@ -141,11 +141,221 @@ func (m *Manager) NoteProvisioning(now time.Time) {
 	m.provMu.Unlock()
 }
 
+const (
+	// onlineRecheckInterval is how often Run re-verifies connectivity while
+	// ManagerOnline, via a cheap direct Check.Evaluate (not a full toSTA).
+	onlineRecheckInterval = 30 * time.Second
+	// apFallbackRetryWait is how long Run waits between STA retry attempts
+	// while ManagerAPFallback, absent a RetryNow nudge.
+	apFallbackRetryWait = 5 * time.Minute
+	// provisioningSuppressWindow: a NoteProvisioning call within this long of
+	// a scheduled retry wake suppresses that cycle. RetryNow always bypasses
+	// it — the operator explicitly asked to retry right now.
+	provisioningSuppressWindow = 90 * time.Second
+)
+
+// managerPhase tracks Run's own loop position; distinct from the published
+// Status (which is what callers such as the render loop or web UI observe).
+type managerPhase int
+
+const (
+	phaseBoot managerPhase = iota
+	phaseOnlineWait
+	phaseAPWait
+)
+
 // Run drives the full boot -> STA/AP -> retry state machine until ctx is
-// cancelled. Implemented by Task 9; for now it simply blocks on ctx.
+// cancelled:
+//
+//  1. Boot: attempt toSTA once. On success, move to the online watch. On any
+//     failure (including errNoWifiConfigured), fall back to toAP.
+//  2. Online watch: every onlineRecheckInterval, re-run the cheap layered
+//     Check directly; on failure, attempt one full toSTA reattempt; if that
+//     also fails, fall back to toAP.
+//  3. AP fallback: every apFallbackRetryWait (or immediately on RetryNow),
+//     tear the AP down and retry STA — unless a recent NoteProvisioning
+//     suppresses the cycle (RetryNow always bypasses suppression). A failed
+//     retry restores the AP, recording LastSTAErr from the STA failure.
+//
+// Escalation: toAP already retries once internally (Task 8's toAP/attemptAP
+// pair). If that still fails here — at boot, after a failed online-watch
+// reattempt, or after a failed AP-fallback retry — Run returns a non-nil
+// error instead of ever calling Beat again. There is no safe software
+// recovery from "neither STA nor a verified AP will come up"; the caller
+// (cmd, Task 11) treats a Run exit as fatal to the watchdog heartbeat and
+// lets the hardware watchdog reboot the device.
+//
+// ctx cancellation is checked at the top of every iteration and inside every
+// wait; Run then returns nil, best-effort tearing the AP down (Driver.StopAP
+// + Dnsmasq.Stop) if it was up when cancelled — the device is shutting down
+// or restarting, not failing.
 func (m *Manager) Run(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
+	phase := phaseBoot
+	for {
+		select {
+		case <-ctx.Done():
+			m.cleanupOnCancel()
+			return nil
+		default:
+		}
+		if m.d.Beat != nil {
+			m.d.Beat()
+		}
+
+		switch phase {
+		case phaseBoot:
+			next, err := m.runBoot(ctx)
+			if err != nil {
+				return err
+			}
+			phase = next
+
+		case phaseOnlineWait:
+			next, cancelled, err := m.runOnlineWait(ctx)
+			if cancelled {
+				m.cleanupOnCancel()
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			phase = next
+
+		case phaseAPWait:
+			next, cancelled, err := m.runAPWait(ctx)
+			if cancelled {
+				m.cleanupOnCancel()
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			phase = next
+		}
+	}
+}
+
+// runBoot performs the single boot-time STA attempt, falling back to AP on
+// any failure (errNoWifiConfigured or a layered check failure).
+func (m *Manager) runBoot(ctx context.Context) (managerPhase, error) {
+	if err := m.toSTA(ctx); err == nil {
+		return phaseOnlineWait, nil
+	}
+	if err := m.toAP(ctx); err != nil {
+		return phaseBoot, fmt.Errorf("net: manager: boot: AP fallback failed: %w", err)
+	}
+	return phaseAPWait, nil
+}
+
+// runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
+// re-checks connectivity: a cheap direct Check.Evaluate first, escalating to
+// a full toSTA reattempt and finally toAP on repeated failure.
+func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error) {
+	select {
+	case <-ctx.Done():
+		return phaseOnlineWait, true, nil
+	case <-m.d.After(onlineRecheckInterval):
+	}
+
+	if stage, _ := m.d.Check.Evaluate(ctx); stage == StageOK {
+		return phaseOnlineWait, false, nil
+	}
+
+	if err := m.toSTA(ctx); err == nil {
+		return phaseOnlineWait, false, nil
+	}
+
+	if err := m.toAP(ctx); err != nil {
+		return phaseOnlineWait, false, fmt.Errorf("net: manager: online watch: AP fallback failed: %w", err)
+	}
+	return phaseAPWait, false, nil
+}
+
+// runAPWait waits apFallbackRetryWait (or an immediate RetryNow nudge, or
+// ctx cancellation), applies the provisioning-suppression rule, and — unless
+// suppressed — tears the AP down and retries STA once, restoring the AP
+// (with LastSTAErr recorded) on failure.
+func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
+	viaRetry, cancelled := m.waitAPFallback(ctx)
+	if cancelled {
+		return phaseAPWait, true, nil
+	}
+
+	if !viaRetry && m.suppressed() {
+		if m.d.Log != nil {
+			m.d.Log.Info("net: manager: suppressing scheduled STA retry (provisioning in progress)")
+		}
+		return phaseAPWait, false, nil
+	}
+
+	m.publish(Status{State: ManagerSTARetry})
+	if m.d.Dnsmasq != nil {
+		_ = m.d.Dnsmasq.Stop(ctx)
+	}
+	if m.d.Driver != nil {
+		_ = m.d.Driver.StopAP(ctx)
+	}
+
+	staErr := m.toSTA(ctx)
+	if staErr == nil {
+		return phaseOnlineWait, false, nil
+	}
+
+	if err := m.toAP(ctx); err != nil {
+		return phaseAPWait, false, fmt.Errorf("net: manager: AP fallback retry: AP restore failed: %w", err)
+	}
+
+	cur := m.Status()
+	cur.LastSTAErr = staErr.Error()
+	m.publish(cur)
+	return phaseAPWait, false, nil
+}
+
+// waitAPFallback blocks for apFallbackRetryWait, an immediate RetryNow nudge
+// (buffered-1, drained here by the receive itself), or ctx cancellation.
+func (m *Manager) waitAPFallback(ctx context.Context) (viaRetry, cancelled bool) {
+	select {
+	case <-ctx.Done():
+		return false, true
+	case <-m.retry:
+		return true, false
+	case <-m.d.After(apFallbackRetryWait):
+		return false, false
+	}
+}
+
+// suppressed reports whether NoteProvisioning was called within
+// provisioningSuppressWindow of m.d.Now (falling back to the real clock if
+// Now is unset, which only happens in incomplete production wiring — every
+// test seam sets it).
+func (m *Manager) suppressed() bool {
+	m.provMu.Lock()
+	at := m.provAt
+	m.provMu.Unlock()
+	if at.IsZero() {
+		return false
+	}
+	now := time.Now()
+	if m.d.Now != nil {
+		now = m.d.Now()
+	}
+	return now.Sub(at) < provisioningSuppressWindow
+}
+
+// cleanupOnCancel best-effort tears the AP down on ctx cancellation, if it
+// was up — the device is shutting down or restarting, not failing, so
+// errors here are not actionable.
+func (m *Manager) cleanupOnCancel() {
+	if m.Status().State != ManagerAPFallback {
+		return
+	}
+	bg := context.Background()
+	if m.d.Driver != nil {
+		_ = m.d.Driver.StopAP(bg)
+	}
+	if m.d.Dnsmasq != nil {
+		_ = m.d.Dnsmasq.Stop(bg)
+	}
 }
 
 // toSTA attempts the configured client network end to end: Prereqs, then
