@@ -128,6 +128,17 @@ func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) stri
 	return pw
 }
 
+// wifiCountry returns the regulatory country to configure the radio with:
+// the config's own value when set, defaulting to "GB" (matching
+// config.Default() and config.WifiConfig.Country's documented consumer-side
+// default) for a config predating this field or one that cleared it.
+func wifiCountry(cfg config.Config) string {
+	if cfg.Wifi.Country == "" {
+		return "GB"
+	}
+	return cfg.Wifi.Country
+}
+
 // staFromDisk returns a closure that reads config.LoadRaw(cfgPath) on EVERY
 // call, extracting and returning its STA credentials (SSID and PSK). This
 // enables the credential-handoff flow: portal saves new WiFi creds, then
@@ -205,8 +216,9 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 		Password: resolveAPPassword(cfg, cfgPath, log),
 		Addr:     "192.168.4.1/24",
 	}
+	country := wifiCountry(cfg)
 	runner := netconn.NewExecRunner()
-	driver := netconn.NewMode2Driver(runner, wlanIface, nil, nil)
+	driver := netconn.NewMode2Driver(runner, wlanIface, country, nil, nil)
 	check := netconn.NewCheck(runner, wlanIface, darwinProbeHost, captiveProbeURL, httpGetProbe)
 	dnsmasq := netconn.NewDnsmasq(runner, writeFile)
 
@@ -215,7 +227,7 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 		Check:   check,
 		Dnsmasq: dnsmasq,
 		Prereqs: func(pctx context.Context) error {
-			return netconn.CheckPrereqs(pctx, runner, os.ReadFile, writeFile, filepath.Glob)
+			return netconn.CheckPrereqs(pctx, runner, country, os.ReadFile, writeFile, filepath.Glob)
 		},
 		AP:       ap,
 		STA:      sta,

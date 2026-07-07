@@ -64,6 +64,28 @@ func TestMacTailShortStillCombinesLastTwoParts(t *testing.T) {
 	}
 }
 
+// TestWifiCountryDefaultsToGBWhenUnset proves startConnectivityManager's
+// country-resolution helper falls back to GB for a config whose Wifi.Country
+// hasn't been set (old config document, or fresh Default()), matching the
+// consumer-side default documented on config.WifiConfig.Country.
+func TestWifiCountryDefaultsToGBWhenUnset(t *testing.T) {
+	cfg := config.Default()
+	cfg.Wifi.Country = ""
+	if got := wifiCountry(cfg); got != "GB" {
+		t.Fatalf("wifiCountry() = %q, want %q", got, "GB")
+	}
+}
+
+// TestWifiCountryUsesConfiguredValue proves a configured country passes
+// through unchanged rather than being silently forced to GB.
+func TestWifiCountryUsesConfiguredValue(t *testing.T) {
+	cfg := config.Default()
+	cfg.Wifi.Country = "US"
+	if got := wifiCountry(cfg); got != "US" {
+		t.Fatalf("wifiCountry() = %q, want %q", got, "US")
+	}
+}
+
 // TestResolveE04ConfigPrefersRawWhenPresent proves the E04-path helper
 // carries a raw-loaded config's Provisioning (and Web) fields forward
 // instead of falling back to config.Default() when config.LoadRaw

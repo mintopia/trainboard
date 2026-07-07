@@ -58,7 +58,7 @@ func (s *fakeSleeper) calls() int {
 func newTestMode2Driver(r Runner) (*mode2Driver, *fakeFileWriter, *fakeSleeper) {
 	fw := &fakeFileWriter{}
 	sl := &fakeSleeper{}
-	d := newMode2Driver(r, "wlan0", fw.write, sl.sleep)
+	d := newMode2Driver(r, "wlan0", "GB", fw.write, sl.sleep)
 	return d, fw, sl
 }
 
@@ -258,6 +258,36 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		}
 		if len(fw.writes()) != 0 {
 			t.Fatalf("writeFile called %d times, want 0 (quote must be rejected before write)", len(fw.writes()))
+		}
+	})
+
+	t.Run("configured country is used instead of a hardcoded GB", func(t *testing.T) {
+		r := NewFakeRunner()
+		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
+		r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+		r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+		r.Script("ip addr flush dev wlan0", "", nil)
+		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
+
+		fw := &fakeFileWriter{}
+		sl := &fakeSleeper{}
+		d := newMode2Driver(r, "wlan0", "US", fw.write, sl.sleep)
+
+		err := d.StartAP(context.Background(), APConfig{
+			SSID:     "Trainboard-1234",
+			Password: "testpass1",
+			Addr:     "192.168.4.1/24",
+		})
+		if err != nil {
+			t.Fatalf("StartAP() = %v, want nil", err)
+		}
+
+		conf := string(fw.writes()[0].data)
+		if !strings.Contains(conf, "country=US") {
+			t.Fatalf("conf missing %q; conf:\n%s", "country=US", conf)
+		}
+		if strings.Contains(conf, "country=GB") {
+			t.Fatalf("conf hardcodes country=GB instead of the configured country; conf:\n%s", conf)
 		}
 	})
 }

@@ -61,21 +61,23 @@ func pollStatus(ctx context.Context, r Runner, iface string, sleep func(time.Dur
 // renderSTAConf formats a wpa_supplicant conf containing only the STA
 // network block; used by staAttempt. The wpa conf format has no escaping for
 // quoted strings, so any value containing a `"` is rejected outright.
-func renderSTAConf(sta STAConfig) (string, error) {
+// country is the configured regulatory domain (defaulted to "GB" by the
+// caller when unset).
+func renderSTAConf(sta STAConfig, country string) (string, error) {
 	for _, v := range []string{sta.SSID, sta.PSK} {
 		if strings.Contains(v, `"`) {
 			return "", fmt.Errorf("net: staAttempt: value contains disallowed quote character")
 		}
 	}
 	return fmt.Sprintf(`ctrl_interface=/run/wpa_supplicant
-country=GB
+country=%s
 network={
     id_str="sta"
     ssid="%s"
     psk="%s"
     disabled=1
 }
-`, sta.SSID, sta.PSK), nil
+`, country, sta.SSID, sta.PSK), nil
 }
 
 // staAttempt runs the "switch to the STA network and obtain a DHCP lease"

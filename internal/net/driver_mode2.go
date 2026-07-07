@@ -18,6 +18,7 @@ const wpaConfPath = "/run/trainboard-wpa.conf"
 type mode2Driver struct {
 	r         Runner
 	iface     string
+	country   string
 	writeFile func(path string, data []byte) error
 	sleep     func(time.Duration)
 
@@ -30,16 +31,18 @@ var _ Driver = (*mode2Driver)(nil)
 // NewMode2Driver builds the production mode2 driver (cmd/trainboard, Task
 // 12): a single wpa_supplicant instance driving both STA and AP via
 // mode=2, evaluated as the M3a default pending the M3b hardware matrix
-// (spec/ADR 0003 addendum). writeFile and sleep default to os.WriteFile and
-// time.Sleep in production; pass nil for both to get those defaults, or
-// inject fakes (as the internal constructor's tests do).
-func NewMode2Driver(r Runner, iface string, writeFile func(string, []byte) error, sleep func(time.Duration)) Driver {
-	return newMode2Driver(r, iface, writeFile, sleep)
+// (spec/ADR 0003 addendum). country is the regulatory domain rendered into
+// the conf (defaulted to "GB" by the caller when config.Wifi.Country is
+// unset). writeFile and sleep default to os.WriteFile and time.Sleep in
+// production; pass nil for both to get those defaults, or inject fakes (as
+// the internal constructor's tests do).
+func NewMode2Driver(r Runner, iface, country string, writeFile func(string, []byte) error, sleep func(time.Duration)) Driver {
+	return newMode2Driver(r, iface, country, writeFile, sleep)
 }
 
 // newMode2Driver builds the mode2 driver. writeFile and sleep default to
 // os.WriteFile and time.Sleep in production; tests inject fakes.
-func newMode2Driver(r Runner, iface string, writeFile func(string, []byte) error, sleep func(time.Duration)) *mode2Driver {
+func newMode2Driver(r Runner, iface, country string, writeFile func(string, []byte) error, sleep func(time.Duration)) *mode2Driver {
 	if writeFile == nil {
 		writeFile = func(path string, data []byte) error {
 			return os.WriteFile(path, data, 0o600)
@@ -48,20 +51,21 @@ func newMode2Driver(r Runner, iface string, writeFile func(string, []byte) error
 	if sleep == nil {
 		sleep = time.Sleep
 	}
-	return &mode2Driver{r: r, iface: iface, writeFile: writeFile, sleep: sleep}
+	return &mode2Driver{r: r, iface: iface, country: country, writeFile: writeFile, sleep: sleep}
 }
 
 // renderConf formats the wpa_supplicant conf with both network blocks. The
 // conf format has no escaping for quoted strings, so any value containing a
-// `"` is rejected outright rather than risking config injection.
-func renderConf(sta STAConfig, ap APConfig) (string, error) {
+// `"` is rejected outright rather than risking config injection. country is
+// the regulatory domain to render (see NewMode2Driver).
+func renderConf(sta STAConfig, ap APConfig, country string) (string, error) {
 	for _, v := range []string{sta.SSID, sta.PSK, ap.SSID, ap.Password} {
 		if strings.Contains(v, `"`) {
 			return "", fmt.Errorf("net: mode2: value contains disallowed quote character")
 		}
 	}
 	return fmt.Sprintf(`ctrl_interface=/run/wpa_supplicant
-country=GB
+country=%s
 network={
     id_str="sta"
     ssid="%s"
@@ -77,12 +81,12 @@ network={
     psk="%s"
     disabled=1
 }
-`, sta.SSID, sta.PSK, ap.SSID, ap.Password), nil
+`, country, sta.SSID, sta.PSK, ap.SSID, ap.Password), nil
 }
 
 // writeConf renders the current sta/ap state and writes it to wpaConfPath.
 func (d *mode2Driver) writeConf() error {
-	body, err := renderConf(d.sta, d.ap)
+	body, err := renderConf(d.sta, d.ap, d.country)
 	if err != nil {
 		return fmt.Errorf("net: mode2: render conf: %w", err)
 	}
@@ -158,7 +162,7 @@ func (d *mode2Driver) StopAP(ctx context.Context) error {
 func (d *mode2Driver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	d.sta = sta
 	render := func(s STAConfig) ([]byte, error) {
-		body, err := renderConf(s, d.ap)
+		body, err := renderConf(s, d.ap, d.country)
 		return []byte(body), err
 	}
 	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, d.sleep); err != nil {

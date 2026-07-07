@@ -68,6 +68,12 @@ type ProvisioningConfig struct {
 type WifiConfig struct {
 	SSID string `json:"ssid"`
 	PSK  string `json:"psk"`
+	// Country is the two-letter regulatory domain (e.g. "GB", "US") passed
+	// to `iw reg set` and rendered into both AP drivers' conf templates. An
+	// empty value is treated as "GB" by every consumer (Default sets "GB"
+	// explicitly; this field is only ever empty for a config predating this
+	// field, or a document that has deliberately cleared it).
+	Country string `json:"country"`
 }
 
 // Default returns a config populated with sane defaults.
@@ -87,5 +93,6 @@ func Default() Config {
 			End:        "07:00",
 			Brightness: 32,
 		},
+		Wifi: WifiConfig{Country: "GB"},
 	}
 }
