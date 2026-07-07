@@ -291,3 +291,102 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		}
 	})
 }
+
+// sequencedStatusRunner is a small stateful Runner test double, distinct from
+// FakeRunner (which is deliberately call-order-independent, matching one
+// scripted response per command regardless of how many times it's called —
+// see FakeRunner's doc comment). ensureDaemon's daemon-start branch needs the
+// SAME "wpa_cli -i <iface> status" command to fail once (not running yet,
+// taking the branch under test) then succeed (so a later poll can observe
+// the daemon come up) — something FakeRunner's order-independent scripting
+// cannot express. Every call, matched or not, is recorded in order so the
+// test can assert the exact sequence including how many times the daemon
+// was actually started.
+type sequencedStatusRunner struct {
+	Runner
+	statusCmd string
+
+	mu         sync.Mutex
+	calls      []string
+	statusHits int
+}
+
+func (s *sequencedStatusRunner) Run(ctx context.Context, argv ...string) (string, error) {
+	cmd := strings.Join(argv, " ")
+
+	s.mu.Lock()
+	s.calls = append(s.calls, cmd)
+	isStatus := cmd == s.statusCmd
+	if isStatus {
+		s.statusHits++
+	}
+	hit := s.statusHits
+	s.mu.Unlock()
+
+	if isStatus {
+		if hit == 1 {
+			return "", errors.New("exit status 1: wlan0: No such device")
+		}
+		return "wpa_state=COMPLETED\nmode=AP\n", nil
+	}
+	return s.Runner.Run(ctx, argv...)
+}
+
+func (s *sequencedStatusRunner) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+// TestMode2DriverEnsureDaemonStartsWhenNotRunning covers ensureDaemon's
+// daemon-start branch (wpa_cli status errors => start wpa_supplicant), which
+// FakeRunner's order-independent scripting can never reach: a single script
+// for "wpa_cli -i wlan0 status" applies to every call regardless of order, so
+// it can never fail once then succeed on the next call, as this branch (and
+// StartAP's subsequent pollStatus) requires. It proves the daemon-start
+// command is issued exactly once and StartAP still proceeds to completion.
+func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	base.Script("ip addr flush dev wlan0", "", nil)
+	base.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
+
+	r := &sequencedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status"}
+
+	d, _, _ := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID:     "Trainboard-1234",
+		Password: "testpass1",
+		Addr:     "192.168.4.1/24",
+	})
+	if err != nil {
+		t.Fatalf("StartAP() = %v, want nil", err)
+	}
+
+	want := []string{
+		"wpa_cli -i wlan0 status",                                // ensureDaemon: not running (errors)
+		"wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", // daemon-start branch
+		"wpa_cli -i wlan0 select_network 1",
+		"wpa_cli -i wlan0 status", // poll: satisfied first try
+		"ip addr flush dev wlan0",
+		"ip addr add 192.168.4.1/24 dev wlan0",
+	}
+	if got := r.Calls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Calls() =\n%v\nwant\n%v", got, want)
+	}
+
+	starts := 0
+	for _, c := range r.Calls() {
+		if c == "wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf" {
+			starts++
+		}
+		if strings.HasPrefix(c, "wpa_cli -i wlan0 reconfigure") {
+			t.Fatalf("Calls() contains a reconfigure call, want the daemon-start branch (not the already-running branch): %v", r.Calls())
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("wpa_supplicant -B started %d times, want exactly 1", starts)
+	}
+}
