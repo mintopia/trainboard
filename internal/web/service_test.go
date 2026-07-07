@@ -343,3 +343,58 @@ func TestRegenerateAPPassword(t *testing.T) {
 		t.Fatal("regeneration must change the password")
 	}
 }
+
+func TestServiceStartSoakValidatesDuration(t *testing.T) {
+	_, svc, _, _ := newConfigTestServer(t)
+
+	if err := svc.StartSoak("2h"); err == nil {
+		t.Fatal("StartSoak(\"2h\") = nil error, want invalid-duration error")
+	}
+	if err := svc.StartSoak(""); err == nil {
+		t.Fatal("StartSoak(\"\") = nil error, want invalid-duration error")
+	}
+	if err := svc.StartSoak("8h"); err != nil {
+		t.Fatalf("StartSoak(\"8h\") = %v, want nil", err)
+	}
+	if got := svc.SoakRemaining(); got != 8*time.Hour {
+		t.Fatalf("SoakRemaining = %v, want 8h (harness fake stores the started duration)", got)
+	}
+	svc.CancelSoak()
+	if got := svc.SoakRemaining(); got != 0 {
+		t.Fatalf("after CancelSoak: SoakRemaining = %v, want 0", got)
+	}
+}
+
+func TestServiceStatusCarriesSoakRemaining(t *testing.T) {
+	_, svc, _, _ := newConfigTestServer(t)
+	if err := svc.StartSoak("1h"); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Status().SoakRemaining; got != time.Hour {
+		t.Fatalf("Status().SoakRemaining = %v, want 1h", got)
+	}
+}
+
+func TestServiceSoakNilSourcesSafe(t *testing.T) {
+	// A Service whose Sources/Actions omit the soak funcs (older callers,
+	// other tests) must not panic: reads report 0, StartSoak errors.
+	// Snapshot/Ring/PreviewPNG must still be wired — Status() dereferences
+	// them unconditionally; only the soak funcs are deliberately absent.
+	src := Sources{
+		Snapshot:   func() *board.Snapshot { return nil },
+		Ring:       obs.NewRing(1),
+		PreviewPNG: func() []byte { return nil },
+		StartedAt:  time.Now(),
+	}
+	svc := NewService("/nonexistent", src, Actions{}, testLog())
+	if got := svc.SoakRemaining(); got != 0 {
+		t.Fatalf("SoakRemaining = %v, want 0", got)
+	}
+	if got := svc.Status().SoakRemaining; got != 0 {
+		t.Fatalf("Status().SoakRemaining = %v, want 0", got)
+	}
+	if err := svc.StartSoak("1h"); err == nil {
+		t.Fatal("StartSoak with no Actions.SoakStart wired: want error, got nil")
+	}
+	svc.CancelSoak() // must not panic
+}
