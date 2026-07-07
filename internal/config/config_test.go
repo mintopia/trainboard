@@ -70,3 +70,46 @@ func TestNewSectionsRoundTripJSON(t *testing.T) {
 		t.Fatal("missing keys must default to zero values")
 	}
 }
+
+func TestValidateConnectivityTier(t *testing.T) {
+	c := Default()
+	c.Web.PasswordHash = "$argon2id$fake"
+	if err := c.ValidateConnectivity(); err != nil {
+		t.Fatalf("password-only config should be connectivity-valid: %v", err)
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("connectivity-valid config with no origin/token must NOT be board-valid")
+	}
+
+	c.Wifi.SSID = "HomeNet" // ssid without psk = incomplete
+	if err := c.ValidateConnectivity(); err == nil {
+		t.Fatal("SSID without PSK must fail connectivity validation")
+	}
+	c.Wifi.PSK = "short" // < 8
+	if err := c.ValidateConnectivity(); err == nil {
+		t.Fatal("PSK under 8 chars must fail")
+	}
+	c.Wifi.PSK = "longenough"
+	if err := c.ValidateConnectivity(); err != nil {
+		t.Fatalf("complete wifi should pass: %v", err)
+	}
+
+	c.Web.PasswordHash = ""
+	if err := c.ValidateConnectivity(); err == nil {
+		t.Fatal("no admin password must fail connectivity validation")
+	}
+}
+
+func TestValidateConnectivityCompatibility(t *testing.T) {
+	// When a config has password + board config, both validations should pass.
+	c := Default()
+	c.Web.PasswordHash = "$argon2id$fake"
+	c.Board.Origin = "PAD"
+	c.Darwin.Token = "tok"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("fixture should be board-valid: %v", err)
+	}
+	if err := c.ValidateConnectivity(); err != nil {
+		t.Fatalf("board-valid config should also pass connectivity: %v", err)
+	}
+}

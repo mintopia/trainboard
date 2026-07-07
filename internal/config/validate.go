@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -40,16 +41,35 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: powersaving.brightness %d out of range 0-255", c.Powersaving.Brightness)
 		}
 	}
-	if c.Wifi.PSK != "" {
-		if n := len(c.Wifi.PSK); n < 8 || n > 63 {
-			return fmt.Errorf("config: wifi.psk must be 8-63 characters, got %d", n)
-		}
-		if c.Wifi.SSID == "" {
-			return fmt.Errorf("config: wifi.ssid is required when wifi.psk is set")
-		}
+	if err := c.validateWifi(); err != nil {
+		return err
 	}
-	if len(c.Wifi.SSID) > 32 {
-		return fmt.Errorf("config: wifi.ssid exceeds 32 bytes")
+	return nil
+}
+
+// validateWifi: empty (both fields blank) or complete with sane lengths.
+func (c Config) validateWifi() error {
+	if c.Wifi.SSID == "" && c.Wifi.PSK == "" {
+		return nil
+	}
+	if c.Wifi.SSID == "" || len(c.Wifi.SSID) > 32 {
+		return errors.New("config: wifi.ssid must be 1-32 bytes when wifi is configured")
+	}
+	if l := len(c.Wifi.PSK); l < 8 || l > 63 {
+		return errors.New("config: wifi.psk must be 8-63 characters")
+	}
+	return nil
+}
+
+// ValidateConnectivity checks that the config meets the minimum requirements for
+// AP-mode setup: an admin password and valid wifi configuration (if provided).
+// This is a separate tier from Validate() to support M3 provisioning flow.
+func (c Config) ValidateConnectivity() error {
+	if c.Web.PasswordHash == "" {
+		return errors.New("config: web.passwordHash is required for AP-mode setup")
+	}
+	if err := c.validateWifi(); err != nil {
+		return err
 	}
 	return nil
 }
