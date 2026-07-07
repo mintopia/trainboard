@@ -1,7 +1,10 @@
 package runtime //nolint:revive // internal package; does not collide with any import of stdlib runtime
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/obs"
@@ -176,6 +179,100 @@ func TestHotspotSnapshotSourceHotspotWinsOverStage(t *testing.T) {
 	}
 	if got.Fault == obs.FaultConnectivity || got.Fault == obs.FaultRadioBlocked {
 		t.Fatalf("Fault = %q, want no connectivity fault injected while a hotspot is present", got.Fault)
+	}
+}
+
+// TestHotspotSnapshotSourceConcurrentStress is a -race stress test: one
+// goroutine calls src() at high frequency while a second flips the hotspot
+// on/off and a third cycles the connectivity stage/radioBlocked pair,
+// entirely independently of each other and of the reader. It asserts two
+// things: `go test -race` finds no data race across the whole run (proving
+// hotspotComposer's cache fields, guarded only by its own mutex, are never
+// touched unsynchronized even under concurrent input churn), and that every
+// single snapshot the reader observes obeys the Hotspot-xor-fault invariant
+// documented on HotspotSnapshotSource — a snapshot never carries both a
+// non-nil Hotspot and an injected E05/E06 fault, since the AP scene always
+// outranks a connectivity fault.
+func TestHotspotSnapshotSourceConcurrentStress(t *testing.T) {
+	base := &board.Snapshot{State: board.StateInitialising}
+
+	var hsMu sync.Mutex
+	hsOn := false
+	hs := func() *board.Hotspot {
+		hsMu.Lock()
+		defer hsMu.Unlock()
+		if !hsOn {
+			return nil
+		}
+		return &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	}
+
+	var connMu sync.Mutex
+	stages := []string{"ASSOC", "DHCP", "DNS", "CAPTIVE", ""}
+	stageIdx := 0
+	radioBlocked := false
+	conn := func() (string, bool) {
+		connMu.Lock()
+		defer connMu.Unlock()
+		return stages[stageIdx], radioBlocked
+	}
+
+	src := HotspotSnapshotSource(func() *board.Snapshot { return base }, hs, conn)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				hsMu.Lock()
+				hsOn = !hsOn
+				hsMu.Unlock()
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				connMu.Lock()
+				stageIdx = i % len(stages)
+				radioBlocked = i%3 == 0
+				connMu.Unlock()
+				i++
+			}
+		}
+	}()
+
+	var checked atomic.Int64
+	deadline := time.Now().Add(150 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		got := src()
+		checked.Add(1)
+		if got == nil {
+			t.Fatal("src() returned nil")
+		}
+		hasFault := got.Fault == obs.FaultConnectivity || got.Fault == obs.FaultRadioBlocked
+		if got.Hotspot != nil && hasFault {
+			t.Fatalf("snapshot carries both a Hotspot and an injected fault (%q): %+v", got.Fault, got)
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	if checked.Load() == 0 {
+		t.Fatal("the reader loop never executed")
 	}
 }
 
