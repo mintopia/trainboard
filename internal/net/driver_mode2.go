@@ -98,17 +98,33 @@ func (d *mode2Driver) writeConf() error {
 
 // ensureDaemon starts wpa_supplicant if wpa_cli status errors (not running);
 // otherwise it tells the running daemon to pick up the conf we just wrote.
-func (d *mode2Driver) ensureDaemon(ctx context.Context) error {
-	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "status"); err != nil {
-		if _, err := d.r.Run(ctx, "wpa_supplicant", "-B", "-i", d.iface, "-c", wpaConfPath); err != nil {
-			return fmt.Errorf("net: mode2: start wpa_supplicant: %w", err)
+//
+// started is true iff this call spawned wpa_supplicant -B (the cold-start
+// branch), which the caller uses to budget the subsequent bring-up.
+//
+// After a spawn, ensureDaemon polls `wpa_cli status` (up to pollAttempts,
+// pollInterval apart, via the injected sleeper — the same seam pollStatus
+// uses) until the control socket answers, i.e. until the command exits 0. The
+// content of the status is irrelevant here (want always true); we only need
+// the socket to be accepting commands. Without this, the immediately-following
+// select_network / association races the daemon's socket coming up, which on
+// real hardware fails the first STA attempt outright and costs a ~5-minute AP
+// detour (issue #47).
+func (d *mode2Driver) ensureDaemon(ctx context.Context) (started bool, err error) {
+	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "status"); err == nil {
+		// Already running: tell it to reload the conf we just wrote.
+		if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "reconfigure"); err != nil {
+			return false, fmt.Errorf("net: mode2: reconfigure: %w", err)
 		}
-		return nil
+		return false, nil
 	}
-	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "reconfigure"); err != nil {
-		return fmt.Errorf("net: mode2: reconfigure: %w", err)
+	if _, err := d.r.Run(ctx, "wpa_supplicant", "-B", "-i", d.iface, "-c", wpaConfPath); err != nil {
+		return false, fmt.Errorf("net: mode2: start wpa_supplicant: %w", err)
 	}
-	return nil
+	if err := pollStatus(ctx, d.r, d.iface, d.sleep, func(map[string]string) bool { return true }, "daemon ctrl socket not ready"); err != nil {
+		return true, fmt.Errorf("net: mode2: %w", err)
+	}
+	return true, nil
 }
 
 // StartAP writes the conf (retaining whatever STA credentials are already
@@ -119,7 +135,7 @@ func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	if err := d.writeConf(); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
 	}
-	if err := d.ensureDaemon(ctx); err != nil {
+	if _, err := d.ensureDaemon(ctx); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
 	}
 	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "select_network", "1"); err != nil {

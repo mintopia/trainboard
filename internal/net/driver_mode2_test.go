@@ -368,6 +368,7 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	want := []string{
 		"wpa_cli -i wlan0 status",                                // ensureDaemon: not running (errors)
 		"wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", // daemon-start branch
+		"wpa_cli -i wlan0 status",                                // ensureDaemon: ctrl-socket ready poll (issue #47)
 		"wpa_cli -i wlan0 select_network 1",
 		"wpa_cli -i wlan0 status", // poll: satisfied first try
 		"ip addr flush dev wlan0",
@@ -388,5 +389,139 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	}
 	if starts != 1 {
 		t.Fatalf("wpa_supplicant -B started %d times, want exactly 1", starts)
+	}
+}
+
+// statusFailRunner is a stateful Runner double for the ensureDaemon
+// ctrl-socket-wait tests (issue #47): the first failFirst "wpa_cli ... status"
+// calls error (the daemon's control socket is not yet accepting commands),
+// then every later status call succeeds. Non-status commands delegate to the
+// wrapped Runner. Distinct from sequencedStatusRunner (which only ever fails
+// the first status call) because ensureDaemon's socket wait needs the SAME
+// status command to fail an arbitrary, configurable number of times — the
+// branch-decision call PLUS several failed polls — before coming up.
+type statusFailRunner struct {
+	Runner
+	statusCmd string
+	failFirst int
+
+	mu    sync.Mutex
+	calls []string
+	hits  int
+}
+
+func (s *statusFailRunner) Run(ctx context.Context, argv ...string) (string, error) {
+	cmd := strings.Join(argv, " ")
+
+	s.mu.Lock()
+	s.calls = append(s.calls, cmd)
+	isStatus := cmd == s.statusCmd
+	if isStatus {
+		s.hits++
+	}
+	hit := s.hits
+	s.mu.Unlock()
+
+	if isStatus {
+		if hit <= s.failFirst {
+			return "", errors.New("exit status 1: wlan0: ctrl socket not ready")
+		}
+		return "wpa_state=COMPLETED\nmode=AP\n", nil
+	}
+	return s.Runner.Run(ctx, argv...)
+}
+
+func (s *statusFailRunner) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+func (s *statusFailRunner) statusCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, c := range s.calls {
+		if c == s.statusCmd {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMode2DriverEnsureDaemonWaitsForCtrlSocketThenSucceeds pins the issue #47
+// fix: after spawning wpa_supplicant -B, ensureDaemon must poll `wpa_cli
+// status` until the control socket answers before returning — otherwise the
+// immediately-following select_network / association races the daemon coming
+// up and the first STA attempt fails outright on real hardware. Here the
+// post-spawn status poll fails twice then succeeds, so ensureDaemon returns
+// (true, nil) having issued exactly one wpa_supplicant -B.
+func TestMode2DriverEnsureDaemonWaitsForCtrlSocketThenSucceeds(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+
+	// failFirst=3: the branch-decision status (call 1) fails so ensureDaemon
+	// takes the spawn branch, then the socket-wait poll fails twice (calls
+	// 2,3) and succeeds on the third poll (call 4).
+	r := &statusFailRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", failFirst: 3}
+
+	d, _, sl := newTestMode2Driver(r)
+
+	started, err := d.ensureDaemon(context.Background())
+	if err != nil {
+		t.Fatalf("ensureDaemon() err = %v, want nil", err)
+	}
+	if !started {
+		t.Fatal("ensureDaemon() started = false, want true (it spawned wpa_supplicant this call)")
+	}
+
+	starts := 0
+	for _, c := range r.Calls() {
+		if strings.HasPrefix(c, "wpa_supplicant -B") {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("wpa_supplicant -B issued %d times, want exactly 1 (calls: %v)", starts, r.Calls())
+	}
+	// 1 branch-decision status + 3 socket-wait polls (fail, fail, succeed).
+	if got := r.statusCalls(); got != 4 {
+		t.Fatalf("status called %d times, want 4 (1 branch + 3 polls); calls: %v", got, r.Calls())
+	}
+	// Sleeps only between the two failed polls, not after the succeeding one.
+	if got := sl.calls(); got != 2 {
+		t.Fatalf("sleep called %d times, want 2 (between the two failed polls)", got)
+	}
+}
+
+// TestMode2DriverEnsureDaemonTimesOutWhenCtrlSocketNeverReady pins the bounded
+// side of the issue #47 wait: if the control socket never answers, ensureDaemon
+// gives up after exactly pollAttempts polls, returning (true, err) — started is
+// still true because it did spawn the daemon; only the socket wait timed out.
+func TestMode2DriverEnsureDaemonTimesOutWhenCtrlSocketNeverReady(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+
+	// Every status call fails: branch-decision + all polls.
+	r := &statusFailRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", failFirst: 1_000}
+
+	d, _, sl := newTestMode2Driver(r)
+
+	started, err := d.ensureDaemon(context.Background())
+	if err == nil {
+		t.Fatal("ensureDaemon() err = nil, want a ctrl-socket timeout error")
+	}
+	if !started {
+		t.Fatal("ensureDaemon() started = false, want true (it spawned before the socket wait timed out)")
+	}
+	if !strings.Contains(err.Error(), "daemon ctrl socket not ready") {
+		t.Fatalf("err = %v, want containing %q", err, "daemon ctrl socket not ready")
+	}
+	// 1 branch-decision status + exactly pollAttempts socket-wait polls.
+	if got := r.statusCalls(); got != pollAttempts+1 {
+		t.Fatalf("status called %d times, want %d (1 branch + %d polls); calls: %v", got, pollAttempts+1, pollAttempts, r.Calls())
+	}
+	if got := sl.calls(); got != pollAttempts-1 {
+		t.Fatalf("sleep called %d times, want %d", got, pollAttempts-1)
 	}
 }

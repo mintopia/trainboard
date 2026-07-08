@@ -105,6 +105,14 @@ type Manager struct {
 	status atomic.Pointer[Status]
 	retry  chan struct{}
 
+	// firstAttempt and fastRetried gate the once-per-process instant-failure
+	// fast retry (issue #47). They are owned exclusively by Run's single
+	// goroutine — only ever read/written from bootSTA — so they need no mutex.
+	// firstAttempt marks the very first STA attempt of the process (cleared
+	// after it); fastRetried pins the fast retry to at most once per lifetime.
+	firstAttempt bool
+	fastRetried  bool
+
 	provMu sync.Mutex
 	provAt time.Time
 }
@@ -112,7 +120,7 @@ type Manager struct {
 // NewManager builds a Manager publishing ManagerBoot until Run (Task 9)
 // drives its first transition.
 func NewManager(d ManagerDeps) *Manager {
-	m := &Manager{d: d, retry: make(chan struct{}, 1)}
+	m := &Manager{d: d, retry: make(chan struct{}, 1), firstAttempt: true}
 	m.status.Store(&Status{State: ManagerBoot})
 	return m
 }
@@ -174,6 +182,14 @@ const (
 // variable rather than a plain const purely so tests can shrink it instead
 // of waiting out the real 45s; production wiring never touches it.
 var staAttemptBound = 45 * time.Second
+
+// fastRetryThreshold bounds "instant" for the once-per-process cold-start fast
+// retry (issue #47): a FIRST STA attempt that fails faster than this almost
+// certainly lost a race with wpa_supplicant's control socket coming up rather
+// than genuinely failing to associate, so retrying once immediately is far
+// cheaper than a full ~5-minute AP-fallback detour. The injected clock
+// (m.now()) measures the attempt.
+const fastRetryThreshold = 2 * time.Second
 
 // managerPhase tracks Run's own loop position; distinct from the published
 // Status (which is what callers such as the render loop or web UI observe).
@@ -265,7 +281,7 @@ func (m *Manager) Run(ctx context.Context) error {
 // treated as clean shutdown (best-effort AP teardown, cancelled=true), never
 // escalation — see Run's ctx-cancellation contract.
 func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled bool, err error) {
-	if err := m.toSTA(ctx); err == nil {
+	if err := m.bootSTA(ctx); err == nil {
 		return phaseOnlineWait, false, nil
 	}
 	if err := m.toAP(ctx); err != nil {
@@ -276,6 +292,36 @@ func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled boo
 		return phaseBoot, false, fmt.Errorf("net: manager: boot: AP fallback failed: %w", err)
 	}
 	return phaseAPWait, false, nil
+}
+
+// bootSTA runs the boot-time STA attempt with the once-per-process
+// instant-failure fast retry (issue #47). If the very first STA attempt of the
+// process fails within fastRetryThreshold — measured on the injected clock, so
+// a cold wpa_supplicant control-socket race rather than a genuine association
+// failure — it retries STA once immediately instead of paying a full
+// ~5-minute AP-fallback detour; only if that also fails does the caller fall
+// back to AP.
+//
+// The fast retry is skipped when ctx is already cancelled (a shutdown, not a
+// race — see Run's ctx-cancellation contract), so this stays a clean no-op on
+// the ctx-cancel-mid-attempt path. firstAttempt/fastRetried are Run-loop-owned
+// (this method runs only on Run's single goroutine); no mutex.
+func (m *Manager) bootSTA(ctx context.Context) error {
+	start := m.now()
+	staErr := m.toSTA(ctx)
+	first := m.firstAttempt
+	m.firstAttempt = false
+	if staErr == nil {
+		return nil
+	}
+	if !m.fastRetried && first && ctx.Err() == nil && m.now().Sub(start) < fastRetryThreshold {
+		m.fastRetried = true
+		if m.d.Log != nil {
+			m.d.Log.Info("first STA attempt failed instantly; fast retry")
+		}
+		return m.toSTA(ctx)
+	}
+	return staErr
 }
 
 // runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
@@ -412,11 +458,17 @@ func (m *Manager) suppressed() bool {
 	if at.IsZero() {
 		return false
 	}
-	now := time.Now()
+	return m.now().Sub(at) < provisioningSuppressWindow
+}
+
+// now reads the injected clock, falling back to the real clock only in
+// incomplete production wiring (every test seam sets Now). The single point
+// where internal/net logic reaches for the wall clock.
+func (m *Manager) now() time.Time {
 	if m.d.Now != nil {
-		now = m.d.Now()
+		return m.d.Now()
 	}
-	return now.Sub(at) < provisioningSuppressWindow
+	return time.Now()
 }
 
 // cleanupOnCancel best-effort tears the AP down on ctx cancellation, if it
