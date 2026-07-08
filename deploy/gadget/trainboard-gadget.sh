@@ -79,9 +79,11 @@ start() {
     local bound_udc
     bound_udc=$(cat "$GADGET_DIR/UDC" 2>/dev/null || true)
     if [[ -n "$bound_udc" ]]; then
-      log "gadget already built and bound to UDC $bound_udc; re-applying usb0 IP config"
+      log "gadget already built and bound to UDC $bound_udc; re-applying usb0/usb1 IP config"
       ip addr replace 10.55.0.1/29 dev usb0
       ip link set usb0 up
+      ip addr replace 10.55.0.1/29 dev usb1
+      ip link set usb1 up
       return 0
     fi
   fi
@@ -142,9 +144,22 @@ start() {
   log "binding to UDC $udc"
   echo "$udc" >"$GADGET_DIR/UDC"
 
+  # Both function netdevs exist as soon as the UDC bind above completes —
+  # ncm.usb0 and ecm.usb1 are both wired into their configs unconditionally,
+  # regardless of which one the host actually negotiates — so both usb0 and
+  # usb1 get the same point-to-point address here. Only one config is ever
+  # active per host, so there's no conflict: whichever driver (NCM or the
+  # ECM fallback) the host picks, the board answers on the address the
+  # operator expects. Not guarded with `|| true`: if either interface is
+  # missing at this point something is genuinely wrong with the gadget
+  # build above, and that should fail loud rather than limp on silently.
   log "bringing up usb0 at 10.55.0.1/29"
   ip addr replace 10.55.0.1/29 dev usb0
   ip link set usb0 up
+
+  log "bringing up usb1 (ECM fallback) at 10.55.0.1/29"
+  ip addr replace 10.55.0.1/29 dev usb1
+  ip link set usb1 up
 
   log "gadget started (UDC=$udc)"
 }

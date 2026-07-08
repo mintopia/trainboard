@@ -354,8 +354,10 @@ ssh root@trainboard.local systemctl enable --now trainboard-gadget trainboard-dn
 ```
 
 `trainboard-gadget.service` builds the gadget's configfs descriptor and
-brings up `usb0`; `trainboard-dnsmasq-usb0.service` (`Requires=`/`After=` the
-former) runs a DHCP-only dnsmasq scoped to that interface. Both are
+brings up `usb0` and `usb1` (NCM and ECM, respectively — same address on
+both, only one is ever active per host); `trainboard-dnsmasq-usb0.service`
+(`Requires=`/`After=` the former) runs a DHCP-only dnsmasq scoped to both
+interfaces. Both are
 `WantedBy=multi-user.target`, so a normal reboot brings the gadget back
 without re-running any of this.
 
@@ -367,8 +369,11 @@ any laptop or desktop. The host enumerates a native USB network adapter (NCM
 on macOS/Windows 11/modern Linux, falling back to the older ECM class on
 hosts without NCM support — deliberately never RNDIS, which exists only for
 Windows compatibility baggage this project doesn't need) and DHCP-leases an
-address in `10.55.0.2`–`10.55.0.6` from the board's `10.55.0.1`. From there
-the board answers on:
+address in `10.55.0.2`–`10.55.0.6` from the board's `10.55.0.1`. Only one of
+NCM (`usb0`) or ECM (`usb1`) is ever active per host, and both carry the
+same `10.55.0.1/29` addressing and DHCP range, so this is transparent to the
+operator — whichever class the host negotiates, `10.55.0.1` answers the
+same way. From there the board answers on:
 
 - `http://10.55.0.1` — the point-to-point gadget address, always works
 - `http://trainboard-XXXX.local` — mDNS rides `usb0` exactly like every
