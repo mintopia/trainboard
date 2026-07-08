@@ -42,6 +42,28 @@ const pollAttempts = 10
 
 const pollInterval = 500 * time.Millisecond
 
+// dhclientPidfile is where staAttempt's daemon-mode dhclient (issue #46)
+// writes its pid (-pf). It is the sole handle killDHClient uses to find and
+// stop that daemon — dhclient itself owns renewal from here on, so nothing
+// else in this package touches the lease after staAttempt starts it.
+const dhclientPidfile = "/run/trainboard-dhclient.pid"
+
+// killDHClient stops any dhclient daemon previously started against
+// dhclientPidfile (pkill -F reads the pid from the file). It tolerates any
+// failure — most commonly pkill's exit 1, "no matching process", when no
+// daemon was ever started (first boot) or a prior attempt never got far
+// enough to spawn one — because a failed kill must never abort the caller's
+// STA attempt or AP transition; the daemon either wasn't running (fine) or
+// killing it failed for some other reason we have no safe recovery from
+// here anyway. Called at the start of every staAttempt (kill-before-start,
+// so a stale renewer from a previous attempt never races the new one) and
+// from every driver path that leaves STA for AP (mode2Driver.StartAP,
+// hostapdDriver.StartAP), so the daemon never outlives the STA session that
+// started it.
+func killDHClient(ctx context.Context, r Runner) {
+	_, _ = r.Run(ctx, "pkill", "-F", dhclientPidfile)
+}
+
 // pollStatus polls `wpa_cli status` up to attempts times, pollInterval
 // apart, until want reports true. It returns an error naming failMsg if the
 // state is never reached. Callers pass pollAttempts for the default budget;
@@ -83,14 +105,21 @@ network={
 }
 
 // staAttempt runs the "switch to the STA network and obtain a DHCP lease"
-// flow shared by both apDriver implementations: render the conf via
+// flow shared by both apDriver implementations: kill any dhclient daemon
+// left over from a previous attempt (issue #46 kill-before-start — a stale
+// renewer must never race the new attempt's lease), render the conf via
 // renderConf (letting each driver decide what else belongs in the file —
 // mode2Driver retains its AP block, hostapdDriver renders STA-only since
 // hostapd owns the AP separately), persist it, tell wpa_supplicant to reload
-// it, select network 0, wait for association, then run a one-shot dhclient.
-// It does not evaluate connectivity beyond dhclient's exit — the layered
-// Check owns that.
+// it, select network 0, wait for association, then start dhclient in daemon
+// mode (-pf dhclientPidfile, no -1) so it keeps renewing the lease for as
+// long as the STA session lasts — see killDHClient's doc comment for who
+// stops it and when. It does not evaluate connectivity beyond dhclient's
+// initial exit (it daemonizes once it has a lease) — the layered Check owns
+// that.
 func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, renderConf func(STAConfig) ([]byte, error), writeFile func(string, []byte) error, sleep func(time.Duration)) error {
+	killDHClient(ctx, r)
+
 	body, err := renderConf(sta)
 	if err != nil {
 		return fmt.Errorf("net: staAttempt: %w", err)
@@ -109,7 +138,7 @@ func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, rend
 	}, "STA not associated"); err != nil {
 		return fmt.Errorf("net: staAttempt: %w", err)
 	}
-	if _, err := r.Run(ctx, "dhclient", "-1", "-v", iface); err != nil {
+	if _, err := r.Run(ctx, "dhclient", "-v", "-pf", dhclientPidfile, iface); err != nil {
 		return fmt.Errorf("net: staAttempt: dhclient: %w", err)
 	}
 	return nil

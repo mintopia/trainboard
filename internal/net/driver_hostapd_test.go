@@ -19,6 +19,7 @@ func newTestHostapdDriver(r Runner) (*hostapdDriver, *fakeFileWriter, *fakeSleep
 func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
+	r.Script("pkill -F "+dhclientPidfile, "", nil)
 	r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -36,6 +37,7 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 
 	want := []string{
 		"wpa_cli -i wlan0 disable_network 0", // release the iface from wpa_supplicant's STA control
+		"pkill -F " + dhclientPidfile,        // issue #46: kill the STA dhclient daemon
 		"hostapd -B /run/trainboard-hostapd.conf",
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
@@ -58,6 +60,7 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 func TestHostapdDriverStartAPTeleratesDisableNetworkFailure(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("wpa_cli -i wlan0 disable_network 0", "", errors.New("exit status 1"))
+	r.Script("pkill -F "+dhclientPidfile, "", nil)
 	r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -81,6 +84,7 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 	t.Run("conf content matches template with substitution", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
+		r.Script("pkill -F "+dhclientPidfile, "", nil)
 		r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -142,6 +146,7 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 	t.Run("configured country is used instead of a hardcoded GB", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
+		r.Script("pkill -F "+dhclientPidfile, "", nil)
 		r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -236,10 +241,11 @@ func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
+	r.Script("pkill -F "+dhclientPidfile, "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
-	r.Script("dhclient -1 -v wlan0", "bound to 192.168.3.181\n", nil)
+	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
 
 	d, fw, _ := newTestHostapdDriver(r)
 
@@ -251,10 +257,11 @@ func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.
 	want := []string{
 		"pkill -x hostapd",
 		"ip addr flush dev wlan0",
+		"pkill -F " + dhclientPidfile, // issue #46: kill-before-start (staAttempt)
 		"wpa_cli -i wlan0 reconfigure",
 		"wpa_cli -i wlan0 select_network 0",
 		"wpa_cli -i wlan0 status",
-		"dhclient -1 -v wlan0",
+		"dhclient -v -pf " + dhclientPidfile + " wlan0",
 	}
 	got := r.Calls()
 	if !reflect.DeepEqual(got, want) {
@@ -270,10 +277,11 @@ func TestHostapdDriverAttemptSTASurfacesDHClientFailure(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
+	r.Script("pkill -F "+dhclientPidfile, "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
-	r.Script("dhclient -1 -v wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
+	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
 
 	d, _, _ := newTestHostapdDriver(r)
 

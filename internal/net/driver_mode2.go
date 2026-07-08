@@ -136,10 +136,11 @@ func (d *mode2Driver) ensureDaemon(ctx context.Context) (started bool, err error
 const apPollsAfterDaemonStart = 20
 
 // StartAP writes the conf (retaining whatever STA credentials are already
-// known), ensures the daemon is running with it, selects the AP network,
-// waits for it to beacon, then assigns the AP's static address. When
-// ensureDaemon spawned the daemon this call, the AP-active wait gets the
-// extended apPollsAfterDaemonStart budget (issue #48).
+// known), ensures the daemon is running with it, selects the AP network
+// (which leaves STA — killing any dhclient daemon still renewing that
+// lease, issue #46), waits for it to beacon, then assigns the AP's static
+// address. When ensureDaemon spawned the daemon this call, the AP-active
+// wait gets the extended apPollsAfterDaemonStart budget (issue #48).
 func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	d.ap = ap
 	if err := d.writeConf(); err != nil {
@@ -152,6 +153,10 @@ func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "select_network", "1"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: select_network 1: %w", err)
 	}
+	// select_network 1 disables network 0 (STA) as a side effect — this is
+	// the point this driver leaves STA for AP (issue #46), so any dhclient
+	// daemon staAttempt left renewing the STA lease must die here.
+	killDHClient(ctx, d.r)
 	apPolls := pollAttempts
 	if started {
 		apPolls = apPollsAfterDaemonStart

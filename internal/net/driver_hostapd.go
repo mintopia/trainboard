@@ -68,11 +68,14 @@ wpa_passphrase=%s
 }
 
 // StartAP releases the iface from wpa_supplicant's STA control (tolerating
-// failure — the STA network may not exist or may not be running yet),
-// writes the hostapd conf, launches hostapd, then assigns the AP's static
-// address.
+// failure — the STA network may not exist or may not be running yet), kills
+// any dhclient daemon still renewing the STA lease (issue #46), writes the
+// hostapd conf, launches hostapd, then assigns the AP's static address.
 func (d *hostapdDriver) StartAP(ctx context.Context, ap APConfig) error {
 	_, _ = d.r.Run(ctx, "wpa_cli", "-i", d.iface, "disable_network", "0") // tolerated
+	// disable_network 0 is this driver's "leave STA" verb (issue #46) — any
+	// dhclient daemon staAttempt left renewing the STA lease must die here.
+	killDHClient(ctx, d.r)
 
 	body, err := d.renderHostapdConf(ap)
 	if err != nil {
