@@ -230,6 +230,7 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 		Driver:  driver,
 		Check:   check,
 		Dnsmasq: dnsmasq,
+		Runner:  runner,
 		Prereqs: func(pctx context.Context) error {
 			return netconn.CheckPrereqs(pctx, runner, country, os.ReadFile, writeFile, filepath.Glob)
 		},

@@ -156,7 +156,7 @@ func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	// select_network 1 disables network 0 (STA) as a side effect — this is
 	// the point this driver leaves STA for AP (issue #46), so any dhclient
 	// daemon staAttempt left renewing the STA lease must die here.
-	killDHClient(ctx, d.r)
+	killDHClient(ctx, d.r, nil)
 	apPolls := pollAttempts
 	if started {
 		apPolls = apPollsAfterDaemonStart

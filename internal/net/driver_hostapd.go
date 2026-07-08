@@ -75,7 +75,7 @@ func (d *hostapdDriver) StartAP(ctx context.Context, ap APConfig) error {
 	_, _ = d.r.Run(ctx, "wpa_cli", "-i", d.iface, "disable_network", "0") // tolerated
 	// disable_network 0 is this driver's "leave STA" verb (issue #46) — any
 	// dhclient daemon staAttempt left renewing the STA lease must die here.
-	killDHClient(ctx, d.r)
+	killDHClient(ctx, d.r, nil)
 
 	body, err := d.renderHostapdConf(ap)
 	if err != nil {

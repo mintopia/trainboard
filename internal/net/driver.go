@@ -2,7 +2,9 @@ package net
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -49,19 +51,40 @@ const pollInterval = 500 * time.Millisecond
 const dhclientPidfile = "/run/trainboard-dhclient.pid"
 
 // killDHClient stops any dhclient daemon previously started against
-// dhclientPidfile (pkill -F reads the pid from the file). It tolerates any
-// failure — most commonly pkill's exit 1, "no matching process", when no
-// daemon was ever started (first boot) or a prior attempt never got far
-// enough to spawn one — because a failed kill must never abort the caller's
-// STA attempt or AP transition; the daemon either wasn't running (fine) or
-// killing it failed for some other reason we have no safe recovery from
-// here anyway. Called at the start of every staAttempt (kill-before-start,
-// so a stale renewer from a previous attempt never races the new one) and
-// from every driver path that leaves STA for AP (mode2Driver.StartAP,
-// hostapdDriver.StartAP), so the daemon never outlives the STA session that
-// started it.
-func killDHClient(ctx context.Context, r Runner) {
-	_, _ = r.Run(ctx, "pkill", "-F", dhclientPidfile)
+// dhclientPidfile. The pattern argument ("dhclient") coexists with -F per
+// pgrep(1): -F supplies the candidate pid from the file, but the pattern
+// still has to match that process's name — a stale pidfile whose pid has
+// since been recycled by an unrelated process (a real risk on Linux, where
+// pids wrap) is refused rather than killed (review finding: pkill -F alone
+// is a pure pid selector with no name guard). It tolerates the expected
+// failure — pkill's non-zero exit when no matching process is found, most
+// commonly because no daemon was ever started (first boot) or a prior
+// attempt never got far enough to spawn one — because a failed kill must
+// never abort the caller's STA attempt or AP transition. An unexpected
+// failure (anything that doesn't look like a plain "no process matched"
+// exit, e.g. pkill missing or a permissions error) is logged via log —
+// falling back to slog.Default() when the caller has no logger of its own —
+// so it stays visible without ever aborting the caller.
+//
+// Called at the start of every staAttempt (kill-before-start, so a stale
+// renewer from a previous attempt never races the new one), from every
+// driver path that leaves STA for AP (mode2Driver.StartAP,
+// hostapdDriver.StartAP), and unconditionally from Manager.cleanupOnCancel
+// on shutdown, so the daemon never outlives the STA session that started it
+// nor the manager's own process.
+func killDHClient(ctx context.Context, r Runner, log *slog.Logger) {
+	_, err := r.Run(ctx, "pkill", "-F", dhclientPidfile, "dhclient")
+	if err == nil {
+		return
+	}
+	var ec exitCoder
+	if errors.As(err, &ec) {
+		return
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Warn("net: killDHClient: pkill failed unexpectedly", "err", err.Error())
 }
 
 // pollStatus polls `wpa_cli status` up to attempts times, pollInterval
@@ -118,7 +141,7 @@ network={
 // initial exit (it daemonizes once it has a lease) — the layered Check owns
 // that.
 func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, renderConf func(STAConfig) ([]byte, error), writeFile func(string, []byte) error, sleep func(time.Duration)) error {
-	killDHClient(ctx, r)
+	killDHClient(ctx, r, nil)
 
 	body, err := renderConf(sta)
 	if err != nil {

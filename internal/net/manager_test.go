@@ -1119,6 +1119,103 @@ func TestManagerRunCtxCancelMidSTAAttemptReturnsCleanly(t *testing.T) {
 	}
 }
 
+// TestManagerRunCtxCancelWhileOnlineKillsDHClient is the review-fix TDD test
+// for requirement (c) of the shutdown-teardown contract (issue #46 / M3.5
+// review of 3bcb10d): cleanupOnCancel previously only tore anything down
+// while ManagerAPFallback, so a clean shutdown that arrived while STA was
+// Online left staAttempt's daemon-mode dhclient renewing the lease
+// indefinitely. A Runner must now be killed unconditionally on ctx-cancel
+// teardown, regardless of ManagerState.
+func TestManagerRunCtxCancelWhileOnlineKillsDHClient(t *testing.T) {
+	driver := &fakeDriver{apActiveDefault: true}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	runner := NewFakeRunner()
+	runner.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		Runner:  runner,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-K", Addr: "192.168.4.1/24"},
+		After:   (&fakeAfter{}).After,
+		Now:     time.Now,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManagerAsync(ctx, m)
+
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerOnline })
+	cancel()
+
+	if err := waitRunDone(t, done); err != nil {
+		t.Fatalf("Run() err = %v, want nil (ctx cancel while Online must be a clean shutdown)", err)
+	}
+
+	want := "pkill -F " + dhclientPidfile + " dhclient"
+	for _, c := range runner.Calls() {
+		if c == want {
+			return
+		}
+	}
+	t.Fatalf("Runner.Calls() = %v, want a call to %q (shutdown while Online must kill the dhclient daemon)", runner.Calls(), want)
+}
+
+// TestManagerRunCtxCancelWhileAPFallbackStillKillsDHClientAndTearsDownAP
+// confirms cleanupOnCancel's two teardown actions are independent: the
+// pre-existing AP teardown (StopAP/Dnsmasq.Stop, gated on ManagerAPFallback)
+// must keep firing exactly as before, alongside the new unconditional
+// dhclient kill.
+func TestManagerRunCtxCancelWhileAPFallbackStillKillsDHClientAndTearsDownAP(t *testing.T) {
+	driver := &fakeDriver{attemptSTAErr: errors.New("no route to host"), apActiveDefault: true}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	runner := NewFakeRunner()
+	runner.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		Runner:  runner,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-K2", Addr: "192.168.4.1/24"},
+		After:   (&fakeAfter{}).After,
+		Now:     time.Now,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManagerAsync(ctx, m)
+
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
+	cancel()
+
+	if err := waitRunDone(t, done); err != nil {
+		t.Fatalf("Run() err = %v, want nil (ctx cancel while AP fallback must be a clean shutdown)", err)
+	}
+
+	wantKill := "pkill -F " + dhclientPidfile + " dhclient"
+	var sawKill bool
+	for _, c := range runner.Calls() {
+		if c == wantKill {
+			sawKill = true
+		}
+	}
+	if !sawKill {
+		t.Fatalf("Runner.Calls() = %v, want a call to %q", runner.Calls(), wantKill)
+	}
+
+	var sawStopAP bool
+	for _, c := range driver.Calls() {
+		if c == "StopAP" {
+			sawStopAP = true
+		}
+	}
+	if !sawStopAP {
+		t.Fatalf("driver.Calls() = %v, want StopAP (existing AP teardown must still fire)", driver.Calls())
+	}
+}
+
 // (h) Beat is called at least once per loop iteration.
 func TestManagerRunCallsBeatEveryLoopIteration(t *testing.T) {
 	driver := &fakeDriver{apActiveDefault: true}

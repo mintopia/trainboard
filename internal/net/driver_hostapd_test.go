@@ -19,7 +19,7 @@ func newTestHostapdDriver(r Runner) (*hostapdDriver, *fakeFileWriter, *fakeSleep
 func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -37,7 +37,7 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 
 	want := []string{
 		"wpa_cli -i wlan0 disable_network 0", // release the iface from wpa_supplicant's STA control
-		"pkill -F " + dhclientPidfile,        // issue #46: kill the STA dhclient daemon
+		"pkill -F " + dhclientPidfile + " dhclient",        // issue #46: kill the STA dhclient daemon
 		"hostapd -B /run/trainboard-hostapd.conf",
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
@@ -60,7 +60,7 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 func TestHostapdDriverStartAPTeleratesDisableNetworkFailure(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("wpa_cli -i wlan0 disable_network 0", "", errors.New("exit status 1"))
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -84,7 +84,7 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 	t.Run("conf content matches template with substitution", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
-		r.Script("pkill -F "+dhclientPidfile, "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -146,7 +146,7 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 	t.Run("configured country is used instead of a hardcoded GB", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
-		r.Script("pkill -F "+dhclientPidfile, "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -241,7 +241,7 @@ func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
@@ -257,7 +257,7 @@ func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.
 	want := []string{
 		"pkill -x hostapd",
 		"ip addr flush dev wlan0",
-		"pkill -F " + dhclientPidfile, // issue #46: kill-before-start (staAttempt)
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: kill-before-start (staAttempt)
 		"wpa_cli -i wlan0 reconfigure",
 		"wpa_cli -i wlan0 select_network 0",
 		"wpa_cli -i wlan0 status",
@@ -277,7 +277,7 @@ func TestHostapdDriverAttemptSTASurfacesDHClientFailure(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)

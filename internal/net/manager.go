@@ -81,6 +81,12 @@ type ManagerDeps struct {
 	Dnsmasq *Dnsmasq
 	Prereqs func(ctx context.Context) error
 	AP      APConfig
+	// Runner is the exec seam cleanupOnCancel uses to kill any dhclient
+	// daemon still renewing the STA lease on shutdown (issue #46 requirement
+	// (c): the daemon must not outlive the manager). nil-tolerant — only
+	// production wiring sets it; tests that never exercise ctx-cancel
+	// teardown may leave it unset.
+	Runner Runner
 	// STA reads the current config; an empty SSID means no wifi configured.
 	STA func() STAConfig
 	// OnOnline pokes the poller once Online is published (Task 11).
@@ -510,14 +516,25 @@ func (m *Manager) now() time.Time {
 	return time.Now()
 }
 
-// cleanupOnCancel best-effort tears the AP down on ctx cancellation, if it
-// was up — the device is shutting down or restarting, not failing, so
-// errors here are not actionable.
+// cleanupOnCancel best-effort tears down on ctx cancellation — the device is
+// shutting down or restarting, not failing, so errors here are not
+// actionable. Two things happen, unconditionally and independently:
+//
+//   - any dhclient daemon left renewing the STA lease is killed (issue #46
+//     requirement (c): a clean shutdown while Online must not leave the
+//     daemon running indefinitely). killDHClient is idempotent and tolerates
+//     "not running", so calling it regardless of ManagerState is correct
+//     even when STA was never attempted this process.
+//   - the AP is torn down, but only if it was actually up (ManagerAPFallback)
+//     — StopAP/Dnsmasq.Stop on a never-started AP would be pure noise.
 func (m *Manager) cleanupOnCancel() {
+	bg := context.Background()
+	if m.d.Runner != nil {
+		killDHClient(bg, m.d.Runner, m.d.Log)
+	}
 	if m.Status().State != ManagerAPFallback {
 		return
 	}
-	bg := context.Background()
 	if m.d.Driver != nil {
 		_ = m.d.Driver.StopAP(bg)
 	}

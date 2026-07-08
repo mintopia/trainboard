@@ -68,7 +68,7 @@ func TestMode2DriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -87,7 +87,7 @@ func TestMode2DriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 		"wpa_cli -i wlan0 status",              // daemon check (already running)
 		"wpa_cli -i wlan0 reconfigure",         // conf changed, reload
 		"wpa_cli -i wlan0 select_network 1",    // AP is network id 1 (leaves STA)
-		"pkill -F " + dhclientPidfile,          // issue #46: kill the STA dhclient daemon
+		"pkill -F " + dhclientPidfile + " dhclient",          // issue #46: kill the STA dhclient daemon
 		"wpa_cli -i wlan0 status",              // poll: satisfied first try
 		"ip addr flush dev wlan0",              // clear existing addr
 		"ip addr add 192.168.4.1/24 dev wlan0", // assign AP static addr
@@ -104,7 +104,7 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=SCANNING\n", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 
 	d, _, sl := newTestMode2Driver(r)
 
@@ -141,7 +141,7 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 // with the daemon-mode `dhclient -v -pf <pidfile> wlan0` (issue #46).
 func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	r := NewFakeRunner()
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
@@ -159,7 +159,7 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	if len(calls) == 0 || calls[len(calls)-1] != wantLast {
 		t.Fatalf("last call = %q, want %q (calls: %v)", calls[len(calls)-1], wantLast, calls)
 	}
-	if calls[0] != "pkill -F "+dhclientPidfile {
+	if calls[0] != "pkill -F "+dhclientPidfile+" dhclient" {
 		t.Fatalf("first call = %q, want the kill-before-start pkill (calls: %v)", calls[0], calls)
 	}
 	writes := fw.writes()
@@ -182,7 +182,7 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 // (d) AttemptSTA surfaces dhclient failure.
 func TestMode2DriverAttemptSTASurfacesDHClientFailure(t *testing.T) {
 	r := NewFakeRunner()
-	r.Script("pkill -F "+dhclientPidfile, "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
@@ -209,7 +209,7 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 		r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 		r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-		r.Script("pkill -F "+dhclientPidfile, "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -278,7 +278,7 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 		r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 		r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-		r.Script("pkill -F "+dhclientPidfile, "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -362,7 +362,7 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	base := NewFakeRunner()
 	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
 	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-	base.Script("pkill -F "+dhclientPidfile, "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	base.Script("ip addr flush dev wlan0", "", nil)
 	base.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -384,7 +384,7 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 		"wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", // daemon-start branch
 		"wpa_cli -i wlan0 status",                                // ensureDaemon: ctrl-socket ready poll (issue #47)
 		"wpa_cli -i wlan0 select_network 1",
-		"pkill -F " + dhclientPidfile, // issue #46: leaving STA for AP kills the dhclient daemon
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: leaving STA for AP kills the dhclient daemon
 		"wpa_cli -i wlan0 status",     // poll: satisfied first try
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
@@ -618,7 +618,7 @@ func TestMode2DriverStartAPExtendedPollBudgetAfterDaemonStart(t *testing.T) {
 	base := NewFakeRunner()
 	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
 	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-	base.Script("pkill -F "+dhclientPidfile, "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	base.Script("ip addr flush dev wlan0", "", nil)
 	base.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -666,7 +666,7 @@ func TestMode2DriverStartAPPostDaemonStartBudgetCapsAtTwenty(t *testing.T) {
 	base := NewFakeRunner()
 	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
 	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-	base.Script("pkill -F "+dhclientPidfile, "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 
 	responses := []statusResponse{
 		// Branch decision fails => spawn branch; every later status answers
@@ -713,7 +713,7 @@ func TestMode2DriverStartAPKeepsDefaultBudgetWhenDaemonAlreadyRunning(t *testing
 	base := NewFakeRunner()
 	base.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
-	base.Script("pkill -F "+dhclientPidfile, "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 
 	responses := []statusResponse{
 		// Call 1: branch decision succeeds => already-running branch.
