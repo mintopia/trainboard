@@ -84,13 +84,13 @@ func TestMode2DriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	}
 
 	want := []string{
-		"wpa_cli -i wlan0 status",              // daemon check (already running)
-		"wpa_cli -i wlan0 reconfigure",         // conf changed, reload
-		"wpa_cli -i wlan0 select_network 1",    // AP is network id 1 (leaves STA)
-		"pkill -F " + dhclientPidfile + " dhclient",          // issue #46: kill the STA dhclient daemon
-		"wpa_cli -i wlan0 status",              // poll: satisfied first try
-		"ip addr flush dev wlan0",              // clear existing addr
-		"ip addr add 192.168.4.1/24 dev wlan0", // assign AP static addr
+		"wpa_cli -i wlan0 status",                   // daemon check (already running)
+		"wpa_cli -i wlan0 reconfigure",              // conf changed, reload
+		"wpa_cli -i wlan0 select_network 1",         // AP is network id 1 (leaves STA)
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: kill the STA dhclient daemon
+		"wpa_cli -i wlan0 status",                   // poll: satisfied first try
+		"ip addr flush dev wlan0",                   // clear existing addr
+		"ip addr add 192.168.4.1/24 dev wlan0",      // assign AP static addr
 	}
 	got := r.Calls()
 	if !reflect.DeepEqual(got, want) {
@@ -385,7 +385,7 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 		"wpa_cli -i wlan0 status",                                // ensureDaemon: ctrl-socket ready poll (issue #47)
 		"wpa_cli -i wlan0 select_network 1",
 		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: leaving STA for AP kills the dhclient daemon
-		"wpa_cli -i wlan0 status",     // poll: satisfied first try
+		"wpa_cli -i wlan0 status",                   // poll: satisfied first try
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
 	}

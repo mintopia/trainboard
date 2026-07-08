@@ -36,8 +36,8 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	}
 
 	want := []string{
-		"wpa_cli -i wlan0 disable_network 0", // release the iface from wpa_supplicant's STA control
-		"pkill -F " + dhclientPidfile + " dhclient",        // issue #46: kill the STA dhclient daemon
+		"wpa_cli -i wlan0 disable_network 0",        // release the iface from wpa_supplicant's STA control
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: kill the STA dhclient daemon
 		"hostapd -B /run/trainboard-hostapd.conf",
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
