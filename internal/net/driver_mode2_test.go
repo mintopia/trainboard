@@ -68,27 +68,28 @@ func TestMode2DriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
 	d, _, _ := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil", err)
 	}
 
 	want := []string{
-		"wpa_cli -i wlan0 status",              // daemon check (already running)
-		"wpa_cli -i wlan0 reconfigure",         // conf changed, reload
-		"wpa_cli -i wlan0 select_network 1",    // AP is network id 1
-		"wpa_cli -i wlan0 status",              // poll: satisfied first try
-		"ip addr flush dev wlan0",              // clear existing addr
-		"ip addr add 192.168.4.1/24 dev wlan0", // assign AP static addr
+		"wpa_cli -i wlan0 status",                   // daemon check (already running)
+		"wpa_cli -i wlan0 reconfigure",              // conf changed, reload
+		"wpa_cli -i wlan0 select_network 1",         // AP is network id 1 (leaves STA)
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: kill the STA dhclient daemon
+		"wpa_cli -i wlan0 status",                   // poll: satisfied first try
+		"ip addr flush dev wlan0",                   // clear existing addr
+		"ip addr add 192.168.4.1/24 dev wlan0",      // assign AP static addr
 	}
 	got := r.Calls()
 	if !reflect.DeepEqual(got, want) {
@@ -102,13 +103,13 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=SCANNING\n", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 
 	d, _, sl := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err == nil {
 		t.Fatal("StartAP() = nil, want error")
@@ -117,9 +118,10 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 		t.Fatalf("err = %v, want containing %q", err, "AP not active")
 	}
 
-	// daemon check (1) + reconfigure (1) + select_network (1) + 10 polls = 13
-	// calls; the poll loop sleeps between attempts but not after the last.
-	wantCalls := 13
+	// daemon check (1) + reconfigure (1) + select_network (1) + dhclient
+	// kill (1) + 10 polls = 14 calls; the poll loop sleeps between attempts
+	// but not after the last.
+	wantCalls := 14
 	if got := len(r.Calls()); got != wantCalls {
 		t.Fatalf("len(Calls()) = %d, want %d (calls: %v)", got, wantCalls, r.Calls())
 	}
@@ -133,13 +135,15 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 	}
 }
 
-// (c) AttemptSTA happy path ends with `dhclient -1 -v wlan0`.
+// (c) AttemptSTA happy path kills any stale dhclient daemon first, then ends
+// with the daemon-mode `dhclient -v -pf <pidfile> wlan0` (issue #46).
 func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	r := NewFakeRunner()
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
-	r.Script("dhclient -1 -v wlan0", "bound to 192.168.3.181\n", nil)
+	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
 
 	d, fw, _ := newTestMode2Driver(r)
 
@@ -149,8 +153,12 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	}
 
 	calls := r.Calls()
-	if len(calls) == 0 || calls[len(calls)-1] != "dhclient -1 -v wlan0" {
-		t.Fatalf("last call = %q, want %q (calls: %v)", calls[len(calls)-1], "dhclient -1 -v wlan0", calls)
+	wantLast := "dhclient -v -pf " + dhclientPidfile + " wlan0"
+	if len(calls) == 0 || calls[len(calls)-1] != wantLast {
+		t.Fatalf("last call = %q, want %q (calls: %v)", calls[len(calls)-1], wantLast, calls)
+	}
+	if calls[0] != "pkill -F "+dhclientPidfile+" dhclient" {
+		t.Fatalf("first call = %q, want the kill-before-start pkill (calls: %v)", calls[0], calls)
 	}
 	writes := fw.writes()
 	if len(writes) != 1 {
@@ -172,10 +180,11 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 // (d) AttemptSTA surfaces dhclient failure.
 func TestMode2DriverAttemptSTASurfacesDHClientFailure(t *testing.T) {
 	r := NewFakeRunner()
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
-	r.Script("dhclient -1 -v wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
+	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
 
 	d, _, _ := newTestMode2Driver(r)
 
@@ -198,6 +207,7 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 		r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 		r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -208,9 +218,8 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		d.sta = STAConfig{SSID: "HomeWifi", PSK: "clientpsk123"}
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "appassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-ABCD",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -233,28 +242,37 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 			`ssid="Trainboard-ABCD"`,
 			`mode=2`,
 			`frequency=2437`,
-			`key_mgmt=WPA-PSK`,
-			`psk="appassword1"`,
+			`key_mgmt=NONE`,
 		} {
 			if !strings.Contains(conf, want) {
 				t.Errorf("conf missing %q; conf:\n%s", want, conf)
 			}
 		}
+		// The AP is now open (issue #44): no WPA-PSK key management, and the
+		// AP block carries no psk of its own. The only psk= line left is the
+		// STA block's.
+		for _, notWant := range []string{`key_mgmt=WPA-PSK`, `wpa_passphrase`} {
+			if strings.Contains(conf, notWant) {
+				t.Errorf("open AP conf must not contain %q; conf:\n%s", notWant, conf)
+			}
+		}
+		if got := strings.Count(conf, "psk="); got != 1 {
+			t.Errorf("conf has %d psk= lines, want 1 (STA only; the open AP has none); conf:\n%s", got, conf)
+		}
 	})
 
-	t.Run("PSK containing a quote is rejected, not written", func(t *testing.T) {
+	t.Run("AP SSID containing a quote is rejected, not written", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 
 		d, fw, _ := newTestMode2Driver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: `apppass"; disabled=0`,
-			Addr:     "192.168.4.1/24",
+			SSID: `Trainboard"; disabled=0`,
+			Addr: "192.168.4.1/24",
 		})
 		if err == nil {
-			t.Fatal("StartAP() = nil, want error for quote-containing password")
+			t.Fatal("StartAP() = nil, want error for quote-containing SSID")
 		}
 		if len(fw.writes()) != 0 {
 			t.Fatalf("writeFile called %d times, want 0 (quote must be rejected before write)", len(fw.writes()))
@@ -266,6 +284,7 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 		r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 		r.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -274,9 +293,8 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		d := newMode2Driver(r, "wlan0", "US", fw.write, sl.sleep)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-1234",
-			Password: "testpass1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-1234",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -349,6 +367,7 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	base := NewFakeRunner()
 	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
 	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	base.Script("ip addr flush dev wlan0", "", nil)
 	base.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
 
@@ -357,9 +376,8 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	d, _, _ := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil", err)
@@ -368,8 +386,10 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	want := []string{
 		"wpa_cli -i wlan0 status",                                // ensureDaemon: not running (errors)
 		"wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", // daemon-start branch
+		"wpa_cli -i wlan0 status",                                // ensureDaemon: ctrl-socket ready poll (issue #47)
 		"wpa_cli -i wlan0 select_network 1",
-		"wpa_cli -i wlan0 status", // poll: satisfied first try
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: leaving STA for AP kills the dhclient daemon
+		"wpa_cli -i wlan0 status",                   // poll: satisfied first try
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
 	}
@@ -388,5 +408,346 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	}
 	if starts != 1 {
 		t.Fatalf("wpa_supplicant -B started %d times, want exactly 1", starts)
+	}
+}
+
+// statusFailRunner is a stateful Runner double for the ensureDaemon
+// ctrl-socket-wait tests (issue #47): the first failFirst "wpa_cli ... status"
+// calls error (the daemon's control socket is not yet accepting commands),
+// then every later status call succeeds. Non-status commands delegate to the
+// wrapped Runner. Distinct from sequencedStatusRunner (which only ever fails
+// the first status call) because ensureDaemon's socket wait needs the SAME
+// status command to fail an arbitrary, configurable number of times — the
+// branch-decision call PLUS several failed polls — before coming up.
+type statusFailRunner struct {
+	Runner
+	statusCmd string
+	failFirst int
+
+	mu    sync.Mutex
+	calls []string
+	hits  int
+}
+
+func (s *statusFailRunner) Run(ctx context.Context, argv ...string) (string, error) {
+	cmd := strings.Join(argv, " ")
+
+	s.mu.Lock()
+	s.calls = append(s.calls, cmd)
+	isStatus := cmd == s.statusCmd
+	if isStatus {
+		s.hits++
+	}
+	hit := s.hits
+	s.mu.Unlock()
+
+	if isStatus {
+		if hit <= s.failFirst {
+			return "", errors.New("exit status 1: wlan0: ctrl socket not ready")
+		}
+		return "wpa_state=COMPLETED\nmode=AP\n", nil
+	}
+	return s.Runner.Run(ctx, argv...)
+}
+
+func (s *statusFailRunner) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+func (s *statusFailRunner) statusCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, c := range s.calls {
+		if c == s.statusCmd {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMode2DriverEnsureDaemonWaitsForCtrlSocketThenSucceeds pins the issue #47
+// fix: after spawning wpa_supplicant -B, ensureDaemon must poll `wpa_cli
+// status` until the control socket answers before returning — otherwise the
+// immediately-following select_network / association races the daemon coming
+// up and the first STA attempt fails outright on real hardware. Here the
+// post-spawn status poll fails twice then succeeds, so ensureDaemon returns
+// (true, nil) having issued exactly one wpa_supplicant -B.
+func TestMode2DriverEnsureDaemonWaitsForCtrlSocketThenSucceeds(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+
+	// failFirst=3: the branch-decision status (call 1) fails so ensureDaemon
+	// takes the spawn branch, then the socket-wait poll fails twice (calls
+	// 2,3) and succeeds on the third poll (call 4).
+	r := &statusFailRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", failFirst: 3}
+
+	d, _, sl := newTestMode2Driver(r)
+
+	started, err := d.ensureDaemon(context.Background())
+	if err != nil {
+		t.Fatalf("ensureDaemon() err = %v, want nil", err)
+	}
+	if !started {
+		t.Fatal("ensureDaemon() started = false, want true (it spawned wpa_supplicant this call)")
+	}
+
+	starts := 0
+	for _, c := range r.Calls() {
+		if strings.HasPrefix(c, "wpa_supplicant -B") {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("wpa_supplicant -B issued %d times, want exactly 1 (calls: %v)", starts, r.Calls())
+	}
+	// 1 branch-decision status + 3 socket-wait polls (fail, fail, succeed).
+	if got := r.statusCalls(); got != 4 {
+		t.Fatalf("status called %d times, want 4 (1 branch + 3 polls); calls: %v", got, r.Calls())
+	}
+	// Sleeps only between the two failed polls, not after the succeeding one.
+	if got := sl.calls(); got != 2 {
+		t.Fatalf("sleep called %d times, want 2 (between the two failed polls)", got)
+	}
+}
+
+// TestMode2DriverEnsureDaemonTimesOutWhenCtrlSocketNeverReady pins the bounded
+// side of the issue #47 wait: if the control socket never answers, ensureDaemon
+// gives up after exactly pollAttempts polls, returning (true, err) — started is
+// still true because it did spawn the daemon; only the socket wait timed out.
+func TestMode2DriverEnsureDaemonTimesOutWhenCtrlSocketNeverReady(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+
+	// Every status call fails: branch-decision + all polls.
+	r := &statusFailRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", failFirst: 1_000}
+
+	d, _, sl := newTestMode2Driver(r)
+
+	started, err := d.ensureDaemon(context.Background())
+	if err == nil {
+		t.Fatal("ensureDaemon() err = nil, want a ctrl-socket timeout error")
+	}
+	if !started {
+		t.Fatal("ensureDaemon() started = false, want true (it spawned before the socket wait timed out)")
+	}
+	if !strings.Contains(err.Error(), "daemon ctrl socket not ready") {
+		t.Fatalf("err = %v, want containing %q", err, "daemon ctrl socket not ready")
+	}
+	// 1 branch-decision status + exactly pollAttempts socket-wait polls.
+	if got := r.statusCalls(); got != pollAttempts+1 {
+		t.Fatalf("status called %d times, want %d (1 branch + %d polls); calls: %v", got, pollAttempts+1, pollAttempts, r.Calls())
+	}
+	if got := sl.calls(); got != pollAttempts-1 {
+		t.Fatalf("sleep called %d times, want %d", got, pollAttempts-1)
+	}
+}
+
+// --- issue #48: post-daemon-start AP-active poll budget ----------------------
+
+// statusResponse is one scripted (out, err) result for scriptedStatusRunner.
+type statusResponse struct {
+	out string
+	err error
+}
+
+// scriptedStatusRunner scripts every "wpa_cli ... status" call individually,
+// consumed front-to-back (the last response repeats once exhausted).
+// Distinct from sequencedStatusRunner (fails exactly the first status call)
+// and statusFailRunner (fails the first N, then always succeeds): the issue
+// #48 budget tests need a status that SUCCEEDS as a command early (the
+// daemon's ctrl socket is up) yet only satisfies StartAP's AP-active
+// predicate on a specific later poll — a fail/ok split can't express that.
+// Non-status commands delegate to the wrapped Runner.
+type scriptedStatusRunner struct {
+	Runner
+	statusCmd string
+	responses []statusResponse
+
+	mu    sync.Mutex
+	calls []string
+	hits  int
+}
+
+func (s *scriptedStatusRunner) Run(ctx context.Context, argv ...string) (string, error) {
+	cmd := strings.Join(argv, " ")
+
+	s.mu.Lock()
+	s.calls = append(s.calls, cmd)
+	isStatus := cmd == s.statusCmd
+	var resp statusResponse
+	if isStatus {
+		i := s.hits
+		if i >= len(s.responses) {
+			i = len(s.responses) - 1
+		}
+		resp = s.responses[i]
+		s.hits++
+	}
+	s.mu.Unlock()
+
+	if isStatus {
+		return resp.out, resp.err
+	}
+	return s.Runner.Run(ctx, argv...)
+}
+
+func (s *scriptedStatusRunner) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+func (s *scriptedStatusRunner) statusCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, c := range s.calls {
+		if c == s.statusCmd {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMode2DriverStartAPExtendedPollBudgetAfterDaemonStart pins the issue #48
+// budget switch: when ensureDaemon just spawned wpa_supplicant (cold start —
+// e.g. the previous instance was SIGKILL'd), the AP-active wait gets the
+// extended apPollsAfterDaemonStart budget instead of the default pollAttempts.
+// Here the AP only reports active on poll 15 — past the old 10-poll budget,
+// inside the new 20 — so StartAP must succeed.
+func TestMode2DriverStartAPExtendedPollBudgetAfterDaemonStart(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+	base.Script("ip addr flush dev wlan0", "", nil)
+	base.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
+
+	responses := []statusResponse{
+		// Call 1: branch decision fails => ensureDaemon takes the spawn branch.
+		{"", errors.New("exit status 255: could not connect to wpa_supplicant")},
+		// Call 2: ctrl-socket wait poll — the command exits 0, socket is up.
+		{"wpa_state=SCANNING\n", nil},
+	}
+	// Calls 3..16: AP-active polls 1-14 — socket answers but not yet mode=AP.
+	for i := 0; i < 14; i++ {
+		responses = append(responses, statusResponse{"wpa_state=SCANNING\n", nil})
+	}
+	// Call 17: AP-active poll 15 — beaconing.
+	responses = append(responses, statusResponse{"wpa_state=COMPLETED\nmode=AP\n", nil})
+
+	r := &scriptedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", responses: responses}
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
+	})
+	if err != nil {
+		t.Fatalf("StartAP() = %v, want nil (AP active on poll 15 must be inside the post-daemon-start budget)", err)
+	}
+
+	// 1 branch decision + 1 ctrl-socket poll + 15 AP-active polls.
+	if got := r.statusCalls(); got != 17 {
+		t.Fatalf("status called %d times, want 17 (1 branch + 1 socket + 15 AP polls); calls: %v", got, r.Calls())
+	}
+	// Sleeps only between the 14 failed AP polls and their successor; the
+	// ctrl-socket wait succeeded on its first poll (no sleeps).
+	if got := sl.calls(); got != 14 {
+		t.Fatalf("sleep called %d times, want 14", got)
+	}
+}
+
+// TestMode2DriverStartAPPostDaemonStartBudgetCapsAtTwenty pins the extended
+// budget's upper bound: with a freshly spawned daemon whose AP never
+// activates, StartAP gives up after exactly apPollsAfterDaemonStart (20)
+// polls — bounded, not unbounded.
+func TestMode2DriverStartAPPostDaemonStartBudgetCapsAtTwenty(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+
+	responses := []statusResponse{
+		// Branch decision fails => spawn branch; every later status answers
+		// (socket up) but never reaches mode=AP (last response repeats).
+		{"", errors.New("exit status 255: could not connect to wpa_supplicant")},
+		{"wpa_state=SCANNING\n", nil},
+	}
+
+	r := &scriptedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", responses: responses}
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
+	})
+	if err == nil {
+		t.Fatal("StartAP() = nil, want error (AP never active)")
+	}
+	if !strings.Contains(err.Error(), "AP not active after 20 polls") {
+		t.Fatalf("err = %v, want containing %q", err, "AP not active after 20 polls")
+	}
+
+	// 1 branch decision + 1 ctrl-socket poll + exactly 20 AP-active polls.
+	if got := r.statusCalls(); got != 22 {
+		t.Fatalf("status called %d times, want 22 (1 branch + 1 socket + 20 AP polls); calls: %v", got, r.Calls())
+	}
+	// 19 sleeps between the 20 failed AP polls; none in the socket wait.
+	if got := sl.calls(); got != 19 {
+		t.Fatalf("sleep called %d times, want 19", got)
+	}
+	for _, c := range r.Calls() {
+		if strings.HasPrefix(c, "ip ") {
+			t.Fatalf("calls contain %q, want no ip commands after AP never active", c)
+		}
+	}
+}
+
+// TestMode2DriverStartAPKeepsDefaultBudgetWhenDaemonAlreadyRunning pins that
+// the extended budget applies ONLY to the daemon-spawn branch: with
+// wpa_supplicant already running, an AP that would activate on poll 15 is NOT
+// waited for — StartAP still fails after the default pollAttempts (10) polls.
+func TestMode2DriverStartAPKeepsDefaultBudgetWhenDaemonAlreadyRunning(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+
+	responses := []statusResponse{
+		// Call 1: branch decision succeeds => already-running branch.
+		{"wpa_state=SCANNING\n", nil},
+	}
+	// Calls 2..15: AP-active polls 1-14 not yet AP.
+	for i := 0; i < 14; i++ {
+		responses = append(responses, statusResponse{"wpa_state=SCANNING\n", nil})
+	}
+	// Call 16 would be AP-active poll 15 — reachable only under the extended
+	// budget, which this branch must NOT get.
+	responses = append(responses, statusResponse{"wpa_state=COMPLETED\nmode=AP\n", nil})
+
+	r := &scriptedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", responses: responses}
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
+	})
+	if err == nil {
+		t.Fatal("StartAP() = nil, want error (already-running branch keeps the 10-poll budget)")
+	}
+	if !strings.Contains(err.Error(), "AP not active after 10 polls") {
+		t.Fatalf("err = %v, want containing %q", err, "AP not active after 10 polls")
+	}
+
+	// 1 branch decision + exactly pollAttempts AP-active polls.
+	if got := r.statusCalls(); got != pollAttempts+1 {
+		t.Fatalf("status called %d times, want %d (1 branch + %d AP polls); calls: %v", got, pollAttempts+1, pollAttempts, r.Calls())
+	}
+	if got := sl.calls(); got != pollAttempts-1 {
+		t.Fatalf("sleep called %d times, want %d", got, pollAttempts-1)
 	}
 }

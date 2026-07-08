@@ -81,6 +81,12 @@ type ManagerDeps struct {
 	Dnsmasq *Dnsmasq
 	Prereqs func(ctx context.Context) error
 	AP      APConfig
+	// Runner is the exec seam cleanupOnCancel uses to kill any dhclient
+	// daemon still renewing the STA lease on shutdown (issue #46 requirement
+	// (c): the daemon must not outlive the manager). nil-tolerant — only
+	// production wiring sets it; tests that never exercise ctx-cancel
+	// teardown may leave it unset.
+	Runner Runner
 	// STA reads the current config; an empty SSID means no wifi configured.
 	STA func() STAConfig
 	// OnOnline pokes the poller once Online is published (Task 11).
@@ -105,6 +111,14 @@ type Manager struct {
 	status atomic.Pointer[Status]
 	retry  chan struct{}
 
+	// firstAttempt and fastRetried gate the once-per-process instant-failure
+	// fast retry (issue #47). They are owned exclusively by Run's single
+	// goroutine — only ever read/written from bootSTA — so they need no mutex.
+	// firstAttempt marks the very first STA attempt of the process (cleared
+	// after it); fastRetried pins the fast retry to at most once per lifetime.
+	firstAttempt bool
+	fastRetried  bool
+
 	provMu sync.Mutex
 	provAt time.Time
 }
@@ -112,7 +126,7 @@ type Manager struct {
 // NewManager builds a Manager publishing ManagerBoot until Run (Task 9)
 // drives its first transition.
 func NewManager(d ManagerDeps) *Manager {
-	m := &Manager{d: d, retry: make(chan struct{}, 1)}
+	m := &Manager{d: d, retry: make(chan struct{}, 1), firstAttempt: true}
 	m.status.Store(&Status{State: ManagerBoot})
 	return m
 }
@@ -174,6 +188,14 @@ const (
 // variable rather than a plain const purely so tests can shrink it instead
 // of waiting out the real 45s; production wiring never touches it.
 var staAttemptBound = 45 * time.Second
+
+// fastRetryThreshold bounds "instant" for the once-per-process cold-start fast
+// retry (issue #47): a FIRST STA attempt that fails faster than this almost
+// certainly lost a race with wpa_supplicant's control socket coming up rather
+// than genuinely failing to associate, so retrying once immediately is far
+// cheaper than a full ~5-minute AP-fallback detour. The injected clock
+// (m.now()) measures the attempt.
+const fastRetryThreshold = 2 * time.Second
 
 // managerPhase tracks Run's own loop position; distinct from the published
 // Status (which is what callers such as the render loop or web UI observe).
@@ -265,7 +287,7 @@ func (m *Manager) Run(ctx context.Context) error {
 // treated as clean shutdown (best-effort AP teardown, cancelled=true), never
 // escalation — see Run's ctx-cancellation contract.
 func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled bool, err error) {
-	if err := m.toSTA(ctx); err == nil {
+	if err := m.bootSTA(ctx); err == nil {
 		return phaseOnlineWait, false, nil
 	}
 	if err := m.toAP(ctx); err != nil {
@@ -276,6 +298,36 @@ func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled boo
 		return phaseBoot, false, fmt.Errorf("net: manager: boot: AP fallback failed: %w", err)
 	}
 	return phaseAPWait, false, nil
+}
+
+// bootSTA runs the boot-time STA attempt with the once-per-process
+// instant-failure fast retry (issue #47). If the very first STA attempt of the
+// process fails within fastRetryThreshold — measured on the injected clock, so
+// a cold wpa_supplicant control-socket race rather than a genuine association
+// failure — it retries STA once immediately instead of paying a full
+// ~5-minute AP-fallback detour; only if that also fails does the caller fall
+// back to AP.
+//
+// The fast retry is skipped when ctx is already cancelled (a shutdown, not a
+// race — see Run's ctx-cancellation contract), so this stays a clean no-op on
+// the ctx-cancel-mid-attempt path. firstAttempt/fastRetried are Run-loop-owned
+// (this method runs only on Run's single goroutine); no mutex.
+func (m *Manager) bootSTA(ctx context.Context) error {
+	start := m.now()
+	staErr := m.toSTA(ctx)
+	first := m.firstAttempt
+	m.firstAttempt = false
+	if staErr == nil {
+		return nil
+	}
+	if !m.fastRetried && first && ctx.Err() == nil && m.now().Sub(start) < fastRetryThreshold {
+		m.fastRetried = true
+		if m.d.Log != nil {
+			m.d.Log.Info("net: manager: first STA attempt failed instantly; fast retry")
+		}
+		return m.toSTA(ctx)
+	}
+	return staErr
 }
 
 // runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
@@ -321,6 +373,16 @@ func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error)
 // ctx cancellation), applies the provisioning-suppression rule, and — unless
 // suppressed — tears the AP down and retries STA once, restoring the AP
 // (with LastSTAErr recorded) on failure.
+//
+// A failed AP restore gets ONE in-process retry — a fresh teardown then a
+// full second toAP transition — before the existing fatal escalation (issue
+// #48): a SIGKILL'd wpa_supplicant makes the first restore's cold bring-up
+// miss its verification, and exiting fatally there traded a cheap in-process
+// retry for a systemd-watchdog reboot (~10 minutes total observed on
+// hardware). The retry reuses toAP, so a restore that only succeeds on the
+// retry is still fully VERIFIED before APFallback is published; a second
+// failure returns the same fatal error as before, keeping the watchdog
+// backstop unchanged.
 func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 	viaRetry, cancelled := m.waitAPFallback(ctx)
 	if cancelled {
@@ -352,7 +414,36 @@ func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 			m.cleanupOnCancel()
 			return phaseAPWait, true, nil
 		}
-		return phaseAPWait, false, fmt.Errorf("net: manager: AP fallback retry: AP restore failed: %w", err)
+		if m.d.Log != nil {
+			m.d.Log.Info("net: manager: AP restore failed; one in-process retry", "err", err)
+		}
+		// Beat before the retry so the extra toAP never stretches the
+		// worst-case heartbeat gap past managerBeatDeadline (cmd/trainboard's
+		// connectivity.go: 150s). Arithmetic, per that file's comment: the gap
+		// from the loop-top Beat to THIS one is the old worst-case chain with
+		// toAP regrown for the issue #48 post-daemon-start budget —
+		//   30 (wait remainder) + 5 (StopAP) + 5 (Dnsmasq.Stop)
+		//   + 5 (Prereqs) + 45 (staAttemptBound) + 40 (toAP w/ internal
+		//   retry: 2 x ~15s attempts incl. 10s AP polls + teardown)
+		//   = 130s < 150s.
+		// The gap from this Beat to the next loop-top Beat is only the fresh
+		// teardown (~10s) + the retry toAP (~40s) = ~50s. Without this Beat
+		// the single chain would be ~180s > 150s and the watchdog would fire
+		// mid-retry.
+		if m.d.Beat != nil {
+			m.d.Beat()
+		}
+		// Fresh teardown before re-running the full transition, mirroring
+		// toAP's own internal retry discipline (AP is DOWN during this window).
+		_ = m.d.Driver.StopAP(ctx)
+		_ = m.d.Dnsmasq.Stop(ctx)
+		if err := m.toAP(ctx); err != nil {
+			if ctx.Err() != nil {
+				m.cleanupOnCancel()
+				return phaseAPWait, true, nil
+			}
+			return phaseAPWait, false, fmt.Errorf("net: manager: AP fallback retry: AP restore failed: %w", err)
+		}
 	}
 
 	cur := m.Status()
@@ -412,21 +503,38 @@ func (m *Manager) suppressed() bool {
 	if at.IsZero() {
 		return false
 	}
-	now := time.Now()
-	if m.d.Now != nil {
-		now = m.d.Now()
-	}
-	return now.Sub(at) < provisioningSuppressWindow
+	return m.now().Sub(at) < provisioningSuppressWindow
 }
 
-// cleanupOnCancel best-effort tears the AP down on ctx cancellation, if it
-// was up — the device is shutting down or restarting, not failing, so
-// errors here are not actionable.
+// now reads the injected clock, falling back to the real clock only in
+// incomplete production wiring (every test seam sets Now). The single point
+// where internal/net logic reaches for the wall clock.
+func (m *Manager) now() time.Time {
+	if m.d.Now != nil {
+		return m.d.Now()
+	}
+	return time.Now()
+}
+
+// cleanupOnCancel best-effort tears down on ctx cancellation — the device is
+// shutting down or restarting, not failing, so errors here are not
+// actionable. Two things happen, unconditionally and independently:
+//
+//   - any dhclient daemon left renewing the STA lease is killed (issue #46
+//     requirement (c): a clean shutdown while Online must not leave the
+//     daemon running indefinitely). killDHClient is idempotent and tolerates
+//     "not running", so calling it regardless of ManagerState is correct
+//     even when STA was never attempted this process.
+//   - the AP is torn down, but only if it was actually up (ManagerAPFallback)
+//     — StopAP/Dnsmasq.Stop on a never-started AP would be pure noise.
 func (m *Manager) cleanupOnCancel() {
+	bg := context.Background()
+	if m.d.Runner != nil {
+		killDHClient(bg, m.d.Runner, m.d.Log)
+	}
 	if m.Status().State != ManagerAPFallback {
 		return
 	}
-	bg := context.Background()
 	if m.d.Driver != nil {
 		_ = m.d.Driver.StopAP(bg)
 	}
@@ -526,7 +634,7 @@ func (m *Manager) attemptAP(ctx context.Context) error {
 
 	m.publish(Status{
 		State:   ManagerAPFallback,
-		Hotspot: &board.Hotspot{SSID: m.d.AP.SSID, Password: m.d.AP.Password, Addr: "192.168.4.1"},
+		Hotspot: &board.Hotspot{SSID: m.d.AP.SSID, Addr: "192.168.4.1"},
 	})
 	return nil
 }

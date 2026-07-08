@@ -302,7 +302,6 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/events                        | GET    | 302 /login   | 200
 //	/config                        | GET    | 302 /login   | 200
 //	/config                        | POST   | 302 /login   | 200
-//	/config/ap-password            | POST   | 302 /login   | 200
 //	/actions                       | GET    | 302 /login   | 200
 //	/actions/restart               | POST   | 302 /login   | 200
 //	/actions/reboot                | POST   | 302 /login   | 200
@@ -341,7 +340,6 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "GET /events", method: http.MethodGet, path: "/events", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /config", method: http.MethodGet, path: "/config", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /config", method: http.MethodPost, path: "/config", body: htmlForm(baseConfigForm()), wantAuthedStatus: http.StatusOK, appliesAsync: true},
-		{name: "POST /config/ap-password", method: http.MethodPost, path: "/config/ap-password", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},
 		{name: "GET /actions", method: http.MethodGet, path: "/actions", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /actions/restart", method: http.MethodPost, path: "/actions/restart", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK, appliesAsync: true},
 		{name: "POST /actions/reboot", method: http.MethodPost, path: "/actions/reboot", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},

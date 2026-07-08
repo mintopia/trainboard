@@ -55,6 +55,11 @@ scene with fault code **E04** (configuration error) — this is expected and
 means the board is up and waiting to be configured, not a fault to
 investigate.
 
+The host's own system timezone doesn't matter and never needs configuring:
+the board always renders and compares times in Europe/London (BST-aware),
+via a zoneinfo database compiled into the binary — no dependency on the
+image shipping `/usr/share/zoneinfo`.
+
 ## 3. First-run provisioning (`/setup`)
 
 Browse to `http://trainboard.local/` from a device on the same LAN. With no
@@ -207,12 +212,13 @@ promptly to restore a valid config and close that window.
 The M3 connectivity manager owns wlan0 end to end: it attempts the WiFi
 network configured at `/config` (`wifi.ssid` / `wifi.psk`), verifies it with
 a layered check (association → DHCP → DNS → captive-portal detection), and
-falls back to the board's own WPA2 AP hotspot (`Trainboard-XXXX`, named from
+falls back to the board's own open AP hotspot (`Trainboard-XXXX`, named from
 wlan0's MAC) when the configured network can't be reached or none is
 configured yet — including on a wholly fresh, unconfigured device (the E04
-boot path runs the manager too, purely for AP fallback). While the AP is up,
-the panel shows the hotspot's SSID/password/address instead of the normal
-departure board.
+boot path runs the manager too, purely for AP fallback). The setup AP is
+open (no password — issue #44, operator decision, risk accepted): joining
+needs no credential. While the AP is up, the panel shows the hotspot's SSID
+and address instead of the normal departure board.
 
 This is **off by default** (`--manage-network=false`): the M3a bench Pi's
 WiFi stays ifupdown-managed until the M3b migration session explicitly hands
@@ -224,7 +230,16 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
 2. Install `dnsmasq` if it isn't already present (`apt-get install -y
    dnsmasq`) — M3a never runs it; the connectivity manager's AP fallback
    needs it for DHCP + captive DNS on wlan0.
-3. Hand wlan0 over from ifupdown to the connectivity manager — this is a
+3. Switch NTP to daemon mode **before enabling `--manage-network`** (the bench
+   Pi is already converted):
+   ```bash
+   sed -i 's/CONFIG_NTP_MODE=./CONFIG_NTP_MODE=4/' /boot/dietpi.txt && systemctl enable --now systemd-timesyncd
+   ```
+   The default `CONFIG_NTP_MODE=2` syncs the clock once at boot only; this
+   device's wlan0 comes up later under the app's own network manager, so
+   boot-time sync never completes and the clock drifts (there is no RTC to
+   persist time). Mode 4 runs systemd-timesyncd as a daemon for ongoing sync.
+4. Hand wlan0 over from ifupdown to the connectivity manager — this is a
    one-way step, do it in this order:
    1. Comment out the `iface wlan0 ...` block (and any `wpa-conf`/
       `wpa-ssid` lines under it) in `/etc/network/interfaces`.
@@ -233,12 +248,12 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
       generated — check `systemctl list-units 'ifup@wlan0*'` if the exact
       unit name differs).
    3. **Only then** add `--manage-network` to the unit's `ExecStart`.
-4. `systemctl daemon-reload && systemctl restart trainboard`.
-5. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
+5. `systemctl daemon-reload && systemctl restart trainboard`.
+6. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
    fallback before disconnecting your other access path.
 
 From this point on, wlan0 is manager-owned at boot: ifupdown will not touch
-it again unless the interfaces-file edit from step 3.1 is reverted, so a
+it again unless the interfaces-file edit from step 4.1 is reverted, so a
 crash-looped `trainboard.service` means wlan0 sits idle rather than falling
 back to ifupdown's own DHCP client.
 

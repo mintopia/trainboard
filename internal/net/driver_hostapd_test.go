@@ -19,6 +19,7 @@ func newTestHostapdDriver(r Runner) (*hostapdDriver, *fakeFileWriter, *fakeSleep
 func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -26,16 +27,16 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	d, fw, _ := newTestHostapdDriver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil", err)
 	}
 
 	want := []string{
-		"wpa_cli -i wlan0 disable_network 0", // release the iface from wpa_supplicant's STA control
+		"wpa_cli -i wlan0 disable_network 0",        // release the iface from wpa_supplicant's STA control
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: kill the STA dhclient daemon
 		"hostapd -B /run/trainboard-hostapd.conf",
 		"ip addr flush dev wlan0",
 		"ip addr add 192.168.4.1/24 dev wlan0",
@@ -58,6 +59,7 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 func TestHostapdDriverStartAPTeleratesDisableNetworkFailure(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("wpa_cli -i wlan0 disable_network 0", "", errors.New("exit status 1"))
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
 	r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -65,9 +67,8 @@ func TestHostapdDriverStartAPTeleratesDisableNetworkFailure(t *testing.T) {
 	d, _, _ := newTestHostapdDriver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil (disable_network failure must be tolerated)", err)
@@ -81,6 +82,7 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 	t.Run("conf content matches template with substitution", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -88,9 +90,8 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 		d, fw, _ := newTestHostapdDriver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "appassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-ABCD",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -109,30 +110,32 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 			"country_code=GB",
 			"hw_mode=g",
 			"channel=6",
-			"wpa=2",
-			"wpa_key_mgmt=WPA-PSK",
-			"rsn_pairwise=CCMP",
-			"wpa_passphrase=appassword1",
 		} {
 			if !strings.Contains(conf, want) {
 				t.Errorf("conf missing %q; conf:\n%s", want, conf)
 			}
 		}
+		// The AP is now open (issue #44): every WPA/passphrase directive is
+		// gone, so hostapd brings the AP up with no encryption.
+		for _, notWant := range []string{"wpa=2", "wpa_key_mgmt", "rsn_pairwise", "wpa_passphrase"} {
+			if strings.Contains(conf, notWant) {
+				t.Errorf("open AP conf must not contain %q; conf:\n%s", notWant, conf)
+			}
+		}
 	})
 
-	t.Run("passphrase containing a newline is rejected, not written", func(t *testing.T) {
+	t.Run("SSID containing a newline is rejected, not written", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
 
 		d, fw, _ := newTestHostapdDriver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "apppass1\ninterface=evil0",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard\ninterface=evil0",
+			Addr: "192.168.4.1/24",
 		})
 		if err == nil {
-			t.Fatal("StartAP() = nil, want error for newline-containing passphrase")
+			t.Fatal("StartAP() = nil, want error for newline-containing SSID")
 		}
 		if len(fw.writes()) != 0 {
 			t.Fatalf("writeFile called %d times, want 0 (newline must be rejected before write)", len(fw.writes()))
@@ -142,6 +145,7 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 	t.Run("configured country is used instead of a hardcoded GB", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
+		r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 		r.Script("hostapd -B /run/trainboard-hostapd.conf", "", nil)
 		r.Script("ip addr flush dev wlan0", "", nil)
 		r.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
@@ -151,9 +155,8 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 		d := newHostapdDriver(r, "wlan0", "US", fw.write, sl.sleep)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "appassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-ABCD",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -175,9 +178,8 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 		d, fw, _ := newTestHostapdDriver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     `Trainboard"ABCD`,
-			Password: "apppassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: `Trainboard"ABCD`,
+			Addr: "192.168.4.1/24",
 		})
 		if err == nil {
 			t.Fatal("StartAP() = nil, want error for quote-containing SSID")
@@ -231,15 +233,17 @@ func TestHostapdDriverStopAPTeleratesPkillNoProcessRunning(t *testing.T) {
 }
 
 // (f) AttemptSTA happy path stops the AP first, then runs the shared
-// wpa_cli/dhclient flow ending with `dhclient -1 -v wlan0`.
+// wpa_cli/dhclient flow ending with the daemon-mode `dhclient -v -pf
+// <pidfile> wlan0`.
 func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
-	r.Script("dhclient -1 -v wlan0", "bound to 192.168.3.181\n", nil)
+	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
 
 	d, fw, _ := newTestHostapdDriver(r)
 
@@ -251,10 +255,11 @@ func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.
 	want := []string{
 		"pkill -x hostapd",
 		"ip addr flush dev wlan0",
+		"pkill -F " + dhclientPidfile + " dhclient", // issue #46: kill-before-start (staAttempt)
 		"wpa_cli -i wlan0 reconfigure",
 		"wpa_cli -i wlan0 select_network 0",
 		"wpa_cli -i wlan0 status",
-		"dhclient -1 -v wlan0",
+		"dhclient -v -pf " + dhclientPidfile + " wlan0",
 	}
 	got := r.Calls()
 	if !reflect.DeepEqual(got, want) {
@@ -270,10 +275,11 @@ func TestHostapdDriverAttemptSTASurfacesDHClientFailure(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)
 	r.Script("ip addr flush dev wlan0", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
 	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
 	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
-	r.Script("dhclient -1 -v wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
+	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
 
 	d, _, _ := newTestHostapdDriver(r)
 

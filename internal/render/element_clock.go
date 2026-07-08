@@ -2,6 +2,8 @@ package render
 
 import (
 	"time"
+
+	"github.com/mintopia/trainboard/internal/tz"
 )
 
 var _ Element = (*Clock)(nil)
@@ -17,10 +19,12 @@ type Clock struct {
 
 const clockSecondsDrop = 5 // reference offset: seconds sit 5px lower
 
-// Render draws the clock for the given time.
+// Render draws the clock for the given time, in Europe/London wall-clock
+// (BST-aware) regardless of the instant's own timezone.
 func (c *Clock) Render(fb *Framebuffer, _ int, now time.Time) {
-	hourmin := now.Format("15:04")
-	seconds := now.Format(":05")
+	local := now.In(tz.Location())
+	hourmin := local.Format("15:04")
+	seconds := local.Format(":05")
 	w1, _ := c.Large.Measure(hourmin)
 	w2, _ := c.Tall.Measure(seconds)
 	margin := alignX(AlignCenter, c.W, w1+w2)

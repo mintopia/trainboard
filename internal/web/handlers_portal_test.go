@@ -16,7 +16,7 @@ import (
 // apHotspot is the fixed AP-mode hotspot fixture used throughout this file —
 // its contents don't matter to the probe handlers or setupGate, only that
 // Hotspot() returns non-nil.
-var apHotspot = &board.Hotspot{SSID: "Trainboard-AB12", Password: "pw", Addr: "192.168.4.1"}
+var apHotspot = &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}
 
 // newVirginAPTestServer wires a Server to a virgin device (no admin password
 // yet, i.e. needsSetup() true) whose Sources.Hotspot reports AP mode active

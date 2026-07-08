@@ -59,11 +59,13 @@ func newMode2Driver(r Runner, iface, country string, writeFile func(string, []by
 // `"` is rejected outright rather than risking config injection. country is
 // the regulatory domain to render (see NewMode2Driver).
 func renderConf(sta STAConfig, ap APConfig, country string) (string, error) {
-	for _, v := range []string{sta.SSID, sta.PSK, ap.SSID, ap.Password} {
+	for _, v := range []string{sta.SSID, sta.PSK, ap.SSID} {
 		if strings.Contains(v, `"`) {
 			return "", fmt.Errorf("net: mode2: value contains disallowed quote character")
 		}
 	}
+	// The AP block is open (key_mgmt=NONE, no psk): the setup hotspot carries
+	// no WPA2 password (issue #44 — operator decision, risk accepted).
 	return fmt.Sprintf(`ctrl_interface=/run/wpa_supplicant
 country=%s
 network={
@@ -77,11 +79,10 @@ network={
     ssid="%s"
     mode=2
     frequency=2437
-    key_mgmt=WPA-PSK
-    psk="%s"
+    key_mgmt=NONE
     disabled=1
 }
-`, country, sta.SSID, sta.PSK, ap.SSID, ap.Password), nil
+`, country, sta.SSID, sta.PSK, ap.SSID), nil
 }
 
 // writeConf renders the current sta/ap state and writes it to wpaConfPath.
@@ -98,34 +99,70 @@ func (d *mode2Driver) writeConf() error {
 
 // ensureDaemon starts wpa_supplicant if wpa_cli status errors (not running);
 // otherwise it tells the running daemon to pick up the conf we just wrote.
-func (d *mode2Driver) ensureDaemon(ctx context.Context) error {
-	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "status"); err != nil {
-		if _, err := d.r.Run(ctx, "wpa_supplicant", "-B", "-i", d.iface, "-c", wpaConfPath); err != nil {
-			return fmt.Errorf("net: mode2: start wpa_supplicant: %w", err)
+//
+// started is true iff this call spawned wpa_supplicant -B (the cold-start
+// branch), which the caller uses to budget the subsequent bring-up.
+//
+// After a spawn, ensureDaemon polls `wpa_cli status` (up to pollAttempts,
+// pollInterval apart, via the injected sleeper — the same seam pollStatus
+// uses) until the control socket answers, i.e. until the command exits 0. The
+// content of the status is irrelevant here (want always true); we only need
+// the socket to be accepting commands. Without this, the immediately-following
+// select_network / association races the daemon's socket coming up, which on
+// real hardware fails the first STA attempt outright and costs a ~5-minute AP
+// detour (issue #47).
+func (d *mode2Driver) ensureDaemon(ctx context.Context) (started bool, err error) {
+	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "status"); err == nil {
+		// Already running: tell it to reload the conf we just wrote.
+		if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "reconfigure"); err != nil {
+			return false, fmt.Errorf("net: mode2: reconfigure: %w", err)
 		}
-		return nil
+		return false, nil
 	}
-	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "reconfigure"); err != nil {
-		return fmt.Errorf("net: mode2: reconfigure: %w", err)
+	if _, err := d.r.Run(ctx, "wpa_supplicant", "-B", "-i", d.iface, "-c", wpaConfPath); err != nil {
+		return false, fmt.Errorf("net: mode2: start wpa_supplicant: %w", err)
 	}
-	return nil
+	if err := pollStatus(ctx, d.r, d.iface, d.sleep, pollAttempts, func(map[string]string) bool { return true }, "daemon ctrl socket not ready"); err != nil {
+		return true, fmt.Errorf("net: mode2: %w", err)
+	}
+	return true, nil
 }
 
+// apPollsAfterDaemonStart is StartAP's AP-active poll budget when ensureDaemon
+// just spawned wpa_supplicant (issue #48): a cold daemon (e.g. the previous
+// instance was SIGKILL'd) has to initialise the driver AND bring the AP up
+// inside this window, which on Pi Zero W 2 hardware misses the default
+// pollAttempts budget (10 x 500ms = 5s). 20 x 500ms = 10s covers the observed
+// cold bring-up with margin; the already-running branch keeps pollAttempts.
+const apPollsAfterDaemonStart = 20
+
 // StartAP writes the conf (retaining whatever STA credentials are already
-// known), ensures the daemon is running with it, selects the AP network,
-// waits for it to beacon, then assigns the AP's static address.
+// known), ensures the daemon is running with it, selects the AP network
+// (which leaves STA — killing any dhclient daemon still renewing that
+// lease, issue #46), waits for it to beacon, then assigns the AP's static
+// address. When ensureDaemon spawned the daemon this call, the AP-active
+// wait gets the extended apPollsAfterDaemonStart budget (issue #48).
 func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	d.ap = ap
 	if err := d.writeConf(); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
 	}
-	if err := d.ensureDaemon(ctx); err != nil {
+	started, err := d.ensureDaemon(ctx)
+	if err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
 	}
 	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "select_network", "1"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: select_network 1: %w", err)
 	}
-	if err := pollStatus(ctx, d.r, d.iface, d.sleep, func(kv map[string]string) bool {
+	// select_network 1 disables network 0 (STA) as a side effect — this is
+	// the point this driver leaves STA for AP (issue #46), so any dhclient
+	// daemon staAttempt left renewing the STA lease must die here.
+	killDHClient(ctx, d.r, nil)
+	apPolls := pollAttempts
+	if started {
+		apPolls = apPollsAfterDaemonStart
+	}
+	if err := pollStatus(ctx, d.r, d.iface, d.sleep, apPolls, func(kv map[string]string) bool {
 		return kv["wpa_state"] == "COMPLETED" && kv["mode"] == "AP"
 	}, "AP not active"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)

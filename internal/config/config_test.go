@@ -52,7 +52,6 @@ func TestNewSectionsRoundTripJSON(t *testing.T) {
 	c := Default()
 	c.Web.PasswordHash = "hash"
 	c.Wifi = WifiConfig{SSID: "n", PSK: "passphrase"}
-	c.Provisioning.APPassword = "appw"
 	raw, err := json.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +60,7 @@ func TestNewSectionsRoundTripJSON(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back.Web != c.Web || back.Wifi != c.Wifi || back.Provisioning != c.Provisioning {
+	if back.Web != c.Web || back.Wifi != c.Wifi {
 		t.Fatalf("round trip lost data: %+v", back)
 	}
 	// Old config documents (no new keys) still load: zero values.

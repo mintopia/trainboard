@@ -406,25 +406,6 @@ func TestVerifyLogin(t *testing.T) {
 	}
 }
 
-func TestRegenerateAPPassword(t *testing.T) {
-	svc, path := newTestService(t, validCfg())
-	pw, err := svc.RegenerateAPPassword()
-	if err != nil || len(pw) != 12 {
-		t.Fatalf("pw=%q err=%v", pw, err)
-	}
-	if strings.ContainsAny(pw, "01lioLIO") {
-		t.Fatalf("ambiguous characters in %q", pw)
-	}
-	stored, _ := config.Load(path)
-	if stored.Provisioning.APPassword != pw {
-		t.Fatal("AP password must persist")
-	}
-	pw2, _ := svc.RegenerateAPPassword()
-	if pw2 == pw {
-		t.Fatal("regeneration must change the password")
-	}
-}
-
 func TestServiceStartSoakValidatesDuration(t *testing.T) {
 	_, svc, _, _ := newConfigTestServer(t)
 
@@ -486,7 +467,7 @@ func TestServiceConnectivitySeams(t *testing.T) {
 	if got := svc.Hotspot(); got != nil {
 		t.Fatalf("no AP mode: Hotspot() = %v, want nil", got)
 	}
-	conn.set(&board.Hotspot{SSID: "Trainboard-AB12", Password: "pw", Addr: "192.168.4.1"}, "join failed: wrong PSK")
+	conn.set(&board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}, "join failed: wrong PSK")
 	if got := svc.Hotspot(); got == nil || got.SSID != "Trainboard-AB12" {
 		t.Fatalf("Hotspot() = %v", got)
 	}

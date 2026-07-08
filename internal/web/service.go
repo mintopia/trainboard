@@ -315,35 +315,6 @@ func (s *Service) VerifyLogin(pw string) bool {
 	return VerifyPassword(cur.Web.PasswordHash, pw)
 }
 
-// RegenerateAPPassword mints, stores, and returns a fresh AP-mode password.
-// The value is displayed once; ConfigRedacted never returns it. Generation
-// itself lives in config.GenerateAPPassword (Task 12 refactor) so the
-// --manage-network wiring in cmd/trainboard can mint one the same way
-// without depending on this package.
-//
-// Deliberately the ONLY service path left on the full-tier config.Load read
-// (see the LoadRaw callers audit, task 5b): its save side is config.Save,
-// which re-runs the full Validate, so a tolerant read would just move the
-// same rejection from load to save on a partially-provisioned device.
-// Regenerating from /config is a fully-provisioned-device feature; a partial
-// device's AP password is minted and persisted by cmd/trainboard's
-// resolveAPPassword over the SaveConnectivity tier instead.
-func (s *Service) RegenerateAPPassword() (string, error) {
-	pw, err := config.GenerateAPPassword()
-	if err != nil {
-		return "", err
-	}
-	cur, err := config.Load(s.cfgPath)
-	if err != nil {
-		return "", err
-	}
-	cur.Provisioning.APPassword = pw
-	if err := config.Save(s.cfgPath, cur); err != nil {
-		return "", err
-	}
-	return pw, nil
-}
-
 // soakDurations are the only soak lengths the UI offers; both the HTML form
 // and the JSON API validate against this set (spec: 1h/4h/8h, picked at
 // start).

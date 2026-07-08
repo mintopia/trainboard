@@ -152,7 +152,7 @@ func run() error {
 	var mgr *netconn.Manager
 	if *manageNetwork {
 		sta := staFromDisk(*cfgPath)
-		mgr = startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
+		mgr = startConnectivityManager(ctx, cfg, log, wd, sta, poller.Poke)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot }, connFault(mgr))
 		conn = newWebConnSeams(mgr, time.Now)
 	}
@@ -268,10 +268,9 @@ func loadConfig(path string) (config.Config, error) {
 // config.LoadRaw read (via resolveE04Config), not config.Default(): the
 // config that got us into this loop might just be board-invalid (e.g. a
 // stale Board.Origin) on an otherwise previously-configured device, and
-// LoadRaw's un-validated parse still carries its real Provisioning.
-// APPassword/Web.PasswordHash — resolveAPPassword falls back to
-// config.Default()'s behaviour (mint + best-effort persist) only when
-// LoadRaw itself comes back empty (missing/unparsable file).
+// LoadRaw's un-validated parse still carries its real Web.PasswordHash and
+// WiFi credentials. The setup AP is open (no password — issue #44), so the
+// AP identity is just its SSID, derived from wlan0's MAC on every boot.
 func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, err error) error {
 	log.Error("config error", "err", err.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
@@ -283,9 +282,9 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 		sta := staFromDisk(path)
 		raw, rawErr := config.LoadRaw(path)
 		if rawErr != nil {
-			log.Warn("connectivity: raw config read failed; AP password won't carry over this boot", "err", rawErr.Error())
+			log.Warn("connectivity: raw config read failed; using defaults for this boot", "err", rawErr.Error())
 		}
-		mgr = startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
+		mgr = startConnectivityManager(ctx, resolveE04Config(raw, rawErr), log, wd, sta, nil)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot }, connFault(mgr))
 		conn = newWebConnSeams(mgr, time.Now)
 	}

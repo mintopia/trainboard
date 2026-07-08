@@ -446,42 +446,7 @@ func TestConfigPostShortPasswordRerendersWithError(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
-// (h) POST /config/ap-password regenerates the AP password, showing it
-// exactly once in the response body, and persists it to the file.
-func TestConfigAPPasswordRegenerate(t *testing.T) {
-	srv, _, path, _ := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	rec := postForm(t, srv.Handler(), "/config/ap-password", url.Values{"csrf": {csrf}}, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-
-	cur, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cur.Provisioning.APPassword) != 12 {
-		t.Fatalf("stored AP password length = %d, want 12: %q", len(cur.Provisioning.APPassword), cur.Provisioning.APPassword)
-	}
-	count := strings.Count(body, cur.Provisioning.APPassword)
-	if count != 1 {
-		t.Fatalf("expected the new AP password exactly once in body, got %d occurrences: %s", count, body)
-	}
-}
-
-// (i) unauthenticated POST /config/ap-password redirects to /login (no
-// password minted, no CSRF needed to observe the redirect).
-func TestConfigAPPasswordUnauthenticatedRedirects(t *testing.T) {
-	srv, _, _, _ := newConfigTestServer(t)
-	rec := postForm(t, srv.Handler(), "/config/ap-password", url.Values{})
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
-	}
-}
-
-// (j) the replacements textarea round-trips: "Bristol Temple Meads=Bristol
+// (h) the replacements textarea round-trips: "Bristol Temple Meads=Bristol
 // TM" submitted, saved, reloaded from the redacted config, and re-rendered
 // in the textarea in the same "from=to" form.
 func TestConfigReplacementsRoundTrip(t *testing.T) {

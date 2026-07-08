@@ -39,19 +39,23 @@ const (
 	// connectivity manager's Run loop (Task 12 wiring rules).
 	//
 	// Beat is called once per Run loop iteration, plus internally by
-	// waitAPFallback every 30s while merely waiting in AP fallback — so the
-	// binding case is the worst-case gap around a single STARetry-phase
-	// iteration (runAPWait, once waitAPFallback's budget is up): the final
-	// leftover leg of that 30s heartbeat cadence (<=30s) is immediately
-	// followed by StopAP (~5s) + Dnsmasq.Stop (~5s) + a toSTA attempt
-	// (Prereqs ~5s + the enforced staAttemptBound of 45s) + a toAP restore
-	// that may retry once internally (~30s) — none of Beat again until that
-	// whole chain finishes and Run loops back to the top:
+	// waitAPFallback every 30s while merely waiting in AP fallback, plus once
+	// by runAPWait immediately before its single in-process AP-restore retry
+	// (issue #48) — so the binding case is the worst-case gap around a single
+	// STARetry-phase iteration (runAPWait, once waitAPFallback's budget is
+	// up): the final leftover leg of that 30s heartbeat cadence (<=30s) is
+	// immediately followed by StopAP (~5s) + Dnsmasq.Stop (~5s) + a toSTA
+	// attempt (Prereqs ~5s + the enforced staAttemptBound of 45s) + a toAP
+	// restore that may retry once internally (~40s with the issue #48
+	// post-daemon-start AP poll budget) — none of Beat again until the
+	// pre-retry beat (or the loop top):
 	//   30 (wait remainder) + 5 (StopAP) + 5 (Dnsmasq.Stop)
-	//   + 5 (Prereqs) + 45 (staAttemptBound) + 30 (toAP restore w/ retry)
-	//   = 120s worst case.
-	// 90s would already be exceeded by that chain alone, so this is bumped
-	// to 150s (~30s margin over the 120s worst case) rather than adding yet
+	//   + 5 (Prereqs) + 45 (staAttemptBound) + 40 (toAP restore w/ retry)
+	//   = 130s worst case.
+	// The in-process AP-restore retry's own leg (teardown ~10s + another
+	// ~40s toAP = ~50s) starts from that fresh pre-retry beat, so it never
+	// binds. 90s would already be exceeded by the main chain alone, so this
+	// is 150s (~20s margin over the 130s worst case) rather than adding yet
 	// another mid-chain beat.
 	managerBeatDeadline = 150 * time.Second
 	// httpProbeTimeout bounds the captive-portal probe request.
@@ -92,42 +96,6 @@ func macTail(mac string) string {
 	return strings.ToUpper(tail)
 }
 
-// resolveAPPassword returns the AP-mode password to advertise, generating
-// and best-effort persisting one when the config doesn't have one yet. The
-// E04 boot path feeds this the result of resolveE04Config (a config.LoadRaw
-// read), which preserves a previously-configured device's persisted
-// Provisioning.APPassword and Web.PasswordHash even when the document as a
-// whole fails board Validate — so this fresh-generation branch only
-// actually fires for a WHOLLY unconfigured device: no config file at all
-// (or one LoadRaw itself can't parse). That device's config won't pass
-// config.Save's full Validate() (missing origin/token) either, so the
-// persist attempt uses the lighter SaveConnectivity/ValidateConnectivity
-// tier instead — see the Task 12 report for the config.Save investigation
-// this rests on. A persist failure (e.g. ValidateConnectivity also unmet,
-// because no admin password is set yet either) is logged and tolerated:
-// the freshly generated password is still used for THIS boot's AP (and
-// shown on its on-screen hotspot scene regardless of disk persistence),
-// just not carried over to the next boot until setup completes far enough
-// for one of the two validation tiers to accept it — the one remaining M3b
-// loose end (a device that never finishes /setup mints a new AP password
-// every boot).
-func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) string {
-	if cfg.Provisioning.APPassword != "" {
-		return cfg.Provisioning.APPassword
-	}
-	pw, err := config.GenerateAPPassword()
-	if err != nil {
-		log.Error("connectivity: generating AP password failed", "err", err.Error())
-		return ""
-	}
-	next := cfg
-	next.Provisioning.APPassword = pw
-	if err := config.SaveConnectivity(cfgPath, next); err != nil {
-		log.Warn("connectivity: could not persist generated AP password yet (will retry next boot)", "err", err.Error())
-	}
-	return pw
-}
-
 // wifiCountry returns the regulatory country to configure the radio with:
 // the config's own value when set, defaulting to "GB" (matching
 // config.Default() and config.WifiConfig.Country's documented consumer-side
@@ -161,16 +129,12 @@ func staFromDisk(cfgPath string) func() netconn.STAConfig {
 // a whole failed board Validate() (that's WHY we're in this boot path at
 // all) — this is what lets a previously-configured device whose config
 // merely fails board validation (e.g. a stale origin) keep its persisted
-// Provisioning.APPassword and Web.PasswordHash across E04 boots, instead of
-// resolveAPPassword minting (and failing to persist) a brand new one every
-// single time.
+// Web.PasswordHash across E04 boots.
 //
 // When rawErr != nil, raw is the zero Config (LoadRaw returns Default() with
 // a nil error for a missing file, so a non-nil error here means the file
 // exists but isn't even valid JSON) and config.Default() is used instead:
-// this is the genuinely "wholly fresh/unreadable device" case where
-// per-boot AP password churn remains the documented M3b loose end (see
-// resolveAPPassword).
+// this is the genuinely "wholly fresh/unreadable device" case.
 func resolveE04Config(raw config.Config, rawErr error) config.Config {
 	if rawErr != nil {
 		return config.Default()
@@ -210,11 +174,10 @@ func httpGetProbe(ctx context.Context, url string) (int, string, error) {
 //
 // It returns the Manager so the caller can compose Status().Hotspot into
 // the render/web snapshot source (runtime.HotspotSnapshotSource).
-func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath string, log *slog.Logger, wd *obs.Watchdog, sta func() netconn.STAConfig, onOnline func()) *netconn.Manager {
+func startConnectivityManager(ctx context.Context, cfg config.Config, log *slog.Logger, wd *obs.Watchdog, sta func() netconn.STAConfig, onOnline func()) *netconn.Manager {
 	ap := netconn.APConfig{
-		SSID:     "Trainboard-" + macTail(readWlanMAC()),
-		Password: resolveAPPassword(cfg, cfgPath, log),
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-" + macTail(readWlanMAC()),
+		Addr: "192.168.4.1/24",
 	}
 	country := wifiCountry(cfg)
 	runner := netconn.NewExecRunner()
@@ -226,6 +189,7 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 		Driver:  driver,
 		Check:   check,
 		Dnsmasq: dnsmasq,
+		Runner:  runner,
 		Prereqs: func(pctx context.Context) error {
 			return netconn.CheckPrereqs(pctx, runner, country, os.ReadFile, writeFile, filepath.Glob)
 		},

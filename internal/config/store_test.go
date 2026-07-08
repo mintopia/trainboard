@@ -79,7 +79,6 @@ func TestSaveConnectivityThenLoadRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	c := Default()
 	c.Web.PasswordHash = "$argon2id$fake"
-	c.Provisioning.APPassword = "genpw123456"
 	if err := SaveConnectivity(path, c); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +86,7 @@ func TestSaveConnectivityThenLoadRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Web.PasswordHash != "$argon2id$fake" || back.Provisioning.APPassword != "genpw123456" {
+	if back.Web.PasswordHash != "$argon2id$fake" {
 		t.Fatalf("round-trip lost data: %+v", back)
 	}
 }
@@ -146,11 +145,11 @@ func TestLoadRawMissingReturnsDefault(t *testing.T) {
 	}
 }
 
-func TestLoadRawPreservesProvisioningOnBoardInvalidConfig(t *testing.T) {
+func TestLoadRawPreservesWebHashOnBoardInvalidConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	// board.origin is missing (fails Validate), but provisioning/web are
-	// populated as they would be on a previously-configured device.
-	body := `{"version":1,"provisioning":{"apPassword":"persisted-pw"},"web":{"passwordHash":"$argon2id$fake"}}`
+	// board.origin is missing (fails Validate), but web is populated as it
+	// would be on a previously-configured device.
+	body := `{"version":1,"web":{"passwordHash":"$argon2id$fake"}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +161,6 @@ func TestLoadRawPreservesProvisioningOnBoardInvalidConfig(t *testing.T) {
 	c, err := LoadRaw(path)
 	if err != nil {
 		t.Fatalf("LoadRaw should tolerate a board-invalid document: %v", err)
-	}
-	if c.Provisioning.APPassword != "persisted-pw" {
-		t.Fatalf("LoadRaw lost Provisioning.APPassword: %+v", c.Provisioning)
 	}
 	if c.Web.PasswordHash != "$argon2id$fake" {
 		t.Fatalf("LoadRaw lost Web.PasswordHash: %+v", c.Web)

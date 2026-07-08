@@ -61,28 +61,27 @@ func TestRedactionCoversNewSecrets(t *testing.T) {
 	c := Default()
 	c.Darwin.Token = "tok-secret"
 	c.Wifi = WifiConfig{SSID: "HomeNet", PSK: "psk-secret"}
-	c.Provisioning.APPassword = "ap-secret"
 	c.Web.PasswordHash = "$argon2id$fake"
 	for name, s := range map[string]string{
 		"String":   c.String(),
 		"GoString": fmt.Sprintf("%#v", c),
 		"v":        fmt.Sprintf("%v", c),
 	} {
-		for _, secret := range []string{"psk-secret", "ap-secret", "tok-secret", "$argon2id$fake"} {
+		for _, secret := range []string{"psk-secret", "tok-secret", "$argon2id$fake"} {
 			if strings.Contains(s, secret) {
 				t.Errorf("%s output leaks %q", name, secret)
 			}
 		}
 	}
 	r := c.Redacted()
-	if r.Wifi.PSK == "psk-secret" || r.Provisioning.APPassword == "ap-secret" {
-		t.Fatal("Redacted() must mask wifi.psk and provisioning.apPassword")
+	if r.Wifi.PSK == "psk-secret" {
+		t.Fatal("Redacted() must mask wifi.psk")
 	}
 	if r.Wifi.SSID != "HomeNet" {
 		t.Fatal("SSID is not a secret; must survive redaction")
 	}
 	empty := Default().Redacted()
-	if empty.Wifi.PSK != "" || empty.Provisioning.APPassword != "" {
+	if empty.Wifi.PSK != "" {
 		t.Fatal("empty secrets must stay empty after redaction")
 	}
 }
@@ -105,20 +104,15 @@ func TestRedactedMasksWebPasswordHash(t *testing.T) {
 
 func TestBareSubstructStringNeverLeaksSecrets(t *testing.T) {
 	wifi := WifiConfig{SSID: "HomeNet", PSK: "psk-secret"}
-	provisioning := ProvisioningConfig{APPassword: "ap-secret"}
 	web := WebConfig{PasswordHash: "$argon2id$fake"}
 
 	for name, s := range map[string]string{
-		"wifi %v":         fmt.Sprintf("%v", wifi),
-		"wifi %#v":        fmt.Sprintf("%#v", wifi),
-		"provisioning %v": fmt.Sprintf("%v", provisioning),
-		"provisioning %#v": fmt.Sprintf(
-			"%#v", provisioning,
-		),
-		"web %v":  fmt.Sprintf("%v", web),
-		"web %#v": fmt.Sprintf("%#v", web),
+		"wifi %v":  fmt.Sprintf("%v", wifi),
+		"wifi %#v": fmt.Sprintf("%#v", wifi),
+		"web %v":   fmt.Sprintf("%v", web),
+		"web %#v":  fmt.Sprintf("%#v", web),
 	} {
-		for _, secret := range []string{"psk-secret", "ap-secret", "$argon2id$fake"} {
+		for _, secret := range []string{"psk-secret", "$argon2id$fake"} {
 			if strings.Contains(s, secret) {
 				t.Errorf("%s output leaks %q: %q", name, secret, s)
 			}

@@ -297,7 +297,7 @@ func TestActionsPageShowsRetryFormOnlyWhenHotspotActive(t *testing.T) {
 		t.Fatalf("retry form must not render without an active hotspot: %s", rec.Body.String())
 	}
 
-	conn.set(&board.Hotspot{SSID: "Trainboard-AB12", Password: "pw", Addr: "192.168.4.1"}, "")
+	conn.set(&board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}, "")
 
 	rec = getPath(t, srv.Handler(), "/actions", cookie)
 	if !strings.Contains(rec.Body.String(), "/actions/wifi-retry") {

@@ -90,13 +90,13 @@ func clockNotSyncedScene(f *Fonts) *render.Scene {
 	}}
 }
 
-// hotspotInfoScene is the first-boot / AP-fallback setup screen: it shows
-// the join details (SSID + password) and the captive-portal address.
-func hotspotInfoScene(ssid, password, addr string, f *Fonts) *render.Scene {
+// hotspotInfoScene is the first-boot / AP-fallback setup screen: it shows the
+// SSID to join and the captive-portal address. The AP is open (no password —
+// issue #44), so joining needs no credential.
+func hotspotInfoScene(ssid, addr string, f *Fonts) *render.Scene {
 	return &render.Scene{Elements: []render.Element{
 		centered(f.Bold, "Setup mode", 0),
 		centered(f.Regular, "Join hotspot: "+ssid, 16),
 		centered(f.Regular, "Then open http://"+addr, 28),
-		centered(f.Regular, "Password: "+password, 40),
 	}}
 }

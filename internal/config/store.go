@@ -47,9 +47,9 @@ func Load(path string) (Config, error) {
 //
 //   - Connectivity wiring in cmd/trainboard: the E04 (config error) boot path
 //     uses it via resolveE04Config to recover a previously-configured
-//     device's persisted Provisioning.APPassword and Web.PasswordHash, and
-//     staFromDisk uses it to read fresh STA credentials on every connection
-//     attempt (enabling credential handoff from the portal without restart).
+//     device's persisted Web.PasswordHash, and staFromDisk uses it to read
+//     fresh STA credentials on every connection attempt (enabling credential
+//     handoff from the portal without restart).
 //   - internal/web service read paths that only need the password hash,
 //     redaction, or setup-state — Service.VerifyLogin, Service.NeedsSetup,
 //     Service.ConfigRedacted, and Service.UpdateConfig's initial read — so a
@@ -93,9 +93,9 @@ func Save(path string, c Config) error {
 }
 
 // SaveConnectivity validates c against ValidateConnectivity (not the full
-// Validate) and writes it the same atomic way as Save. This is the tier
-// --manage-network wiring uses to persist a freshly generated
-// Provisioning.APPassword on a device that hasn't completed first-boot setup
+// Validate) and writes it the same atomic way as Save. This is the tier the
+// AP-mode partial-setup path uses to persist WiFi credentials and the admin
+// password hash on a device that hasn't completed first-boot setup
 // (Board.Origin/Darwin.Token unset, so full Validate would reject it) — see
 // Task 12's report for the investigation this rests on: config.Save always
 // hard-validates, so a distinct save path was needed for the connectivity

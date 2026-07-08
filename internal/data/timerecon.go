@@ -1,21 +1,8 @@
 package data
 
 import (
-	"sync"
 	"time"
 )
-
-var (
-	londonOnce sync.Once
-	londonLoc  *time.Location
-	londonErr  error
-)
-
-// londonLocation loads Europe/London once (needed for DST-correct times).
-func londonLocation() (*time.Location, error) {
-	londonOnce.Do(func() { londonLoc, londonErr = time.LoadLocation("Europe/London") })
-	return londonLoc, londonErr
-}
 
 // reconstructTimes fills each departure's When from its "HH:MM" ScheduledTime,
 // anchored to the board's GeneratedAt in loc. LDBWS gives no date, so a std
