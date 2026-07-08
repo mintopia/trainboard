@@ -249,6 +249,22 @@ func TestOriginCheckHTMLRouteRejectsAsText(t *testing.T) {
 	}
 }
 
+// TestOriginCheckAllowsAPModeSameHost is the audit required by task 3: an
+// AP-mode form POST arrives with Host: 192.168.4.1 and Origin:
+// http://192.168.4.1 (the board's own hotspot address) — Origin already
+// equals Host, so originCheck's existing rule passes it unchanged. This pins
+// that no widening of originCheck is needed for AP-mode provisioning POSTs.
+func TestOriginCheckAllowsAPModeSameHost(t *testing.T) {
+	h := chain(okHandler(), originCheck(testLog()))
+	r := httptest.NewRequest(http.MethodPost, "http://192.168.4.1/config", nil)
+	r.Header.Set("Origin", "http://192.168.4.1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("AP-mode same-host POST: want 200, got %d", rec.Code)
+	}
+}
+
 func TestRateLimitMiddleware429(t *testing.T) {
 	rl := newLimiter(2)
 	h := chain(okHandler(), rateLimit(rl, testLog()))
@@ -296,6 +312,35 @@ func TestLogRequestsOmitsQueryString(t *testing.T) {
 // (status < 400) requests must log below the obs tee logger's Info
 // threshold — producing zero ring events — while failures (status >= 400)
 // must still log at Warn, so they remain visible in the ring.
+// TestNoteProvisioningCountsAPSubnetRequests pins noteProvisioning's parsing
+// rule: only a RemoteAddr whose host parses inside 192.168.4.0/24 counts as
+// live provisioning activity. Every request counts, including plain GETs
+// (probes/static) — the middleware never filters by method or path.
+func TestNoteProvisioningCountsAPSubnetRequests(t *testing.T) {
+	cases := []struct {
+		name       string
+		remoteAddr string
+		want       int
+	}{
+		{"AP subnet", "192.168.4.55:41000", 1},
+		{"outside AP subnet", "192.168.3.10:5", 0},
+		{"garbage RemoteAddr (no port)", "garbage", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, svc, _, _, conn := newConnTestServer(t)
+			h := chain(okHandler(), noteProvisioning(svc))
+			r := httptest.NewRequest("GET", "/preview.png", nil)
+			r.RemoteAddr = tc.remoteAddr
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if _, p := conn.counts(); p != tc.want {
+				t.Fatalf("provNotes = %d, want %d", p, tc.want)
+			}
+		})
+	}
+}
+
 func TestLogRequestsKeepsRoutineTrafficOutOfRing(t *testing.T) {
 	ring := obs.NewRing(256)
 	log := obs.NewLogger(io.Discard, ring, slog.LevelInfo)

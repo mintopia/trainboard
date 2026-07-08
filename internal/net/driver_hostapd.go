@@ -19,15 +19,19 @@ const hostapdConfPath = "/run/trainboard-hostapd.conf"
 type hostapdDriver struct {
 	r         Runner
 	iface     string
+	country   string
 	writeFile func(path string, data []byte) error
 	sleep     func(time.Duration)
 }
 
 var _ Driver = (*hostapdDriver)(nil)
 
-// newHostapdDriver builds the hostapd driver. writeFile and sleep default to
-// os.WriteFile and time.Sleep in production; tests inject fakes.
-func newHostapdDriver(r Runner, iface string, writeFile func(string, []byte) error, sleep func(time.Duration)) *hostapdDriver {
+// newHostapdDriver builds the hostapd driver. country is the regulatory
+// domain rendered into both the AP conf (country_code=) and the STA-only
+// conf staAttempt writes (country=), defaulted to "GB" by the caller when
+// config.Wifi.Country is unset. writeFile and sleep default to os.WriteFile
+// and time.Sleep in production; tests inject fakes.
+func newHostapdDriver(r Runner, iface, country string, writeFile func(string, []byte) error, sleep func(time.Duration)) *hostapdDriver {
 	if writeFile == nil {
 		writeFile = func(path string, data []byte) error {
 			return os.WriteFile(path, data, 0o600)
@@ -36,7 +40,7 @@ func newHostapdDriver(r Runner, iface string, writeFile func(string, []byte) err
 	if sleep == nil {
 		sleep = time.Sleep
 	}
-	return &hostapdDriver{r: r, iface: iface, writeFile: writeFile, sleep: sleep}
+	return &hostapdDriver{r: r, iface: iface, country: country, writeFile: writeFile, sleep: sleep}
 }
 
 // renderHostapdConf formats the hostapd conf. hostapd.conf is a plain
@@ -53,14 +57,14 @@ func (d *hostapdDriver) renderHostapdConf(ap APConfig) (string, error) {
 	return fmt.Sprintf(`interface=%s
 driver=nl80211
 ssid=%s
-country_code=GB
+country_code=%s
 hw_mode=g
 channel=6
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 wpa_passphrase=%s
-`, d.iface, ap.SSID, ap.Password), nil
+`, d.iface, ap.SSID, d.country, ap.Password), nil
 }
 
 // StartAP releases the iface from wpa_supplicant's STA control (tolerating
@@ -101,21 +105,19 @@ func (d *hostapdDriver) StopAP(ctx context.Context) error {
 	return nil
 }
 
-// renderSTAOnlyConf adapts renderSTAConf to staAttempt's renderConf shape:
-// the hostapd driver has no AP block of its own to retain (hostapd owns the
-// AP separately, via renderHostapdConf), so this file is STA-only.
-func renderSTAOnlyConf(sta STAConfig) ([]byte, error) {
-	body, err := renderSTAConf(sta)
-	return []byte(body), err
-}
-
 // AttemptSTA stops the AP (freeing the radio for wpa_supplicant) then runs
-// the shared wpa_cli/dhclient STA flow, writing an STA-only conf.
+// the shared wpa_cli/dhclient STA flow, writing an STA-only conf. The hostapd
+// driver has no AP block of its own to retain in that conf (hostapd owns the
+// AP separately, via renderHostapdConf).
 func (d *hostapdDriver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	if err := d.StopAP(ctx); err != nil {
 		return fmt.Errorf("net: hostapd: AttemptSTA: %w", err)
 	}
-	if err := staAttempt(ctx, d.r, d.iface, sta, renderSTAOnlyConf, d.writeFile, d.sleep); err != nil {
+	render := func(s STAConfig) ([]byte, error) {
+		body, err := renderSTAConf(s, d.country)
+		return []byte(body), err
+	}
+	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, d.sleep); err != nil {
 		return fmt.Errorf("net: hostapd: AttemptSTA: %w", err)
 	}
 	return nil

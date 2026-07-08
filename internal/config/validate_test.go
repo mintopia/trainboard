@@ -76,3 +76,28 @@ func TestValidateWifiPSKBounds(t *testing.T) {
 		t.Fatalf("empty wifi rejected: %v", err)
 	}
 }
+
+func TestValidateWifiCountry(t *testing.T) {
+	c := validConfig()
+
+	c.Wifi.Country = "gb" // lowercase
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.country") {
+		t.Fatalf("lowercase country must fail: %v", err)
+	}
+	c.Wifi.Country = "GBR" // 3 letters
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.country") {
+		t.Fatalf("3-letter country must fail: %v", err)
+	}
+	c.Wifi.Country = "G1" // digit
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wifi.country") {
+		t.Fatalf("country containing a digit must fail: %v", err)
+	}
+	c.Wifi.Country = "US"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid 2-letter uppercase country rejected: %v", err)
+	}
+	c.Wifi.Country = ""
+	if err := c.Validate(); err != nil {
+		t.Fatalf("empty country (treated as GB downstream) rejected: %v", err)
+	}
+}

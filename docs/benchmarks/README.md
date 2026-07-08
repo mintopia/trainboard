@@ -1,3 +1,8 @@
+> Looking for the mode2 connectivity bench protocol instead (AP bring-up,
+> AP↔STA toggle, destructive matrix)? That lives in
+> [`deploy/bench/`](../../deploy/bench/), not here — this README is
+> SSD1322 render-path timing only.
+
 # SSD1322 flush benchmarks
 
 Run on the target Pi Zero 2 W + SSD1322 to gate the render architecture.

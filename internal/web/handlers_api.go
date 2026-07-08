@@ -204,6 +204,14 @@ func (s *Server) handleAPIActionsSoakCancel(w http.ResponseWriter, _ *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
+// handleAPIActionsWifiRetry is POST /api/actions/wifi-retry: mirrors the
+// HTML retry-now form (see handleActionsWifiRetry), replying with JSON
+// instead of a redirect.
+func (s *Server) handleAPIActionsWifiRetry(w http.ResponseWriter, _ *http.Request) {
+	s.svc.WifiRetryNow()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "retrying"})
+}
+
 // responseBuffer is an in-memory http.ResponseWriter used by apiJSONErrors
 // to capture a downstream handler's full response before deciding whether to
 // rewrite it.

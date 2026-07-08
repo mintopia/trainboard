@@ -65,6 +65,11 @@ type Status struct {
 	// LastSTAErr preserves the most recent STA failure text across an AP
 	// restore, for the captive portal to display (M3b).
 	LastSTAErr string
+	// RadioBlocked is true when the STA Prereqs gate failed (wlan0
+	// rfkill-soft-blocked / regulatory domain unset) — the render loop raises
+	// E05 on-glass. Cleared on the next transition attempt (every publish is a
+	// fresh Status), so it never leaks into a later Online/AP state.
+	RadioBlocked bool
 }
 
 // ManagerDeps wires the Connectivity Manager to its collaborators. Every OS
@@ -276,6 +281,14 @@ func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled boo
 // runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
 // re-checks connectivity: a cheap direct Check.Evaluate first, escalating to
 // a full toSTA reattempt and finally toAP on repeated failure.
+//
+// Check.Evaluate runs under a child context bounded to staAttemptBound —
+// exactly the same parent-vs-child cancel discipline toSTA's own
+// AttemptSTA/Check.Evaluate calls use (see toSTA's doc comment): a hanging
+// probe must not be able to block the run loop indefinitely, but a plain
+// attempt-bound timeout only ever expires the CHILD, so callers must keep
+// checking the parent ctx (not any context this method constructs) to tell
+// clean shutdown apart from an ordinary recheck failure.
 func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error) {
 	select {
 	case <-ctx.Done():
@@ -283,7 +296,10 @@ func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error)
 	case <-m.d.After(onlineRecheckInterval):
 	}
 
-	if stage, _ := m.d.Check.Evaluate(ctx); stage == StageOK {
+	recheckCtx, cancel := context.WithTimeout(ctx, staAttemptBound)
+	stage, _ := m.d.Check.Evaluate(recheckCtx)
+	cancel()
+	if stage == StageOK {
 		return phaseOnlineWait, false, nil
 	}
 
@@ -443,7 +459,7 @@ func (m *Manager) toSTA(ctx context.Context) error {
 
 	if m.d.Prereqs != nil {
 		if err := m.d.Prereqs(ctx); err != nil {
-			m.publish(Status{State: ManagerSTAConnecting, LastSTAErr: err.Error()})
+			m.publish(Status{State: ManagerSTAConnecting, LastSTAErr: err.Error(), RadioBlocked: true})
 			return err
 		}
 	}

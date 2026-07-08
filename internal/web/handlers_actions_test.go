@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mintopia/trainboard/internal/board"
 )
 
 // actionsTestPassword is the admin password newActionsTestServer sets up.
@@ -235,6 +237,74 @@ func TestActionsSoakInvalidDurationRerendersWithError(t *testing.T) {
 	}
 	if got := svc.SoakRemaining(); got != 0 {
 		t.Fatalf("invalid duration must not start a soak; SoakRemaining = %v", got)
+	}
+}
+
+// (j) authed POST /actions/wifi-retry redirects to /actions and fires
+// Service.WifiRetryNow (observed via the connectivity fake's retry count).
+func TestActionsWifiRetryAuthedRedirectsAndRetries(t *testing.T) {
+	srv, _, _, _, conn := newConnTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/actions/wifi-retry", url.Values{"csrf": {csrf}}, cookie)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/actions" {
+		t.Fatalf("want 302 /actions, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if retries, _ := conn.counts(); retries != 1 {
+		t.Fatalf("retries = %d, want 1", retries)
+	}
+}
+
+// (k) unauthenticated POST /actions/wifi-retry redirects to /login.
+func TestActionsWifiRetryUnauthenticatedRedirects(t *testing.T) {
+	srv, _, _, _, _ := newConnTestServer(t)
+	rec := postForm(t, srv.Handler(), "/actions/wifi-retry", url.Values{})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// (l) the JSON API mirror returns 200 {"status":"retrying"} and fires the
+// same retry.
+func TestAPIActionsWifiRetryReturnsJSONAndRetries(t *testing.T) {
+	srv, _, _, _, conn := newConnTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/actions/wifi-retry", nil)
+	req.AddCookie(cookie)
+	req.Header.Set("X-CSRF-Token", csrf)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"retrying"`) {
+		t.Fatalf("expected retrying status in body: %s", rec.Body.String())
+	}
+	if retries, _ := conn.counts(); retries != 1 {
+		t.Fatalf("retries = %d, want 1", retries)
+	}
+}
+
+// (m) the actions page shows the retry form only while the hotspot fake
+// reports AP mode active.
+func TestActionsPageShowsRetryFormOnlyWhenHotspotActive(t *testing.T) {
+	srv, _, _, _, conn := newConnTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/actions", cookie)
+	if strings.Contains(rec.Body.String(), "/actions/wifi-retry") {
+		t.Fatalf("retry form must not render without an active hotspot: %s", rec.Body.String())
+	}
+
+	conn.set(&board.Hotspot{SSID: "Trainboard-AB12", Password: "pw", Addr: "192.168.4.1"}, "")
+
+	rec = getPath(t, srv.Handler(), "/actions", cookie)
+	if !strings.Contains(rec.Body.String(), "/actions/wifi-retry") {
+		t.Fatalf("expected retry form while hotspot active: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "hotspot will drop") {
+		t.Fatalf("expected hotspot-drop copy in body: %s", rec.Body.String())
 	}
 }
 

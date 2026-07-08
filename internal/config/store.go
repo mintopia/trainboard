@@ -41,13 +41,30 @@ func Load(path string) (Config, error) {
 // Board.Origin has since gone stale). A missing file returns Default() with
 // a nil error, same as Load.
 //
-// This exists ONLY to let the E04 (config error) boot path recover a
-// previously-configured device's persisted Provisioning.APPassword and
-// Web.PasswordHash even though the document fails full Validate — see
-// resolveE04Config in cmd/trainboard/connectivity.go, its only caller. It
-// MUST NOT be used to feed normal operation: the poller/render loop/web
-// service all require a config that has passed Validate (see loadConfig in
-// cmd/trainboard/main.go), and LoadRaw's whole point is to skip that check.
+// It exists to support two kinds of caller that must read a
+// connectivity-valid-but-board-invalid document (e.g. a device that finished
+// only AP-mode partial setup: password hash + WiFi set, origin/token absent):
+//
+//   - Connectivity wiring in cmd/trainboard: the E04 (config error) boot path
+//     uses it via resolveE04Config to recover a previously-configured
+//     device's persisted Provisioning.APPassword and Web.PasswordHash, and
+//     staFromDisk uses it to read fresh STA credentials on every connection
+//     attempt (enabling credential handoff from the portal without restart).
+//   - internal/web service read paths that only need the password hash,
+//     redaction, or setup-state — Service.VerifyLogin, Service.NeedsSetup,
+//     Service.ConfigRedacted, and Service.UpdateConfig's initial read — so a
+//     partially-provisioned device can still log in and reach /config to
+//     finish provisioning. Service.SetInitialPassword and
+//     Service.SetupConnectivity read via LoadRaw too, so their "admin
+//     password is already set" guard still sees a hash stored in a
+//     board-invalid document instead of overwriting it.
+//
+// It MUST NOT be used to feed normal board operation (the poller/render loop
+// require a config that has passed the full Validate — see loadConfig in
+// cmd/trainboard/main.go) nor to gate the SAVE side: UpdateConfig still runs
+// the full Validate before config.Save, so LoadRaw skipping validation only
+// ever relaxes the READ, never lets an incomplete document be persisted as a
+// runnable board config.
 func LoadRaw(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

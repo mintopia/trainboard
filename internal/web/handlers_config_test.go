@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,11 +23,38 @@ const configTestPassword = "longenough1"
 // in a rendered page is unambiguous.
 const configTestToken = "tok-super-secret-xyz"
 
-// newConfigTestServer wires a Server over a valid, saved baseline config
-// (origin PAD, a known Darwin token, admin password already set) and returns
-// the server, its Service, the config file path, and a channel that receives
-// a value each time the wired Actions.Apply fires.
-func newConfigTestServer(t *testing.T) (srv *Server, svc *Service, path string, applyCh chan struct{}) {
+// connFakes tracks connectivity seam state for testing, backed by plain vars.
+type connFakes struct {
+	hs        *board.Hotspot
+	lastErr   string
+	retries   int
+	provNotes int
+	mu        sync.Mutex
+}
+
+// set updates the hotspot and error state.
+func (cf *connFakes) set(hs *board.Hotspot, err string) {
+	cf.mu.Lock()
+	defer cf.mu.Unlock()
+	cf.hs = hs
+	cf.lastErr = err
+}
+
+// counts returns the current retry and provisioning note counts.
+func (cf *connFakes) counts() (retries, provNotes int) {
+	cf.mu.Lock()
+	defer cf.mu.Unlock()
+	return cf.retries, cf.provNotes
+}
+
+// newConfigTestServerCore is the shared construction path behind
+// newConfigTestServer and newConnTestServer: it saves a baseline config
+// (origin PAD, a known Darwin token), wires Sources/Actions — folding in the
+// connectivity seam fakes when conn is non-nil — constructs the
+// Service/Server, and sets the initial admin password. conn wiring happens
+// before NewService/NewServer so the seam is live from the moment the Server
+// exists.
+func newConfigTestServerCore(t *testing.T, conn *connFakes) (srv *Server, svc *Service, path string, applyCh chan struct{}) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()
@@ -51,12 +79,54 @@ func newConfigTestServer(t *testing.T) (srv *Server, svc *Service, path string, 
 		SoakStart:  func(d time.Duration) { soakRem = d },
 		SoakCancel: func() { soakRem = 0 },
 	}
+	if conn != nil {
+		src.Hotspot = func() *board.Hotspot {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			return conn.hs
+		}
+		src.LastSTAError = func() string {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			return conn.lastErr
+		}
+		act.WifiRetry = func() {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			conn.retries++
+		}
+		act.NoteProvisioning = func() {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			conn.provNotes++
+		}
+	}
 	svc = NewService(path, src, act, testLog())
 	if err := svc.SetInitialPassword(configTestPassword, "PAD", ""); err != nil {
 		t.Fatalf("SetInitialPassword: %v", err)
 	}
 	srv = NewServer(svc, testLog())
 	return srv, svc, path, applyCh
+}
+
+// newConnTestServer shares newConfigTestServer's setup (both call the
+// newConfigTestServerCore builder) and additionally returns access to the
+// connectivity seam fakes (hotspot state, last error, retry/provisioning
+// counts) wired into Sources/Actions before the Server was constructed.
+func newConnTestServer(t *testing.T) (srv *Server, svc *Service, path string, applyCh chan struct{}, conn *connFakes) {
+	t.Helper()
+	conn = &connFakes{}
+	srv, svc, path, applyCh = newConfigTestServerCore(t, conn)
+	return srv, svc, path, applyCh, conn
+}
+
+// newConfigTestServer wires a Server over a valid, saved baseline config
+// (origin PAD, a known Darwin token, admin password already set) and returns
+// the server, its Service, the config file path, and a channel that receives
+// a value each time the wired Actions.Apply fires.
+func newConfigTestServer(t *testing.T) (srv *Server, svc *Service, path string, applyCh chan struct{}) {
+	t.Helper()
+	return newConfigTestServerCore(t, nil)
 }
 
 // baseConfigForm returns a fresh, fully-populated, valid form matching the

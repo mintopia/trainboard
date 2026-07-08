@@ -39,7 +39,7 @@ func TestCheckPrereqsAllClear(t *testing.T) {
 		return nil
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err != nil {
 		t.Fatalf("CheckPrereqs() = %v, want nil", err)
 	}
@@ -95,7 +95,7 @@ func TestCheckPrereqsSoftBlockedOnce(t *testing.T) {
 		return nil
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err != nil {
 		t.Fatalf("CheckPrereqs() = %v, want nil", err)
 	}
@@ -130,7 +130,7 @@ func TestCheckPrereqsSoftBlockedPersistent(t *testing.T) {
 		return nil
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err == nil {
 		t.Fatalf("CheckPrereqs() = nil, want error for persistent block")
 	}
@@ -183,7 +183,7 @@ func TestCheckPrereqsCountryUnset(t *testing.T) {
 		},
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err != nil {
 		t.Fatalf("CheckPrereqs() = %v, want nil", err)
 	}
@@ -198,6 +198,69 @@ func TestCheckPrereqsCountryUnset(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("iw reg set GB not called; calls: %v", r.calls)
+	}
+}
+
+func TestCheckPrereqsCountryUnsetUsesConfiguredCountryNotHardcodedGB(t *testing.T) {
+	// country 00 + a non-GB configured country → `iw reg set` must use the
+	// configured country, never the old hardcoded GB literal.
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/sys/class/rfkill/rfkill0/type":
+			return []byte("wlan"), nil
+		case "/sys/class/rfkill/rfkill0/soft":
+			return []byte("0"), nil
+		default:
+			return nil, fmt.Errorf("unexpected read: %s", path)
+		}
+	}
+
+	glob := func(pattern string) ([]string, error) {
+		if pattern == "/sys/class/rfkill/rfkill*/type" {
+			return []string{"/sys/class/rfkill/rfkill0/type"}, nil
+		}
+		return nil, fmt.Errorf("unexpected glob: %s", pattern)
+	}
+
+	writeFile := func(_ string, _ []byte) error {
+		return fmt.Errorf("unexpected write")
+	}
+
+	getCallCount := 0
+	r := &statefulRunner{
+		calls: make([]string, 0),
+		run: func(_ context.Context, argv ...string) (string, error) {
+			cmd := strings.Join(argv, " ")
+			if cmd == "iw reg get" {
+				getCallCount++
+				if getCallCount == 1 {
+					return "country 00:\n", nil
+				}
+				return "country US: (80, 88)\n", nil
+			}
+			if cmd == "iw reg set US" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected command: %s", cmd)
+		},
+	}
+
+	err := CheckPrereqs(context.Background(), r, "US", readFile, writeFile, glob)
+	if err != nil {
+		t.Fatalf("CheckPrereqs() = %v, want nil", err)
+	}
+
+	found := false
+	for _, call := range r.calls {
+		if call == "iw reg set GB" {
+			t.Fatalf("CheckPrereqs used hardcoded GB instead of the configured country; calls: %v", r.calls)
+		}
+		if call == "iw reg set US" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("iw reg set US not called; calls: %v", r.calls)
 	}
 }
 
@@ -218,7 +281,7 @@ func TestCheckPrereqsGlobError(t *testing.T) {
 		return fmt.Errorf("unexpected write")
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err == nil {
 		t.Fatal("CheckPrereqs() = nil, want error when rfkill glob fails")
 	}
@@ -246,7 +309,7 @@ func TestCheckPrereqsTypeFileReadError(t *testing.T) {
 		return fmt.Errorf("unexpected write")
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err == nil {
 		t.Fatal("CheckPrereqs() = nil, want error when the rfkill type file can't be read")
 	}
@@ -281,7 +344,7 @@ func TestCheckPrereqsSoftFileReadError(t *testing.T) {
 		return fmt.Errorf("unexpected write")
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err == nil {
 		t.Fatal("CheckPrereqs() = nil, want error when the rfkill soft file can't be read")
 	}
@@ -322,7 +385,7 @@ func TestCheckPrereqsIwExecError(t *testing.T) {
 		},
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err == nil {
 		t.Fatal("CheckPrereqs() = nil, want error when iw fails to run")
 	}
@@ -381,7 +444,7 @@ func TestCheckPrereqsCountryUnsetPersistent(t *testing.T) {
 		},
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err == nil {
 		t.Fatalf("CheckPrereqs() = nil, want error for persistent country 00")
 	}
@@ -410,7 +473,7 @@ func TestCheckPrereqsNoRfkillDevices(t *testing.T) {
 		return fmt.Errorf("unexpected write")
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err != nil {
 		t.Fatalf("CheckPrereqs() = %v, want nil", err)
 	}
@@ -448,7 +511,7 @@ func TestCheckPrereqsIgnoresNonWlanRfkill(t *testing.T) {
 		return fmt.Errorf("unexpected write")
 	}
 
-	err := CheckPrereqs(context.Background(), r, readFile, writeFile, glob)
+	err := CheckPrereqs(context.Background(), r, "GB", readFile, writeFile, glob)
 	if err != nil {
 		t.Fatalf("CheckPrereqs() = %v, want nil", err)
 	}

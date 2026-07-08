@@ -277,10 +277,17 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 }
 
 // TestRouteSecurityInvariantMatrix is the tripwire test: it enumerates EVERY
-// route NewServer registers except /setup, /login, and /static/* (those
-// three are governed by the setup-gate/no-auth exception in spec invariant
-// 1, not by session auth — see TestServerSetupGateRedirectsWhenNoPassword and
-// TestServerStaticServesWithoutAuth for their own coverage). Each route is
+// route NewServer registers except /setup, /login, /static/*, and the three
+// captive-portal probe endpoints (/generate_204, /hotspot-detect.html,
+// /ncsi.txt) — all six are governed by the setup-gate/no-auth exception in
+// spec invariant 1, not by session auth. /setup, /login, /static/* have
+// their own coverage in TestServerSetupGateRedirectsWhenNoPassword and
+// TestServerStaticServesWithoutAuth; the three probes are deliberately
+// pre-auth AND pre-CSRF by design — a just-associated phone has no session
+// and never will until a human deliberately visits /setup — and are pinned
+// instead by TestPortalProbeMatrix (handlers_portal_test.go), whose two arms
+// (AP mode / not AP mode) play the role this table's (no session / valid
+// session) arms play here. Each route is
 // checked twice: with no session (must be blocked — 302 for HTML, 401 JSON
 // for /api/*) and with a valid session (must succeed with its normal,
 // documented response).
@@ -301,6 +308,7 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/actions/reboot                | POST   | 302 /login   | 200
 //	/actions/soak                  | POST   | 302 /login   | 302 /actions
 //	/actions/soak/cancel           | POST   | 302 /login   | 302 /actions
+//	/actions/wifi-retry            | POST   | 302 /login   | 302 /actions
 //	/api/status                    | GET    | 401 JSON     | 200
 //	/api/config                    | GET    | 401 JSON     | 200
 //	/api/config                    | PUT    | 401 JSON     | 200
@@ -309,6 +317,7 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/api/actions/reboot            | POST   | 401 JSON     | 200
 //	/api/actions/soak              | POST   | 401 JSON     | 200
 //	/api/actions/soak/cancel       | POST   | 401 JSON     | 200
+//	/api/actions/wifi-retry        | POST   | 401 JSON     | 200
 //	/logout                        | POST   | 302 /login   | 302 /login (destroys session; kept LAST)
 func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	srv, _, _, applyCh := newConfigTestServer(t)
@@ -338,6 +347,7 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "POST /actions/reboot", method: http.MethodPost, path: "/actions/reboot", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},
 		{name: "POST /actions/soak", method: http.MethodPost, path: "/actions/soak", body: htmlForm(url.Values{"duration": {"1h"}}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
 		{name: "POST /actions/soak/cancel", method: http.MethodPost, path: "/actions/soak/cancel", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
+		{name: "POST /actions/wifi-retry", method: http.MethodPost, path: "/actions/wifi-retry", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
 		{name: "GET /api/status", method: http.MethodGet, path: "/api/status", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /api/config", method: http.MethodGet, path: "/api/config", isAPI: true, body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "PUT /api/config", method: http.MethodPut, path: "/api/config", isAPI: true, body: apiBody(apiCfgPayload), wantAuthedStatus: http.StatusOK, appliesAsync: true},
@@ -346,6 +356,7 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "POST /api/actions/reboot", method: http.MethodPost, path: "/api/actions/reboot", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
 		{name: "POST /api/actions/soak", method: http.MethodPost, path: "/api/actions/soak", isAPI: true, body: apiBody([]byte(`{"duration":"1h"}`)), wantAuthedStatus: http.StatusOK},
 		{name: "POST /api/actions/soak/cancel", method: http.MethodPost, path: "/api/actions/soak/cancel", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
+		{name: "POST /api/actions/wifi-retry", method: http.MethodPost, path: "/api/actions/wifi-retry", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusOK},
 		{name: "POST /logout", method: http.MethodPost, path: "/logout", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/login"},
 	}
 
@@ -406,5 +417,77 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// --- Test 3: the partial-setup (AP-mode) finish-provisioning journey -------
+
+// TestE2EPartialSetupLoginAndFinishConfig is the end-to-end guard for Gap 1:
+// a device provisioned through the AP portal has an admin password + WiFi
+// creds on disk but no Board.Origin/Darwin.Token yet (connectivity-valid,
+// board-invalid). After it joins the LAN, the operator must be able to log in
+// and reach /config to finish provisioning — the exact path config.Load's
+// full validation used to break with a redirect loop. This drives that whole
+// journey over the real middleware stack: setup gate lifts, login works,
+// /config renders, and finishing (origin + token) promotes the document to
+// fully board-valid on disk without losing the portal-supplied WiFi creds.
+func TestE2EPartialSetupLoginAndFinishConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	hash, err := HashPassword(e2ePassword)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	partial := config.Default() // empty origin/token: fails full Validate
+	partial.Web.PasswordHash = hash
+	partial.Wifi.SSID = "HomeNet"
+	partial.Wifi.PSK = "supersecret"
+	if err := config.SaveConnectivity(path, partial); err != nil {
+		t.Fatalf("seed partial-setup config: %v", err)
+	}
+
+	svc, applyCh := e2eNewService(t, path)
+	srv := NewServer(svc, testLog())
+	h := srv.Handler()
+
+	// 1. Setup gate lifts: a password exists, so /setup 404s and an
+	// unauthenticated request routes to /login (NOT /setup).
+	if rec := getPath(t, h, "/setup"); rec.Code != http.StatusNotFound {
+		t.Fatalf("partial-setup: /setup must 404 once a password exists, got %d", rec.Code)
+	}
+	if rec := getPath(t, h, "/"); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("partial-setup: GET / want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	// 2. Login with the portal-set password works.
+	cookie, csrf := loginAs(t, srv, e2ePassword)
+
+	// 3. GET /config renders the finish-provisioning page.
+	if rec := getPath(t, h, "/config", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("partial-setup: GET /config want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 4. Finish provisioning: supply the missing origin + token (WiFi SSID
+	// arrives pre-filled in the real form, so submit it back as-is), which
+	// promotes the document to fully board-valid and saves it.
+	form := baseConfigForm()
+	form.Set("board.origin", "PAD")
+	form.Set("darwin.token", "tok-finish")
+	form.Set("wifi.ssid", "HomeNet") // mirrors the pre-filled, non-secret SSID input
+	form.Set("csrf", csrf)
+	recCfg := postForm(t, h, "/config", form, cookie)
+	if recCfg.Code != http.StatusOK {
+		t.Fatalf("partial-setup: POST /config want 200, got %d body=%s", recCfg.Code, recCfg.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path) // must now pass the full Validate
+	if err != nil {
+		t.Fatalf("partial-setup: config must be fully board-valid after finishing: %v", err)
+	}
+	if cur.Board.Origin != "PAD" || cur.Darwin.Token != "tok-finish" {
+		t.Fatalf("partial-setup: finish didn't persist origin/token: %+v", cur)
+	}
+	if cur.Wifi.SSID != "HomeNet" || cur.Wifi.PSK != "supersecret" {
+		t.Fatalf("partial-setup: finish must keep the portal-supplied wifi creds: %+v", cur.Wifi)
 	}
 }

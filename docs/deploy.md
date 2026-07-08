@@ -220,15 +220,68 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
 
 1. Confirm the device is reachable some other way (ethernet, physical
    console, or you're comfortable losing WiFi and driving it from the AP).
-2. Disable ifupdown/dhcpcd's management of wlan0 (M3b bench notes cover the
-   exact steps for the DietPi image in use).
-3. Add `--manage-network` to the unit's `ExecStart` and
-   `systemctl daemon-reload && systemctl restart trainboard`.
-4. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
+2. Install `dnsmasq` if it isn't already present (`apt-get install -y
+   dnsmasq`) — M3a never runs it; the connectivity manager's AP fallback
+   needs it for DHCP + captive DNS on wlan0.
+3. Hand wlan0 over from ifupdown to the connectivity manager — this is a
+   one-way step, do it in this order:
+   1. Comment out the `iface wlan0 ...` block (and any `wpa-conf`/
+      `wpa-ssid` lines under it) in `/etc/network/interfaces`.
+   2. `systemctl disable --now ifup@wlan0.service` (or `ifdown wlan0`
+      followed by disabling whatever wlan0 unit DietPi's ifupdown
+      generated — check `systemctl list-units 'ifup@wlan0*'` if the exact
+      unit name differs).
+   3. **Only then** add `--manage-network` to the unit's `ExecStart`.
+4. `systemctl daemon-reload && systemctl restart trainboard`.
+5. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
    fallback before disconnecting your other access path.
+
+From this point on, wlan0 is manager-owned at boot: ifupdown will not touch
+it again unless the interfaces-file edit from step 3.1 is reverted, so a
+crash-looped `trainboard.service` means wlan0 sits idle rather than falling
+back to ifupdown's own DHCP client.
+
+**Before running the migration on real hardware**, run the bench protocol in
+[`deploy/bench/`](../deploy/bench/): `eval-mode2.sh` exercises AP bring-up,
+10x AP↔STA toggling, and the bad-PSK AP-restore invariant behind a dead-man
+switch that restores the pre-bench network config and reboots on its own if
+the session goes sideways, and `destructive-matrix.md` walks the harder
+failure-injection rows (daemon crashes, DHCP timeout, reboot mid-transition,
+etc. — issue #13). The mode2-vs-hostapd verdict is **not** decided by this
+doc — it lands as an ADR 0003 addendum after that bench session runs, not
+before.
+
+Because this bench session runs *before* the ifupdown migration above,
+`eval-mode2.sh` detects that wlan0 is still ifupdown/system-managed and, once
+its own dead-man switch is armed and verified, stops the system
+`wpa_supplicant` and `ifdown`s wlan0 itself for the duration of the run so
+the driver under test isn't fighting the wrong daemon (see the script's step
+1b/2b). It hands wlan0 back to ifupdown on a normal exit, and the dead-man's
+standalone restore script does the same if the session itself goes
+sideways — either way a pre-migration Pi comes back ifupdown-managed. Treat
+the bench session itself like the migration's SSH warning above: drive it
+over ethernet/console, or accept that wlan0 is unavailable to you for its
+duration.
 
 **Fault codes E05/E06** (§6) are only ever surfaced behind this flag — with
 it off, wlan0 is left to the OS as before and neither can occur.
+
+**Recovering WiFi after provisioning (AP fallback).** Once a board has been
+provisioned it will not re-run first-time setup, so `/setup`'s WiFi form is
+gone. If the configured network later becomes unreachable (bad PSK, router
+swap, outage) the board drops back to its own hotspot. To recover: rejoin the
+`Trainboard-XXXX` hotspot (or let the captive-portal sheet pop) and open
+`http://192.168.4.1/` — `/setup` now shows a small read-only status page with
+the last join error. From there log in at `http://192.168.4.1/login` and use
+**Retry WiFi now** on the actions page (or fix `wifi.ssid`/`wifi.psk` at
+`/config` first). Two caveats worth knowing: (1) any HTTP request from a
+client on the AP subnet counts as provisioning activity and *defers* the
+manager's periodic auto-retry, so a phone left sitting on the status page can
+delay a spontaneous rejoin — the **Retry WiFi now** action always bypasses
+this suppression, so use it rather than waiting; (2) the `192.168.4.1`
+address and the AP subnet are hardcoded to `192.168.4.0/24` (see
+`internal/web`'s `apSetupURL` and the captive-portal probe handlers) — a board
+brought up on a different AP subnet would not match these on-screen URLs.
 
 **Watchdog:** `trainboard.service` already ships with `WatchdogSec=30` (see
 the unit file) regardless of `--manage-network`; the internal aggregator

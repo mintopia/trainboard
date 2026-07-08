@@ -61,6 +61,25 @@ func TestErrorSceneGolden(t *testing.T) {
 	rendertest.AssertGolden(t, "testdata", "scene_error_e01", frame(t, s, 0))
 }
 
+func TestErrorSceneWithDetailGolden(t *testing.T) {
+	s := errorScene(obs.FaultConnectivity, mustFonts(t), "DHCP")
+	rendertest.AssertGolden(t, "testdata", "scene_error_e06_detail", frame(t, s, 0))
+}
+
+func TestErrorSceneDetailChangesFrame(t *testing.T) {
+	f := mustFonts(t)
+	withDetail := frame(t, errorScene(obs.FaultConnectivity, f, "DHCP"), 0)
+	without := frame(t, errorScene(obs.FaultConnectivity, f), 0)
+	if string(withDetail.Pix) == string(without.Pix) {
+		t.Fatal("a non-empty detail line must change the rendered frame")
+	}
+	// An empty detail string must be indistinguishable from no detail at all.
+	empty := frame(t, errorScene(obs.FaultConnectivity, f, ""), 0)
+	if string(empty.Pix) != string(without.Pix) {
+		t.Fatal("an empty detail must render identically to omitting the detail")
+	}
+}
+
 func TestClockNotSyncedGolden(t *testing.T) {
 	s := clockNotSyncedScene(mustFonts(t))
 	rendertest.AssertGolden(t, "testdata", "scene_clocknotsynced", frame(t, s, 0))

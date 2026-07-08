@@ -22,6 +22,9 @@ func TestDefaultHasSaneValues(t *testing.T) {
 	if c.Powersaving.Enabled {
 		t.Error("powersaving should default disabled")
 	}
+	if c.Wifi.Country != "GB" {
+		t.Errorf("wifi.country default = %q, want GB", c.Wifi.Country)
+	}
 }
 
 func TestConfigRoundTrips(t *testing.T) {

@@ -48,7 +48,13 @@ func (c Config) Validate() error {
 }
 
 // validateWifi: empty (both fields blank) or complete with sane lengths.
+// Country is checked independently of SSID/PSK completeness — it is a
+// regulatory-domain setting, not a credential, so it's validated even for an
+// otherwise-unconfigured wifi block.
 func (c Config) validateWifi() error {
+	if c.Wifi.Country != "" && !isRegCountry(c.Wifi.Country) {
+		return errors.New("config: wifi.country must be exactly 2 uppercase ASCII letters when set")
+	}
 	if c.Wifi.SSID == "" && c.Wifi.PSK == "" {
 		return nil
 	}
@@ -91,4 +97,18 @@ func isCRS(s string) bool {
 func isHHMM(s string) bool {
 	_, err := time.Parse("15:04", s)
 	return err == nil
+}
+
+// isRegCountry reports whether s is exactly 2 uppercase ASCII letters, the
+// shape `iw reg set` and both AP drivers' conf templates expect.
+func isRegCountry(s string) bool {
+	if len(s) != 2 {
+		return false
+	}
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }

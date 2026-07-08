@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/config"
 	netconn "github.com/mintopia/trainboard/internal/net"
 	"github.com/mintopia/trainboard/internal/obs"
@@ -127,6 +128,32 @@ func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) stri
 	return pw
 }
 
+// wifiCountry returns the regulatory country to configure the radio with:
+// the config's own value when set, defaulting to "GB" (matching
+// config.Default() and config.WifiConfig.Country's documented consumer-side
+// default) for a config predating this field or one that cleared it.
+func wifiCountry(cfg config.Config) string {
+	if cfg.Wifi.Country == "" {
+		return "GB"
+	}
+	return cfg.Wifi.Country
+}
+
+// staFromDisk returns a closure that reads config.LoadRaw(cfgPath) on EVERY
+// call, extracting and returning its STA credentials (SSID and PSK). This
+// enables the credential-handoff flow: portal saves new WiFi creds, then
+// Manager calls STA() → fresh creds without a process restart. A read error
+// returns a zero STAConfig (graceful fallback to AP mode).
+func staFromDisk(cfgPath string) func() netconn.STAConfig {
+	return func() netconn.STAConfig {
+		raw, err := config.LoadRaw(cfgPath)
+		if err != nil {
+			return netconn.STAConfig{} // zero on read error; graceful fallback
+		}
+		return netconn.STAConfig{SSID: raw.Wifi.SSID, PSK: raw.Wifi.PSK}
+	}
+}
+
 // resolveE04Config picks the config to feed startConnectivityManager from
 // the E04 (config error) boot path, given the result of a tolerant
 // config.LoadRaw(path) read. When the raw read succeeded (rawErr == nil) it
@@ -189,8 +216,9 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 		Password: resolveAPPassword(cfg, cfgPath, log),
 		Addr:     "192.168.4.1/24",
 	}
+	country := wifiCountry(cfg)
 	runner := netconn.NewExecRunner()
-	driver := netconn.NewMode2Driver(runner, wlanIface, nil, nil)
+	driver := netconn.NewMode2Driver(runner, wlanIface, country, nil, nil)
 	check := netconn.NewCheck(runner, wlanIface, darwinProbeHost, captiveProbeURL, httpGetProbe)
 	dnsmasq := netconn.NewDnsmasq(runner, writeFile)
 
@@ -199,7 +227,7 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 		Check:   check,
 		Dnsmasq: dnsmasq,
 		Prereqs: func(pctx context.Context) error {
-			return netconn.CheckPrereqs(pctx, runner, os.ReadFile, writeFile, filepath.Glob)
+			return netconn.CheckPrereqs(pctx, runner, country, os.ReadFile, writeFile, filepath.Glob)
 		},
 		AP:       ap,
 		STA:      sta,
@@ -223,4 +251,63 @@ func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath st
 	}()
 
 	return mgr
+}
+
+// connManager is the slice of *netconn.Manager the web-seam adapter needs:
+// the published Status snapshot plus the two run-loop nudges. An interface
+// (rather than the concrete Manager) purely so tests can substitute a fake;
+// production only ever passes the real Manager.
+type connManager interface {
+	Status() netconn.Status
+	RetryNow()
+	NoteProvisioning(now time.Time)
+}
+
+var _ connManager = (*netconn.Manager)(nil)
+
+// webConnSeams carries the four connectivity funcs the web package exposes
+// as seams (web.Sources.Hotspot/LastSTAError, web.Actions.WifiRetry/
+// NoteProvisioning). The zero value — what both boot paths pass when
+// --manage-network is off — leaves every field nil, which the web Service
+// nil-tolerates by design (nil hotspot, empty error, no-op actions).
+type webConnSeams struct {
+	hotspot          func() *board.Hotspot
+	lastSTAError     func() string
+	wifiRetry        func()
+	noteProvisioning func()
+}
+
+// newWebConnSeams adapts the connectivity manager to the web seams. The read
+// seams go through m.Status() on every call (the manager republishes an
+// immutable snapshot as it moves between STA and AP), keeping internal/web
+// free of any internal/net dependency: net types are mapped here, in cmd, to
+// *board.Hotspot and plain strings.
+//
+// noteProvisioning stamps NoteProvisioning with now(): the web handlers call
+// it on portal HTTP activity, which suppresses the manager's periodic STA
+// retry. HTTP activity from the AP subnet implies a DHCP lease — a conscious
+// simplification of the spec's lease-AND-HTTP pair; a mere association
+// without traffic still never suppresses (no HTTP request, no
+// NoteProvisioning call).
+// connFault adapts the connectivity manager to the fault seam the composite
+// snapshot source consumes: the current failing layer (Status.Stage) and
+// whether the STA Prereqs gate reported the radio blocked (Status.RadioBlocked).
+// Mapping net types to plain strings/bools here keeps internal/runtime free of
+// any internal/net dependency. Read through m.Status() on every call, matching
+// the other seams (the manager republishes an immutable snapshot as it moves
+// between STA and AP).
+func connFault(m connManager) func() (string, bool) {
+	return func() (string, bool) {
+		s := m.Status()
+		return string(s.Stage), s.RadioBlocked
+	}
+}
+
+func newWebConnSeams(m connManager, now func() time.Time) webConnSeams {
+	return webConnSeams{
+		hotspot:          func() *board.Hotspot { return m.Status().Hotspot },
+		lastSTAError:     func() string { return m.Status().LastSTAErr },
+		wifiRetry:        m.RetryNow,
+		noteProvisioning: func() { m.NoteProvisioning(now()) },
+	}
 }

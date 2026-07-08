@@ -5,6 +5,12 @@
   <button type="submit">Restart board software</button></form>
 <form method="post" action="/actions/reboot" onsubmit="return confirm('Reboot the device?')"><input type="hidden" name="csrf" value="{{.CSRF}}">
   <button type="submit">Reboot device</button></form>
+{{if .HotspotActive}}
+<h3>WiFi provisioning</h3>
+<p>Board is in hotspot mode — retry the configured WiFi now (the hotspot will drop for ~20 seconds).</p>
+<form method="post" action="/actions/wifi-retry"><input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Retry WiFi now</button></form>
+{{end}}
 <h3>Burn-in soak</h3>
 {{if .SoakError}}<p class="error">{{.SoakError}}</p>{{end}}
 {{if .SoakRemaining}}

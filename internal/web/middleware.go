@@ -118,6 +118,33 @@ func originCheck(log *slog.Logger) middleware {
 	}
 }
 
+// apNet is the AP-mode hotspot's subnet (see board.Hotspot's default Addr,
+// 192.168.4.1). A request originating from inside it is, by construction,
+// coming from a client associated to the board's own hotspot — i.e. a human
+// actively going through provisioning.
+var apNet = net.IPNet{IP: net.IPv4(192, 168, 4, 0), Mask: net.CIDRMask(24, 32)}
+
+// noteProvisioning marks svc's provisioning activity for every request whose
+// RemoteAddr host parses inside apNet, so the connectivity manager suppresses
+// its periodic WiFi retry while a human is actively using the AP to
+// provision the board. It counts every request — probes, static assets, the
+// lot — because presence on the AP subnet is the signal, not which route is
+// hit. Must sit in Handler()'s chain after logRequests (every request should
+// count, including ones later middleware might reject).
+func noteProvisioning(svc *Service) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err == nil {
+				if parsed := net.ParseIP(ip); parsed != nil && apNet.Contains(parsed) {
+					svc.MarkProvisioning()
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // rateLimit applies the limiter to state-changing requests, keyed by client IP.
 func rateLimit(rl *limiter, log *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {

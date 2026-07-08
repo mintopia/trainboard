@@ -11,15 +11,17 @@ import (
 // soft-block state via sysfs (rfkill binary is not installed on DietPi) and
 // regulatory country via `iw reg get`. Returns nil or an error suitable for
 // FaultRadioBlocked. It FIXES what it safely can (writes "0" to the sysfs
-// soft file; `iw reg set GB` when country is 00/unset) and re-verifies.
-func CheckPrereqs(ctx context.Context, r Runner, readFile func(string) ([]byte, error), writeFile func(string, []byte) error, glob func(string) ([]string, error)) error {
+// soft file; `iw reg set <country>` when country is 00/unset) and
+// re-verifies. country is the configured regulatory domain (config.Wifi.
+// Country, defaulted to "GB" by the caller when empty).
+func CheckPrereqs(ctx context.Context, r Runner, country string, readFile func(string) ([]byte, error), writeFile func(string, []byte) error, glob func(string) ([]string, error)) error {
 	// Check rfkill soft-block state
 	if err := checkRfkill(ctx, readFile, writeFile, glob); err != nil {
 		return err
 	}
 
 	// Check regulatory country
-	if err := checkRegulatory(ctx, r); err != nil {
+	if err := checkRegulatory(ctx, r, country); err != nil {
 		return err
 	}
 
@@ -82,8 +84,9 @@ func checkRfkill(_ context.Context, readFile func(string) ([]byte, error), write
 	return nil
 }
 
-// checkRegulatory verifies the regulatory country is set (not 00).
-func checkRegulatory(ctx context.Context, r Runner) error {
+// checkRegulatory verifies the regulatory country is set (not 00), fixing it
+// to country when it isn't.
+func checkRegulatory(ctx context.Context, r Runner, country string) error {
 	// Get current regulatory domain
 	out, err := r.Run(ctx, "iw", "reg", "get")
 	if err != nil {
@@ -92,11 +95,11 @@ func checkRegulatory(ctx context.Context, r Runner) error {
 
 	// Check if country is 00 (unset)
 	if strings.Contains(out, "country 00") {
-		// Try to set to GB
-		_, err := r.Run(ctx, "iw", "reg", "set", "GB")
+		// Try to set to the configured country
+		_, err := r.Run(ctx, "iw", "reg", "set", country)
 		if err != nil {
 			// If set fails, just report the issue
-			return fmt.Errorf("regulatory domain is unset (country 00) and setting to GB failed: %w", err)
+			return fmt.Errorf("regulatory domain is unset (country 00) and setting to %s failed: %w", country, err)
 		}
 
 		// Re-check after setting
@@ -106,7 +109,7 @@ func checkRegulatory(ctx context.Context, r Runner) error {
 		}
 
 		if strings.Contains(out, "country 00") {
-			return fmt.Errorf("regulatory domain remains unset (country 00); check regulatory support or try: sudo iw reg set GB")
+			return fmt.Errorf("regulatory domain remains unset (country 00); check regulatory support or try: sudo iw reg set %s", country)
 		}
 	}
 
