@@ -367,6 +367,16 @@ func (m *Manager) runOnlineWait(ctx context.Context) (managerPhase, bool, error)
 // ctx cancellation), applies the provisioning-suppression rule, and — unless
 // suppressed — tears the AP down and retries STA once, restoring the AP
 // (with LastSTAErr recorded) on failure.
+//
+// A failed AP restore gets ONE in-process retry — a fresh teardown then a
+// full second toAP transition — before the existing fatal escalation (issue
+// #48): a SIGKILL'd wpa_supplicant makes the first restore's cold bring-up
+// miss its verification, and exiting fatally there traded a cheap in-process
+// retry for a systemd-watchdog reboot (~10 minutes total observed on
+// hardware). The retry reuses toAP, so a restore that only succeeds on the
+// retry is still fully VERIFIED before APFallback is published; a second
+// failure returns the same fatal error as before, keeping the watchdog
+// backstop unchanged.
 func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 	viaRetry, cancelled := m.waitAPFallback(ctx)
 	if cancelled {
@@ -398,7 +408,36 @@ func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 			m.cleanupOnCancel()
 			return phaseAPWait, true, nil
 		}
-		return phaseAPWait, false, fmt.Errorf("net: manager: AP fallback retry: AP restore failed: %w", err)
+		if m.d.Log != nil {
+			m.d.Log.Info("AP restore failed; one in-process retry", "err", err)
+		}
+		// Beat before the retry so the extra toAP never stretches the
+		// worst-case heartbeat gap past managerBeatDeadline (cmd/trainboard's
+		// connectivity.go: 150s). Arithmetic, per that file's comment: the gap
+		// from the loop-top Beat to THIS one is the old worst-case chain with
+		// toAP regrown for the issue #48 post-daemon-start budget —
+		//   30 (wait remainder) + 5 (StopAP) + 5 (Dnsmasq.Stop)
+		//   + 5 (Prereqs) + 45 (staAttemptBound) + 40 (toAP w/ internal
+		//   retry: 2 x ~15s attempts incl. 10s AP polls + teardown)
+		//   = 130s < 150s.
+		// The gap from this Beat to the next loop-top Beat is only the fresh
+		// teardown (~10s) + the retry toAP (~40s) = ~50s. Without this Beat
+		// the single chain would be ~180s > 150s and the watchdog would fire
+		// mid-retry.
+		if m.d.Beat != nil {
+			m.d.Beat()
+		}
+		// Fresh teardown before re-running the full transition, mirroring
+		// toAP's own internal retry discipline (AP is DOWN during this window).
+		_ = m.d.Driver.StopAP(ctx)
+		_ = m.d.Dnsmasq.Stop(ctx)
+		if err := m.toAP(ctx); err != nil {
+			if ctx.Err() != nil {
+				m.cleanupOnCancel()
+				return phaseAPWait, true, nil
+			}
+			return phaseAPWait, false, fmt.Errorf("net: manager: AP fallback retry: AP restore failed: %w", err)
+		}
 	}
 
 	cur := m.Status()

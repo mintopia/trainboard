@@ -121,27 +121,42 @@ func (d *mode2Driver) ensureDaemon(ctx context.Context) (started bool, err error
 	if _, err := d.r.Run(ctx, "wpa_supplicant", "-B", "-i", d.iface, "-c", wpaConfPath); err != nil {
 		return false, fmt.Errorf("net: mode2: start wpa_supplicant: %w", err)
 	}
-	if err := pollStatus(ctx, d.r, d.iface, d.sleep, func(map[string]string) bool { return true }, "daemon ctrl socket not ready"); err != nil {
+	if err := pollStatus(ctx, d.r, d.iface, d.sleep, pollAttempts, func(map[string]string) bool { return true }, "daemon ctrl socket not ready"); err != nil {
 		return true, fmt.Errorf("net: mode2: %w", err)
 	}
 	return true, nil
 }
 
+// apPollsAfterDaemonStart is StartAP's AP-active poll budget when ensureDaemon
+// just spawned wpa_supplicant (issue #48): a cold daemon (e.g. the previous
+// instance was SIGKILL'd) has to initialise the driver AND bring the AP up
+// inside this window, which on Pi Zero W 2 hardware misses the default
+// pollAttempts budget (10 x 500ms = 5s). 20 x 500ms = 10s covers the observed
+// cold bring-up with margin; the already-running branch keeps pollAttempts.
+const apPollsAfterDaemonStart = 20
+
 // StartAP writes the conf (retaining whatever STA credentials are already
 // known), ensures the daemon is running with it, selects the AP network,
-// waits for it to beacon, then assigns the AP's static address.
+// waits for it to beacon, then assigns the AP's static address. When
+// ensureDaemon spawned the daemon this call, the AP-active wait gets the
+// extended apPollsAfterDaemonStart budget (issue #48).
 func (d *mode2Driver) StartAP(ctx context.Context, ap APConfig) error {
 	d.ap = ap
 	if err := d.writeConf(); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
 	}
-	if _, err := d.ensureDaemon(ctx); err != nil {
+	started, err := d.ensureDaemon(ctx)
+	if err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)
 	}
 	if _, err := d.r.Run(ctx, "wpa_cli", "-i", d.iface, "select_network", "1"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: select_network 1: %w", err)
 	}
-	if err := pollStatus(ctx, d.r, d.iface, d.sleep, func(kv map[string]string) bool {
+	apPolls := pollAttempts
+	if started {
+		apPolls = apPollsAfterDaemonStart
+	}
+	if err := pollStatus(ctx, d.r, d.iface, d.sleep, apPolls, func(kv map[string]string) bool {
 		return kv["wpa_state"] == "COMPLETED" && kv["mode"] == "AP"
 	}, "AP not active"); err != nil {
 		return fmt.Errorf("net: mode2: StartAP: %w", err)

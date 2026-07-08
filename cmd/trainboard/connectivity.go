@@ -39,19 +39,23 @@ const (
 	// connectivity manager's Run loop (Task 12 wiring rules).
 	//
 	// Beat is called once per Run loop iteration, plus internally by
-	// waitAPFallback every 30s while merely waiting in AP fallback — so the
-	// binding case is the worst-case gap around a single STARetry-phase
-	// iteration (runAPWait, once waitAPFallback's budget is up): the final
-	// leftover leg of that 30s heartbeat cadence (<=30s) is immediately
-	// followed by StopAP (~5s) + Dnsmasq.Stop (~5s) + a toSTA attempt
-	// (Prereqs ~5s + the enforced staAttemptBound of 45s) + a toAP restore
-	// that may retry once internally (~30s) — none of Beat again until that
-	// whole chain finishes and Run loops back to the top:
+	// waitAPFallback every 30s while merely waiting in AP fallback, plus once
+	// by runAPWait immediately before its single in-process AP-restore retry
+	// (issue #48) — so the binding case is the worst-case gap around a single
+	// STARetry-phase iteration (runAPWait, once waitAPFallback's budget is
+	// up): the final leftover leg of that 30s heartbeat cadence (<=30s) is
+	// immediately followed by StopAP (~5s) + Dnsmasq.Stop (~5s) + a toSTA
+	// attempt (Prereqs ~5s + the enforced staAttemptBound of 45s) + a toAP
+	// restore that may retry once internally (~40s with the issue #48
+	// post-daemon-start AP poll budget) — none of Beat again until the
+	// pre-retry beat (or the loop top):
 	//   30 (wait remainder) + 5 (StopAP) + 5 (Dnsmasq.Stop)
-	//   + 5 (Prereqs) + 45 (staAttemptBound) + 30 (toAP restore w/ retry)
-	//   = 120s worst case.
-	// 90s would already be exceeded by that chain alone, so this is bumped
-	// to 150s (~30s margin over the 120s worst case) rather than adding yet
+	//   + 5 (Prereqs) + 45 (staAttemptBound) + 40 (toAP restore w/ retry)
+	//   = 130s worst case.
+	// The in-process AP-restore retry's own leg (teardown ~10s + another
+	// ~40s toAP = ~50s) starts from that fresh pre-retry beat, so it never
+	// binds. 90s would already be exceeded by the main chain alone, so this
+	// is 150s (~20s margin over the 130s worst case) rather than adding yet
 	// another mid-chain beat.
 	managerBeatDeadline = 150 * time.Second
 	// httpProbeTimeout bounds the captive-portal probe request.

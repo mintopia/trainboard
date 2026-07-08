@@ -42,20 +42,22 @@ const pollAttempts = 10
 
 const pollInterval = 500 * time.Millisecond
 
-// pollStatus polls `wpa_cli status` up to pollAttempts times, pollInterval
+// pollStatus polls `wpa_cli status` up to attempts times, pollInterval
 // apart, until want reports true. It returns an error naming failMsg if the
-// state is never reached.
-func pollStatus(ctx context.Context, r Runner, iface string, sleep func(time.Duration), want func(map[string]string) bool, failMsg string) error {
-	for i := 0; i < pollAttempts; i++ {
+// state is never reached. Callers pass pollAttempts for the default budget;
+// StartAP passes apPollsAfterDaemonStart after a cold daemon spawn (issue
+// #48).
+func pollStatus(ctx context.Context, r Runner, iface string, sleep func(time.Duration), attempts int, want func(map[string]string) bool, failMsg string) error {
+	for i := 0; i < attempts; i++ {
 		out, err := r.Run(ctx, "wpa_cli", "-i", iface, "status")
 		if err == nil && want(parseWpaStatus(out)) {
 			return nil
 		}
-		if i < pollAttempts-1 {
+		if i < attempts-1 {
 			sleep(pollInterval)
 		}
 	}
-	return fmt.Errorf("net: %s after %d polls", failMsg, pollAttempts)
+	return fmt.Errorf("net: %s after %d polls", failMsg, attempts)
 }
 
 // renderSTAConf formats a wpa_supplicant conf containing only the STA
@@ -102,7 +104,7 @@ func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, rend
 	if _, err := r.Run(ctx, "wpa_cli", "-i", iface, "select_network", "0"); err != nil {
 		return fmt.Errorf("net: staAttempt: select_network 0: %w", err)
 	}
-	if err := pollStatus(ctx, r, iface, sleep, func(kv map[string]string) bool {
+	if err := pollStatus(ctx, r, iface, sleep, pollAttempts, func(kv map[string]string) bool {
 		return kv["wpa_state"] == "COMPLETED"
 	}, "STA not associated"); err != nil {
 		return fmt.Errorf("net: staAttempt: %w", err)

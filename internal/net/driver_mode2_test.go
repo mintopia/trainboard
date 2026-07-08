@@ -525,3 +525,210 @@ func TestMode2DriverEnsureDaemonTimesOutWhenCtrlSocketNeverReady(t *testing.T) {
 		t.Fatalf("sleep called %d times, want %d", got, pollAttempts-1)
 	}
 }
+
+// --- issue #48: post-daemon-start AP-active poll budget ----------------------
+
+// statusResponse is one scripted (out, err) result for scriptedStatusRunner.
+type statusResponse struct {
+	out string
+	err error
+}
+
+// scriptedStatusRunner scripts every "wpa_cli ... status" call individually,
+// consumed front-to-back (the last response repeats once exhausted).
+// Distinct from sequencedStatusRunner (fails exactly the first status call)
+// and statusFailRunner (fails the first N, then always succeeds): the issue
+// #48 budget tests need a status that SUCCEEDS as a command early (the
+// daemon's ctrl socket is up) yet only satisfies StartAP's AP-active
+// predicate on a specific later poll — a fail/ok split can't express that.
+// Non-status commands delegate to the wrapped Runner.
+type scriptedStatusRunner struct {
+	Runner
+	statusCmd string
+	responses []statusResponse
+
+	mu    sync.Mutex
+	calls []string
+	hits  int
+}
+
+func (s *scriptedStatusRunner) Run(ctx context.Context, argv ...string) (string, error) {
+	cmd := strings.Join(argv, " ")
+
+	s.mu.Lock()
+	s.calls = append(s.calls, cmd)
+	isStatus := cmd == s.statusCmd
+	var resp statusResponse
+	if isStatus {
+		i := s.hits
+		if i >= len(s.responses) {
+			i = len(s.responses) - 1
+		}
+		resp = s.responses[i]
+		s.hits++
+	}
+	s.mu.Unlock()
+
+	if isStatus {
+		return resp.out, resp.err
+	}
+	return s.Runner.Run(ctx, argv...)
+}
+
+func (s *scriptedStatusRunner) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+func (s *scriptedStatusRunner) statusCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, c := range s.calls {
+		if c == s.statusCmd {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMode2DriverStartAPExtendedPollBudgetAfterDaemonStart pins the issue #48
+// budget switch: when ensureDaemon just spawned wpa_supplicant (cold start —
+// e.g. the previous instance was SIGKILL'd), the AP-active wait gets the
+// extended apPollsAfterDaemonStart budget instead of the default pollAttempts.
+// Here the AP only reports active on poll 15 — past the old 10-poll budget,
+// inside the new 20 — so StartAP must succeed.
+func TestMode2DriverStartAPExtendedPollBudgetAfterDaemonStart(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+	base.Script("ip addr flush dev wlan0", "", nil)
+	base.Script("ip addr add 192.168.4.1/24 dev wlan0", "", nil)
+
+	responses := []statusResponse{
+		// Call 1: branch decision fails => ensureDaemon takes the spawn branch.
+		{"", errors.New("exit status 255: could not connect to wpa_supplicant")},
+		// Call 2: ctrl-socket wait poll — the command exits 0, socket is up.
+		{"wpa_state=SCANNING\n", nil},
+	}
+	// Calls 3..16: AP-active polls 1-14 — socket answers but not yet mode=AP.
+	for i := 0; i < 14; i++ {
+		responses = append(responses, statusResponse{"wpa_state=SCANNING\n", nil})
+	}
+	// Call 17: AP-active poll 15 — beaconing.
+	responses = append(responses, statusResponse{"wpa_state=COMPLETED\nmode=AP\n", nil})
+
+	r := &scriptedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", responses: responses}
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID:     "Trainboard-1234",
+		Password: "testpass1",
+		Addr:     "192.168.4.1/24",
+	})
+	if err != nil {
+		t.Fatalf("StartAP() = %v, want nil (AP active on poll 15 must be inside the post-daemon-start budget)", err)
+	}
+
+	// 1 branch decision + 1 ctrl-socket poll + 15 AP-active polls.
+	if got := r.statusCalls(); got != 17 {
+		t.Fatalf("status called %d times, want 17 (1 branch + 1 socket + 15 AP polls); calls: %v", got, r.Calls())
+	}
+	// Sleeps only between the 14 failed AP polls and their successor; the
+	// ctrl-socket wait succeeded on its first poll (no sleeps).
+	if got := sl.calls(); got != 14 {
+		t.Fatalf("sleep called %d times, want 14", got)
+	}
+}
+
+// TestMode2DriverStartAPPostDaemonStartBudgetCapsAtTwenty pins the extended
+// budget's upper bound: with a freshly spawned daemon whose AP never
+// activates, StartAP gives up after exactly apPollsAfterDaemonStart (20)
+// polls — bounded, not unbounded.
+func TestMode2DriverStartAPPostDaemonStartBudgetCapsAtTwenty(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+
+	responses := []statusResponse{
+		// Branch decision fails => spawn branch; every later status answers
+		// (socket up) but never reaches mode=AP (last response repeats).
+		{"", errors.New("exit status 255: could not connect to wpa_supplicant")},
+		{"wpa_state=SCANNING\n", nil},
+	}
+
+	r := &scriptedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", responses: responses}
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID:     "Trainboard-1234",
+		Password: "testpass1",
+		Addr:     "192.168.4.1/24",
+	})
+	if err == nil {
+		t.Fatal("StartAP() = nil, want error (AP never active)")
+	}
+	if !strings.Contains(err.Error(), "AP not active after 20 polls") {
+		t.Fatalf("err = %v, want containing %q", err, "AP not active after 20 polls")
+	}
+
+	// 1 branch decision + 1 ctrl-socket poll + exactly 20 AP-active polls.
+	if got := r.statusCalls(); got != 22 {
+		t.Fatalf("status called %d times, want 22 (1 branch + 1 socket + 20 AP polls); calls: %v", got, r.Calls())
+	}
+	// 19 sleeps between the 20 failed AP polls; none in the socket wait.
+	if got := sl.calls(); got != 19 {
+		t.Fatalf("sleep called %d times, want 19", got)
+	}
+	for _, c := range r.Calls() {
+		if strings.HasPrefix(c, "ip ") {
+			t.Fatalf("calls contain %q, want no ip commands after AP never active", c)
+		}
+	}
+}
+
+// TestMode2DriverStartAPKeepsDefaultBudgetWhenDaemonAlreadyRunning pins that
+// the extended budget applies ONLY to the daemon-spawn branch: with
+// wpa_supplicant already running, an AP that would activate on poll 15 is NOT
+// waited for — StartAP still fails after the default pollAttempts (10) polls.
+func TestMode2DriverStartAPKeepsDefaultBudgetWhenDaemonAlreadyRunning(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 1", "", nil)
+
+	responses := []statusResponse{
+		// Call 1: branch decision succeeds => already-running branch.
+		{"wpa_state=SCANNING\n", nil},
+	}
+	// Calls 2..15: AP-active polls 1-14 not yet AP.
+	for i := 0; i < 14; i++ {
+		responses = append(responses, statusResponse{"wpa_state=SCANNING\n", nil})
+	}
+	// Call 16 would be AP-active poll 15 — reachable only under the extended
+	// budget, which this branch must NOT get.
+	responses = append(responses, statusResponse{"wpa_state=COMPLETED\nmode=AP\n", nil})
+
+	r := &scriptedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status", responses: responses}
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.StartAP(context.Background(), APConfig{
+		SSID:     "Trainboard-1234",
+		Password: "testpass1",
+		Addr:     "192.168.4.1/24",
+	})
+	if err == nil {
+		t.Fatal("StartAP() = nil, want error (already-running branch keeps the 10-poll budget)")
+	}
+	if !strings.Contains(err.Error(), "AP not active after 10 polls") {
+		t.Fatalf("err = %v, want containing %q", err, "AP not active after 10 polls")
+	}
+
+	// 1 branch decision + exactly pollAttempts AP-active polls.
+	if got := r.statusCalls(); got != pollAttempts+1 {
+		t.Fatalf("status called %d times, want %d (1 branch + %d AP polls); calls: %v", got, pollAttempts+1, pollAttempts, r.Calls())
+	}
+	if got := sl.calls(); got != pollAttempts-1 {
+		t.Fatalf("sleep called %d times, want %d", got, pollAttempts-1)
+	}
+}

@@ -1465,3 +1465,152 @@ func TestManagerFastRetryOncePerProcessLifetime(t *testing.T) {
 		t.Fatalf("Run() err = %v, want nil", err)
 	}
 }
+
+// --- issue #48: one in-process AP-restore retry before the fatal path -------
+
+// TestManagerRunAPRestoreFailureRetriesInProcessOnce pins the issue #48
+// manager fix: when the AP-fallback retry cycle's AP restore (toAP) fails,
+// Run must NOT exit fatally on the first failure — it logs, re-runs the full
+// toAP transition once, and on success publishes a verified APFallback (with
+// LastSTAErr recorded) and keeps running. Before the fix the first toAP
+// failure here was fatal and recovery took the systemd watchdog reboot
+// (~10 min total observed on hardware) instead of an in-process self-heal.
+func TestManagerRunAPRestoreFailureRetriesInProcessOnce(t *testing.T) {
+	// APActive script: boot toAP verifies (true); the retry cycle's first toAP
+	// fails BOTH its internal attempts (false, false); the manager-level
+	// in-process retry then verifies (default true).
+	driver := &fakeDriver{
+		apActiveSeq:     []boolErr{{true, nil}, {false, nil}, {false, nil}},
+		apActiveDefault: true,
+	}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
+	logs := &capturingHandler{}
+
+	check := NewCheckWithProbes(Probes{
+		Assoc:   func(context.Context) error { return errors.New("never associates") },
+		DHCP:    func(context.Context) error { return nil },
+		DNS:     func(context.Context) error { return nil },
+		Captive: func(context.Context) error { return nil },
+	})
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   check,
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-R", Addr: "192.168.4.1/24"},
+		Now:     clock.Now,
+		After:   after.After,
+		Log:     slog.New(logs),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManagerAsync(ctx, m)
+
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
+
+	// Advance past the heartbeat-tracked budget so this wake is the real
+	// retry timeout (see TestManagerRunFullFallbackRetrySuccessCycle).
+	timer := after.nth(t, 1)
+	clock.Advance(apFallbackRetryWait)
+	fire(t, timer)
+
+	// The in-process retry restored a VERIFIED AP: APFallback republished with
+	// the hotspot and the STA failure recorded.
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback && s.LastSTAErr != "" })
+	if got := m.Status(); got.Hotspot == nil || got.Hotspot.SSID != "Trainboard-R" {
+		t.Fatalf("Hotspot = %+v, want SSID Trainboard-R restored by the in-process retry", got.Hotspot)
+	}
+	if got := logs.count("AP restore failed; one in-process retry"); got != 1 {
+		t.Fatalf("retry log emitted %d times, want exactly 1", got)
+	}
+	// Boot toAP (1 StartAP) + failed toAP (2, one per internal attempt) +
+	// in-process retry toAP (1, verified first attempt) = 4.
+	if got := countCalls(driver, "StartAP"); got != 4 {
+		t.Fatalf("StartAP = %d, want 4 (boot 1 + failed restore 2 + in-process retry 1); calls: %v", got, driver.Calls())
+	}
+
+	// Run must still be alive — no fatal exit happened.
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned early: %v", err)
+	default:
+	}
+
+	cancel()
+	if err := waitRunDone(t, done); err != nil {
+		t.Fatalf("Run() err = %v, want nil", err)
+	}
+}
+
+// TestManagerRunEscalatesAfterInProcessAPRestoreRetryFails extends the fatal
+// AP-restore path (see TestManagerRunEscalatesWhenAPVerificationPermanentlyFails
+// for the boot-time flavour): if the in-process retry's toAP ALSO fails, Run
+// exits with the existing fatal error verbatim — the watchdog backstop is
+// unchanged, and there is exactly ONE manager-level retry (it provably cannot
+// loop: 2 toAP transitions = 4 restore StartAP calls, never more).
+func TestManagerRunEscalatesAfterInProcessAPRestoreRetryFails(t *testing.T) {
+	// Boot toAP verifies (true); every later APActive is false, so both the
+	// first restore and the single in-process retry fail all their attempts.
+	driver := &fakeDriver{
+		apActiveSeq:     []boolErr{{true, nil}},
+		apActiveDefault: false,
+	}
+	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
+	var beats atomic.Int32
+
+	check := NewCheckWithProbes(Probes{
+		Assoc:   func(context.Context) error { return errors.New("never associates") },
+		DHCP:    func(context.Context) error { return nil },
+		DNS:     func(context.Context) error { return nil },
+		Captive: func(context.Context) error { return nil },
+	})
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   check,
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		AP:      APConfig{SSID: "Trainboard-S", Addr: "192.168.4.1/24"},
+		Now:     clock.Now,
+		After:   after.After,
+		Beat:    func() { beats.Add(1) },
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runManagerAsync(ctx, m)
+
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
+
+	timer := after.nth(t, 1)
+	clock.Advance(apFallbackRetryWait)
+	fire(t, timer)
+
+	err := waitRunDone(t, done)
+	if err == nil {
+		t.Fatal("Run() err = nil, want the fatal AP-restore error after the in-process retry also fails")
+	}
+	if !strings.Contains(err.Error(), "net: manager: AP fallback retry: AP restore failed") {
+		t.Fatalf("err = %v, want containing %q (existing fatal error verbatim)", err, "net: manager: AP fallback retry: AP restore failed")
+	}
+	if got := m.Status(); got.State == ManagerAPFallback {
+		t.Fatalf("State = %v, want not APFallback after escalation", got.State)
+	}
+	// Exactly one manager-level retry: boot 1 + first restore 2 + retry 2 = 5
+	// StartAP calls, never more — the retry cannot loop.
+	if got := countCalls(driver, "StartAP"); got != 5 {
+		t.Fatalf("StartAP = %d, want 5 (boot 1 + restore 2 + single retry 2); calls: %v", got, driver.Calls())
+	}
+	// Heartbeat arithmetic (see runAPWait): Beat at the boot iteration (1) and
+	// the AP-wait iteration (2), plus exactly one extra Beat immediately before
+	// the in-process retry (3) so the retry's toAP never extends the
+	// worst-case beat gap past the watchdog deadline.
+	if got := beats.Load(); got != 3 {
+		t.Fatalf("Beat called %d times, want exactly 3 (boot + AP-wait iteration + pre-retry beat)", got)
+	}
+}
