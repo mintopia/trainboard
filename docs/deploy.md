@@ -233,8 +233,7 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
 3. Switch NTP to daemon mode **before enabling `--manage-network`** (the bench
    Pi is already converted):
    ```bash
-   sed -i 's/CONFIG_NTP_MODE=./CONFIG_NTP_MODE=4/' /boot/dietpi.txt
-   systemctl enable --now systemd-timesyncd
+   sed -i 's/CONFIG_NTP_MODE=./CONFIG_NTP_MODE=4/' /boot/dietpi.txt && systemctl enable --now systemd-timesyncd
    ```
    The default `CONFIG_NTP_MODE=2` syncs the clock once at boot only; this
    device's wlan0 comes up later under the app's own network manager, so
