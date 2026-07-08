@@ -87,21 +87,16 @@ func TestWifiCountryUsesConfiguredValue(t *testing.T) {
 }
 
 // TestResolveE04ConfigPrefersRawWhenPresent proves the E04-path helper
-// carries a raw-loaded config's Provisioning (and Web) fields forward
-// instead of falling back to config.Default() when config.LoadRaw
-// succeeded — the crux of the AP-password-churn fix: a previously
+// carries a raw-loaded config's Web fields forward instead of falling back
+// to config.Default() when config.LoadRaw succeeded — a previously
 // configured device that merely fails board Validate() must not lose its
-// persisted AP password on every E04 boot.
+// persisted admin password hash on every E04 boot.
 func TestResolveE04ConfigPrefersRawWhenPresent(t *testing.T) {
 	raw := config.Default()
-	raw.Provisioning.APPassword = "persisted-pw"
 	raw.Web.PasswordHash = "$argon2id$fake"
 
 	got := resolveE04Config(raw, nil)
 
-	if got.Provisioning.APPassword != "persisted-pw" {
-		t.Fatalf("resolveE04Config dropped persisted APPassword: %+v", got.Provisioning)
-	}
 	if got.Web.PasswordHash != "$argon2id$fake" {
 		t.Fatalf("resolveE04Config dropped Web.PasswordHash: %+v", got.Web)
 	}
@@ -116,7 +111,7 @@ func TestResolveE04ConfigFallsBackOnRawError(t *testing.T) {
 	got := resolveE04Config(raw, errors.New("config: parsing boom: bad json"))
 
 	want := config.Default()
-	if got.Provisioning.APPassword != want.Provisioning.APPassword || got.Board.Services != want.Board.Services {
+	if got.Board.Services != want.Board.Services {
 		t.Fatalf("resolveE04Config on rawErr != nil = %+v, want config.Default() %+v", got, want)
 	}
 }
@@ -186,7 +181,7 @@ func (f *fakeConnManager) NoteProvisioning(now time.Time) { f.notedAt = append(f
 // Status().LastSTAErr -> lastSTAError, RetryNow -> wifiRetry, and
 // NoteProvisioning -> noteProvisioning stamped with the injected clock.
 func TestNewWebConnSeamsMapsManagerState(t *testing.T) {
-	hs := &board.Hotspot{SSID: "Trainboard-AB12", Password: "appw", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}
 	fake := &fakeConnManager{status: netconn.Status{
 		State:      netconn.ManagerAPFallback,
 		Hotspot:    hs,
@@ -243,7 +238,7 @@ func TestNewWebConnSeamsReadsLiveStatus(t *testing.T) {
 // boot paths use (newWebService) and checks the seams surface through the
 // web Service exactly as the manager publishes them.
 func TestNewWebServiceWiresConnSeams(t *testing.T) {
-	hs := &board.Hotspot{SSID: "Trainboard-AB12", Password: "appw", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}
 	fake := &fakeConnManager{status: netconn.Status{Hotspot: hs, LastSTAErr: "sta: boom"}}
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	svc := newTestWebService(t, newWebConnSeams(fake, func() time.Time { return now }))

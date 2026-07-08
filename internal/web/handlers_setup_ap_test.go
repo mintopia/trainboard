@@ -45,7 +45,7 @@ func (f *apSetupFakes) retryCount() int {
 func newAPSetupTestServer(t *testing.T) (srv *Server, svc *Service, path string, fakes *apSetupFakes) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "config.json")
-	fakes = &apSetupFakes{hs: &board.Hotspot{SSID: "Trainboard-AB12", Password: "hotspotpw", Addr: "192.168.4.1"}}
+	fakes = &apSetupFakes{hs: &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}}
 	src := Sources{
 		Snapshot:   func() *board.Snapshot { return nil },
 		Ring:       obs.NewRing(8),
@@ -237,7 +237,7 @@ func newProvisionedAPFallbackTestServer(t *testing.T, lastErr string, hotspot bo
 	}
 	if hotspot {
 		src.Hotspot = func() *board.Hotspot {
-			return &board.Hotspot{SSID: "Trainboard-AB12", Password: "hotspotpw", Addr: "192.168.4.1"}
+			return &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}
 		}
 	}
 	act := Actions{Apply: func() {}, Reboot: func() error { return nil }}

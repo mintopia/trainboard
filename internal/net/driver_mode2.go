@@ -59,11 +59,13 @@ func newMode2Driver(r Runner, iface, country string, writeFile func(string, []by
 // `"` is rejected outright rather than risking config injection. country is
 // the regulatory domain to render (see NewMode2Driver).
 func renderConf(sta STAConfig, ap APConfig, country string) (string, error) {
-	for _, v := range []string{sta.SSID, sta.PSK, ap.SSID, ap.Password} {
+	for _, v := range []string{sta.SSID, sta.PSK, ap.SSID} {
 		if strings.Contains(v, `"`) {
 			return "", fmt.Errorf("net: mode2: value contains disallowed quote character")
 		}
 	}
+	// The AP block is open (key_mgmt=NONE, no psk): the setup hotspot carries
+	// no WPA2 password (issue #44 — operator decision, risk accepted).
 	return fmt.Sprintf(`ctrl_interface=/run/wpa_supplicant
 country=%s
 network={
@@ -77,11 +79,10 @@ network={
     ssid="%s"
     mode=2
     frequency=2437
-    key_mgmt=WPA-PSK
-    psk="%s"
+    key_mgmt=NONE
     disabled=1
 }
-`, country, sta.SSID, sta.PSK, ap.SSID, ap.Password), nil
+`, country, sta.SSID, sta.PSK, ap.SSID), nil
 }
 
 // writeConf renders the current sta/ap state and writes it to wpaConfPath.

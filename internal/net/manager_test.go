@@ -446,7 +446,7 @@ func TestManagerToAPHappyPathPublishesAPFallback(t *testing.T) {
 	m := NewManager(ManagerDeps{
 		Driver:  driver,
 		Dnsmasq: dnsmasq,
-		AP:      APConfig{SSID: "Trainboard-ABCD", Password: "hunter22", Addr: "192.168.4.1/24"},
+		AP:      APConfig{SSID: "Trainboard-ABCD", Addr: "192.168.4.1/24"},
 	})
 
 	if err := m.toAP(context.Background()); err != nil {
@@ -465,9 +465,6 @@ func TestManagerToAPHappyPathPublishesAPFallback(t *testing.T) {
 	}
 	if got.Hotspot.Addr != "192.168.4.1" {
 		t.Fatalf("Hotspot.Addr = %q, want 192.168.4.1", got.Hotspot.Addr)
-	}
-	if got.Hotspot.Password != "hunter22" {
-		t.Fatalf("Hotspot.Password = %q, want hunter22", got.Hotspot.Password)
 	}
 }
 

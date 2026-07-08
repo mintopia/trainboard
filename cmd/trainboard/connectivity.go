@@ -96,42 +96,6 @@ func macTail(mac string) string {
 	return strings.ToUpper(tail)
 }
 
-// resolveAPPassword returns the AP-mode password to advertise, generating
-// and best-effort persisting one when the config doesn't have one yet. The
-// E04 boot path feeds this the result of resolveE04Config (a config.LoadRaw
-// read), which preserves a previously-configured device's persisted
-// Provisioning.APPassword and Web.PasswordHash even when the document as a
-// whole fails board Validate — so this fresh-generation branch only
-// actually fires for a WHOLLY unconfigured device: no config file at all
-// (or one LoadRaw itself can't parse). That device's config won't pass
-// config.Save's full Validate() (missing origin/token) either, so the
-// persist attempt uses the lighter SaveConnectivity/ValidateConnectivity
-// tier instead — see the Task 12 report for the config.Save investigation
-// this rests on. A persist failure (e.g. ValidateConnectivity also unmet,
-// because no admin password is set yet either) is logged and tolerated:
-// the freshly generated password is still used for THIS boot's AP (and
-// shown on its on-screen hotspot scene regardless of disk persistence),
-// just not carried over to the next boot until setup completes far enough
-// for one of the two validation tiers to accept it — the one remaining M3b
-// loose end (a device that never finishes /setup mints a new AP password
-// every boot).
-func resolveAPPassword(cfg config.Config, cfgPath string, log *slog.Logger) string {
-	if cfg.Provisioning.APPassword != "" {
-		return cfg.Provisioning.APPassword
-	}
-	pw, err := config.GenerateAPPassword()
-	if err != nil {
-		log.Error("connectivity: generating AP password failed", "err", err.Error())
-		return ""
-	}
-	next := cfg
-	next.Provisioning.APPassword = pw
-	if err := config.SaveConnectivity(cfgPath, next); err != nil {
-		log.Warn("connectivity: could not persist generated AP password yet (will retry next boot)", "err", err.Error())
-	}
-	return pw
-}
-
 // wifiCountry returns the regulatory country to configure the radio with:
 // the config's own value when set, defaulting to "GB" (matching
 // config.Default() and config.WifiConfig.Country's documented consumer-side
@@ -165,16 +129,12 @@ func staFromDisk(cfgPath string) func() netconn.STAConfig {
 // a whole failed board Validate() (that's WHY we're in this boot path at
 // all) — this is what lets a previously-configured device whose config
 // merely fails board validation (e.g. a stale origin) keep its persisted
-// Provisioning.APPassword and Web.PasswordHash across E04 boots, instead of
-// resolveAPPassword minting (and failing to persist) a brand new one every
-// single time.
+// Web.PasswordHash across E04 boots.
 //
 // When rawErr != nil, raw is the zero Config (LoadRaw returns Default() with
 // a nil error for a missing file, so a non-nil error here means the file
 // exists but isn't even valid JSON) and config.Default() is used instead:
-// this is the genuinely "wholly fresh/unreadable device" case where
-// per-boot AP password churn remains the documented M3b loose end (see
-// resolveAPPassword).
+// this is the genuinely "wholly fresh/unreadable device" case.
 func resolveE04Config(raw config.Config, rawErr error) config.Config {
 	if rawErr != nil {
 		return config.Default()
@@ -214,11 +174,10 @@ func httpGetProbe(ctx context.Context, url string) (int, string, error) {
 //
 // It returns the Manager so the caller can compose Status().Hotspot into
 // the render/web snapshot source (runtime.HotspotSnapshotSource).
-func startConnectivityManager(ctx context.Context, cfg config.Config, cfgPath string, log *slog.Logger, wd *obs.Watchdog, sta func() netconn.STAConfig, onOnline func()) *netconn.Manager {
+func startConnectivityManager(ctx context.Context, cfg config.Config, log *slog.Logger, wd *obs.Watchdog, sta func() netconn.STAConfig, onOnline func()) *netconn.Manager {
 	ap := netconn.APConfig{
-		SSID:     "Trainboard-" + macTail(readWlanMAC()),
-		Password: resolveAPPassword(cfg, cfgPath, log),
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-" + macTail(readWlanMAC()),
+		Addr: "192.168.4.1/24",
 	}
 	country := wifiCountry(cfg)
 	runner := netconn.NewExecRunner()

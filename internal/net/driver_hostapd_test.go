@@ -27,9 +27,8 @@ func TestHostapdDriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	d, fw, _ := newTestHostapdDriver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil", err)
@@ -68,9 +67,8 @@ func TestHostapdDriverStartAPTeleratesDisableNetworkFailure(t *testing.T) {
 	d, _, _ := newTestHostapdDriver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil (disable_network failure must be tolerated)", err)
@@ -92,9 +90,8 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 		d, fw, _ := newTestHostapdDriver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "appassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-ABCD",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -113,30 +110,32 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 			"country_code=GB",
 			"hw_mode=g",
 			"channel=6",
-			"wpa=2",
-			"wpa_key_mgmt=WPA-PSK",
-			"rsn_pairwise=CCMP",
-			"wpa_passphrase=appassword1",
 		} {
 			if !strings.Contains(conf, want) {
 				t.Errorf("conf missing %q; conf:\n%s", want, conf)
 			}
 		}
+		// The AP is now open (issue #44): every WPA/passphrase directive is
+		// gone, so hostapd brings the AP up with no encryption.
+		for _, notWant := range []string{"wpa=2", "wpa_key_mgmt", "rsn_pairwise", "wpa_passphrase"} {
+			if strings.Contains(conf, notWant) {
+				t.Errorf("open AP conf must not contain %q; conf:\n%s", notWant, conf)
+			}
+		}
 	})
 
-	t.Run("passphrase containing a newline is rejected, not written", func(t *testing.T) {
+	t.Run("SSID containing a newline is rejected, not written", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 disable_network 0", "", nil)
 
 		d, fw, _ := newTestHostapdDriver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "apppass1\ninterface=evil0",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard\ninterface=evil0",
+			Addr: "192.168.4.1/24",
 		})
 		if err == nil {
-			t.Fatal("StartAP() = nil, want error for newline-containing passphrase")
+			t.Fatal("StartAP() = nil, want error for newline-containing SSID")
 		}
 		if len(fw.writes()) != 0 {
 			t.Fatalf("writeFile called %d times, want 0 (newline must be rejected before write)", len(fw.writes()))
@@ -156,9 +155,8 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 		d := newHostapdDriver(r, "wlan0", "US", fw.write, sl.sleep)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "appassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-ABCD",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -180,9 +178,8 @@ func TestHostapdDriverConfWriteSubstitutionAndNewlineRejection(t *testing.T) {
 		d, fw, _ := newTestHostapdDriver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     `Trainboard"ABCD`,
-			Password: "apppassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: `Trainboard"ABCD`,
+			Addr: "192.168.4.1/24",
 		})
 		if err == nil {
 			t.Fatal("StartAP() = nil, want error for quote-containing SSID")

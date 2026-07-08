@@ -11,9 +11,8 @@ import (
 
 // APConfig is the AP identity handed to a driver.
 type APConfig struct {
-	SSID     string // Trainboard-XXXX
-	Password string // WPA2-PSK, 8-63 chars
-	Addr     string // "192.168.4.1/24"
+	SSID string // Trainboard-XXXX
+	Addr string // "192.168.4.1/24"
 }
 
 // STAConfig is the target client network.

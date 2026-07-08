@@ -44,12 +44,16 @@ func newHostapdDriver(r Runner, iface, country string, writeFile func(string, []
 }
 
 // renderHostapdConf formats the hostapd conf. hostapd.conf is a plain
-// key=value file with no quoting, so a newline embedded in either value
-// would let an attacker inject arbitrary directives; both fields are also
-// checked for `"` for consistency with the wpa_supplicant conf guard. Either
-// character is rejected outright rather than risking config injection.
+// key=value file with no quoting, so a newline embedded in the SSID would let
+// an attacker inject arbitrary directives; the SSID is also checked for `"`
+// for consistency with the wpa_supplicant conf guard. Either character is
+// rejected outright rather than risking config injection.
+//
+// The AP is open: no wpa/wpa_passphrase directives are emitted, so hostapd
+// brings the setup hotspot up with no encryption (issue #44 — operator
+// decision, risk accepted).
 func (d *hostapdDriver) renderHostapdConf(ap APConfig) (string, error) {
-	for _, v := range []string{ap.SSID, ap.Password} {
+	for _, v := range []string{ap.SSID} {
 		if strings.ContainsAny(v, "\n\r\"") {
 			return "", fmt.Errorf("net: hostapd: value contains disallowed newline or quote character")
 		}
@@ -60,11 +64,7 @@ ssid=%s
 country_code=%s
 hw_mode=g
 channel=6
-wpa=2
-wpa_key_mgmt=WPA-PSK
-rsn_pairwise=CCMP
-wpa_passphrase=%s
-`, d.iface, ap.SSID, d.country, ap.Password), nil
+`, d.iface, ap.SSID, d.country), nil
 }
 
 // StartAP releases the iface from wpa_supplicant's STA control (tolerating

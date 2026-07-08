@@ -166,7 +166,7 @@ func TestHotspotSnapshotSourceNewPointerOnStageChange(t *testing.T) {
 // stage/radio failure (composed carries the Hotspot, not an injected fault).
 func TestHotspotSnapshotSourceHotspotWinsOverStage(t *testing.T) {
 	base := &board.Snapshot{State: board.StateError}
-	hs := &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	src := HotspotSnapshotSource(
 		func() *board.Snapshot { return base },
 		func() *board.Hotspot { return hs },
@@ -204,7 +204,7 @@ func TestHotspotSnapshotSourceConcurrentStress(t *testing.T) {
 		if !hsOn {
 			return nil
 		}
-		return &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+		return &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	}
 
 	var connMu sync.Mutex
@@ -291,7 +291,7 @@ func TestHotspotSnapshotSourceNilHotspotReturnsBaseUnchanged(t *testing.T) {
 // (ii) hs non-nil -> composed snapshot has Hotspot set, base unmutated.
 func TestHotspotSnapshotSourceComposesHotspotWithoutMutatingBase(t *testing.T) {
 	base := &board.Snapshot{State: board.StateDepartures}
-	hs := &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	src := HotspotSnapshotSource(func() *board.Snapshot { return base }, func() *board.Hotspot { return hs }, nil)
 
 	got := src()
@@ -310,7 +310,7 @@ func TestHotspotSnapshotSourceComposesHotspotWithoutMutatingBase(t *testing.T) {
 // pointer (the cache, protecting the render loop from rebuilding at 25fps).
 func TestHotspotSnapshotSourceCachesComposedPointer(t *testing.T) {
 	base := &board.Snapshot{State: board.StateDepartures}
-	hs := &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	src := HotspotSnapshotSource(func() *board.Snapshot { return base }, func() *board.Hotspot { return hs }, nil)
 
 	first := src()
@@ -323,11 +323,11 @@ func TestHotspotSnapshotSourceCachesComposedPointer(t *testing.T) {
 // (iv) hs value change -> new pointer.
 func TestHotspotSnapshotSourceNewPointerOnHotspotValueChange(t *testing.T) {
 	base := &board.Snapshot{State: board.StateDepartures}
-	hs := &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	src := HotspotSnapshotSource(func() *board.Snapshot { return base }, func() *board.Hotspot { return hs }, nil)
 
 	first := src()
-	hs = &board.Hotspot{SSID: "trainboard-setup", Password: "changed", Addr: "192.168.4.1"}
+	hs = &board.Hotspot{SSID: "trainboard-changed", Addr: "192.168.4.1"}
 	second := src()
 	if first == second {
 		t.Fatal("a changed hotspot value must produce a new composed pointer")
@@ -337,7 +337,7 @@ func TestHotspotSnapshotSourceNewPointerOnHotspotValueChange(t *testing.T) {
 // (v) base change -> new pointer.
 func TestHotspotSnapshotSourceNewPointerOnBaseChange(t *testing.T) {
 	base := &board.Snapshot{State: board.StateDepartures}
-	hs := &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	src := HotspotSnapshotSource(func() *board.Snapshot { return base }, func() *board.Hotspot { return hs }, nil)
 
 	first := src()
@@ -351,7 +351,7 @@ func TestHotspotSnapshotSourceNewPointerOnBaseChange(t *testing.T) {
 // (vi) nil base + hs non-nil -> synthetic snapshot (StateInitialising +
 // Hotspot) so first-boot AP mode shows before any poll has published.
 func TestHotspotSnapshotSourceNilBaseSynthesizesInitialising(t *testing.T) {
-	hs := &board.Hotspot{SSID: "trainboard-setup", Password: "hunter22", Addr: "192.168.4.1"}
+	hs := &board.Hotspot{SSID: "trainboard-setup", Addr: "192.168.4.1"}
 	src := HotspotSnapshotSource(func() *board.Snapshot { return nil }, func() *board.Hotspot { return hs }, nil)
 
 	got := src()

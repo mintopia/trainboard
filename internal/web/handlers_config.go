@@ -22,26 +22,23 @@ const applyDelay = 500 * time.Millisecond
 // configPageData is the render data for the config editor: basePage
 // (nav/CSRF), the config to pre-fill from (secrets never populated — see
 // config.html, which never references Cfg.Darwin.Token/Cfg.Wifi.PSK), any
-// validation error to display, a one-time AP-password flash, and the
-// stringified forms of the fields that don't map 1:1 onto an HTML input
-// (CSV lists, the replacements map).
+// validation error to display, and the stringified forms of the fields that
+// don't map 1:1 onto an HTML input (CSV lists, the replacements map).
 type configPageData struct {
 	basePage
 	Cfg              config.Config
 	Error            string
-	APPassword       string
 	PlatformsCSV     string
 	TOCsCSV          string
 	ReplacementsText string
 }
 
 // renderConfig builds configPageData from cfg and renders the config page.
-func (s *Server) renderConfig(w http.ResponseWriter, r *http.Request, cfg config.Config, errMsg, apPassword string) {
+func (s *Server) renderConfig(w http.ResponseWriter, r *http.Request, cfg config.Config, errMsg string) {
 	s.render(w, "config", configPageData{
 		basePage:         basePage{LoggedIn: true, CSRF: csrfFrom(r)},
 		Cfg:              cfg,
 		Error:            errMsg,
-		APPassword:       apPassword,
 		PlatformsCSV:     joinCSV(cfg.Board.Platforms),
 		TOCsCSV:          joinCSV(cfg.Board.TOCs),
 		ReplacementsText: formatReplacements(cfg.Board.Replacements),
@@ -58,7 +55,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.renderConfig(w, r, cfg, "", "")
+	s.renderConfig(w, r, cfg, "")
 }
 
 // handleConfigPost parses the submitted form into a ConfigUpdate and applies
@@ -74,14 +71,14 @@ func (s *Server) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := parseConfigForm(r)
 	if err != nil {
-		s.renderConfig(w, r, cfg, err.Error(), "")
+		s.renderConfig(w, r, cfg, err.Error())
 		return
 	}
 
 	newPassword := r.PostFormValue("web.password")
 	confirm := r.PostFormValue("web.password.confirm")
 	if newPassword != confirm {
-		s.renderConfig(w, r, cfg, "web.password and web.password.confirm do not match", "")
+		s.renderConfig(w, r, cfg, "web.password and web.password.confirm do not match")
 		return
 	}
 
@@ -92,28 +89,12 @@ func (s *Server) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 		NewPassword: newPassword,
 	}
 	if err := s.svc.UpdateConfig(update); err != nil {
-		s.renderConfig(w, r, cfg, err.Error(), "")
+		s.renderConfig(w, r, cfg, err.Error())
 		return
 	}
 
 	s.render(w, "applied", basePage{LoggedIn: true, CSRF: csrfFrom(r)})
 	s.scheduleApply()
-}
-
-// handleConfigAPPassword mints a fresh AP-mode password and re-renders the
-// config page with it shown once as a flash.
-func (s *Server) handleConfigAPPassword(w http.ResponseWriter, r *http.Request) {
-	pw, err := s.svc.RegenerateAPPassword()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	cfg, err := s.svc.ConfigRedacted()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.renderConfig(w, r, cfg, "", pw)
 }
 
 // parseConfigForm reads the non-secret config.Config fields the config form

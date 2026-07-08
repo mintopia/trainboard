@@ -101,8 +101,6 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /config", chain(http.HandlerFunc(s.handleConfigPost),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
-	s.mux.Handle("POST /config/ap-password", chain(http.HandlerFunc(s.handleConfigAPPassword),
-		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
 	// Captive-portal probe endpoints (handlers_portal.go): NO auth, NO CSRF

@@ -207,12 +207,13 @@ promptly to restore a valid config and close that window.
 The M3 connectivity manager owns wlan0 end to end: it attempts the WiFi
 network configured at `/config` (`wifi.ssid` / `wifi.psk`), verifies it with
 a layered check (association → DHCP → DNS → captive-portal detection), and
-falls back to the board's own WPA2 AP hotspot (`Trainboard-XXXX`, named from
+falls back to the board's own open AP hotspot (`Trainboard-XXXX`, named from
 wlan0's MAC) when the configured network can't be reached or none is
 configured yet — including on a wholly fresh, unconfigured device (the E04
-boot path runs the manager too, purely for AP fallback). While the AP is up,
-the panel shows the hotspot's SSID/password/address instead of the normal
-departure board.
+boot path runs the manager too, purely for AP fallback). The setup AP is
+open (no password — issue #44, operator decision, risk accepted): joining
+needs no credential. While the AP is up, the panel shows the hotspot's SSID
+and address instead of the normal departure board.
 
 This is **off by default** (`--manage-network=false`): the M3a bench Pi's
 WiFi stays ifupdown-managed until the M3b migration session explicitly hands

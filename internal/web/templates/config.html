@@ -2,7 +2,6 @@
 {{define "content"}}
 <h2>Configuration</h2>
 {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
-{{if .APPassword}}<p class="flash">New hotspot password: <strong>{{.APPassword}}</strong> — shown once, note it down.</p>{{end}}
 <form method="post" action="/config">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <fieldset><legend>Board</legend>
@@ -35,9 +34,5 @@
   <label>Confirm <input type="password" name="web.password.confirm" placeholder="unchanged" autocomplete="new-password"></label>
 </fieldset>
 <button type="submit" class="primary">Save &amp; apply (restarts the board)</button>
-</form>
-<form method="post" action="/config/ap-password">
-  <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <button type="submit">Regenerate hotspot password</button>
 </form>
 {{end}}

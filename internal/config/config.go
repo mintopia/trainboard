@@ -7,14 +7,13 @@ const CurrentVersion = 1
 
 // Config is the full device configuration document.
 type Config struct {
-	Version      int                `json:"version"`
-	Darwin       DarwinConfig       `json:"darwin"`
-	Board        BoardConfig        `json:"board"`
-	Layout       LayoutConfig       `json:"layout"`
-	Powersaving  PowersavingConfig  `json:"powersaving"`
-	Web          WebConfig          `json:"web"`
-	Provisioning ProvisioningConfig `json:"provisioning"`
-	Wifi         WifiConfig         `json:"wifi"`
+	Version     int               `json:"version"`
+	Darwin      DarwinConfig      `json:"darwin"`
+	Board       BoardConfig       `json:"board"`
+	Layout      LayoutConfig      `json:"layout"`
+	Powersaving PowersavingConfig `json:"powersaving"`
+	Web         WebConfig         `json:"web"`
+	Wifi        WifiConfig        `json:"wifi"`
 }
 
 // DarwinConfig holds the Darwin Lite access token (secret).
@@ -55,12 +54,6 @@ type PowersavingConfig struct {
 // first-boot setup has not run and /setup is open.
 type WebConfig struct {
 	PasswordHash string `json:"passwordHash"`
-}
-
-// ProvisioningConfig holds the AP-mode credential (used by M3), distinct
-// from the admin password by design.
-type ProvisioningConfig struct {
-	APPassword string `json:"apPassword"`
 }
 
 // WifiConfig is the desired STA credential set. Stored by M2's UI, applied

@@ -75,9 +75,8 @@ func TestMode2DriverStartAPHappyPathIssuesExactSequence(t *testing.T) {
 	d, _, _ := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil", err)
@@ -109,9 +108,8 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 	d, _, sl := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err == nil {
 		t.Fatal("StartAP() = nil, want error")
@@ -220,9 +218,8 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		d.sta = STAConfig{SSID: "HomeWifi", PSK: "clientpsk123"}
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: "appassword1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-ABCD",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -245,28 +242,37 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 			`ssid="Trainboard-ABCD"`,
 			`mode=2`,
 			`frequency=2437`,
-			`key_mgmt=WPA-PSK`,
-			`psk="appassword1"`,
+			`key_mgmt=NONE`,
 		} {
 			if !strings.Contains(conf, want) {
 				t.Errorf("conf missing %q; conf:\n%s", want, conf)
 			}
 		}
+		// The AP is now open (issue #44): no WPA-PSK key management, and the
+		// AP block carries no psk of its own. The only psk= line left is the
+		// STA block's.
+		for _, notWant := range []string{`key_mgmt=WPA-PSK`, `wpa_passphrase`} {
+			if strings.Contains(conf, notWant) {
+				t.Errorf("open AP conf must not contain %q; conf:\n%s", notWant, conf)
+			}
+		}
+		if got := strings.Count(conf, "psk="); got != 1 {
+			t.Errorf("conf has %d psk= lines, want 1 (STA only; the open AP has none); conf:\n%s", got, conf)
+		}
 	})
 
-	t.Run("PSK containing a quote is rejected, not written", func(t *testing.T) {
+	t.Run("AP SSID containing a quote is rejected, not written", func(t *testing.T) {
 		r := NewFakeRunner()
 		r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\nmode=AP\n", nil)
 
 		d, fw, _ := newTestMode2Driver(r)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-ABCD",
-			Password: `apppass"; disabled=0`,
-			Addr:     "192.168.4.1/24",
+			SSID: `Trainboard"; disabled=0`,
+			Addr: "192.168.4.1/24",
 		})
 		if err == nil {
-			t.Fatal("StartAP() = nil, want error for quote-containing password")
+			t.Fatal("StartAP() = nil, want error for quote-containing SSID")
 		}
 		if len(fw.writes()) != 0 {
 			t.Fatalf("writeFile called %d times, want 0 (quote must be rejected before write)", len(fw.writes()))
@@ -287,9 +293,8 @@ func TestMode2DriverConfWriteSubstitutionAndQuoteRejection(t *testing.T) {
 		d := newMode2Driver(r, "wlan0", "US", fw.write, sl.sleep)
 
 		err := d.StartAP(context.Background(), APConfig{
-			SSID:     "Trainboard-1234",
-			Password: "testpass1",
-			Addr:     "192.168.4.1/24",
+			SSID: "Trainboard-1234",
+			Addr: "192.168.4.1/24",
 		})
 		if err != nil {
 			t.Fatalf("StartAP() = %v, want nil", err)
@@ -371,9 +376,8 @@ func TestMode2DriverEnsureDaemonStartsWhenNotRunning(t *testing.T) {
 	d, _, _ := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil", err)
@@ -639,9 +643,8 @@ func TestMode2DriverStartAPExtendedPollBudgetAfterDaemonStart(t *testing.T) {
 	d, _, sl := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err != nil {
 		t.Fatalf("StartAP() = %v, want nil (AP active on poll 15 must be inside the post-daemon-start budget)", err)
@@ -679,9 +682,8 @@ func TestMode2DriverStartAPPostDaemonStartBudgetCapsAtTwenty(t *testing.T) {
 	d, _, sl := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err == nil {
 		t.Fatal("StartAP() = nil, want error (AP never active)")
@@ -731,9 +733,8 @@ func TestMode2DriverStartAPKeepsDefaultBudgetWhenDaemonAlreadyRunning(t *testing
 	d, _, sl := newTestMode2Driver(r)
 
 	err := d.StartAP(context.Background(), APConfig{
-		SSID:     "Trainboard-1234",
-		Password: "testpass1",
-		Addr:     "192.168.4.1/24",
+		SSID: "Trainboard-1234",
+		Addr: "192.168.4.1/24",
 	})
 	if err == nil {
 		t.Fatal("StartAP() = nil, want error (already-running branch keeps the 10-poll budget)")
