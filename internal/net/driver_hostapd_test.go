@@ -233,7 +233,8 @@ func TestHostapdDriverStopAPTeleratesPkillNoProcessRunning(t *testing.T) {
 }
 
 // (f) AttemptSTA happy path stops the AP first, then runs the shared
-// wpa_cli/dhclient flow ending with `dhclient -1 -v wlan0`.
+// wpa_cli/dhclient flow ending with the daemon-mode `dhclient -v -pf
+// <pidfile> wlan0`.
 func TestHostapdDriverAttemptSTAHappyPathStopsAPThenEndsWithDHClient(t *testing.T) {
 	r := NewFakeRunner()
 	r.Script("pkill -x hostapd", "", nil)

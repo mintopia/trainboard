@@ -323,7 +323,7 @@ func (m *Manager) bootSTA(ctx context.Context) error {
 	if !m.fastRetried && first && ctx.Err() == nil && m.now().Sub(start) < fastRetryThreshold {
 		m.fastRetried = true
 		if m.d.Log != nil {
-			m.d.Log.Info("first STA attempt failed instantly; fast retry")
+			m.d.Log.Info("net: manager: first STA attempt failed instantly; fast retry")
 		}
 		return m.toSTA(ctx)
 	}
@@ -415,7 +415,7 @@ func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 			return phaseAPWait, true, nil
 		}
 		if m.d.Log != nil {
-			m.d.Log.Info("AP restore failed; one in-process retry", "err", err)
+			m.d.Log.Info("net: manager: AP restore failed; one in-process retry", "err", err)
 		}
 		// Beat before the retry so the extra toAP never stretches the
 		// worst-case heartbeat gap past managerBeatDeadline (cmd/trainboard's
