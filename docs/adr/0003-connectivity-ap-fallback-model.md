@@ -67,3 +67,44 @@ reconnecting user.
   device off-network). The periodic hotspot drop is a minor UX wart.
 - Alternative (NetworkManager `nmcli`) was rejected for boot-time/footprint reasons
   despite its simpler API.
+
+## Addendum (2026-07-08): mode=2 adopted — bench verdict
+
+Bench session on the real device (Pi Zero W 2, brcmfmac/CYW43436, DietPi
+Bookworm), protocol per `deploy/bench/` (issues #7/#13):
+
+- **`eval-mode2.sh`: 3/3 PASS.** AP bring-up COMPLETED in 1s with a real
+  phone lease + portal load; 10× AP↔STA toggling with 16/20 transitions ≤2s;
+  bad-PSK STA attempt correctly failed and restored the AP (dnsmasq alive)
+  in 5s.
+- **Verdict: `wpa_supplicant` native AP mode (`mode=2`) is the production
+  driver.** The hostapd driver stays in-tree as an unused fallback. The
+  4/20 transient AP→STA wedges (no COMPLETED within a 5s window, never two
+  consecutive, interface healthy immediately after) sit comfortably inside
+  the manager's design margins (45s bounded attempt, 5-min retry cadence,
+  verified AP restore).
+- **Production migration completed the same day** (deploy.md §8): wlan0 is
+  manager-owned on the bench board, `--manage-network` live. Real-world
+  handover cost one retry cycle (~5 min).
+
+Destructive matrix (#13) findings — the retry/backstop model held on every
+row, with two rows exposing real gaps now tracked as issues:
+
+- Rows 1/2/3/6-bypass behaved as documented (bad PSK, missing SSID,
+  dnsmasq SIGKILL self-heal at next cycle, retry-now bypassing suppression).
+- **#47**: the first STA attempt after a cold manager start fails in <1s
+  (daemon ctrl-socket race suspected) — every apply-by-restart currently
+  costs a ~5-min AP detour before the retry joins.
+- **#48**: after a SIGKILL'd daemon, AP restore misses its 5s poll budget,
+  the manager exits by design, and recovery arrives via the 150s systemd
+  watchdog + cold start (~10 min total vs the intended 10-20s ensureDaemon
+  self-heal). The backstop chain worked; the first-line recovery didn't.
+- Deferred observations (phone-in-hand): suppression under continuously
+  active provisioning traffic; client-visible DHCP symptoms during row 3's
+  silent window. Row 5 (reboot mid-transition) is scored from incident
+  evidence — five cold/dead-man boots today all landed on departures or the
+  hotspot scene, never a stuck state — deliberate repro deferred.
+
+Related decisions from the session: #44 (operator decision: open AP, no
+password), #45 (Europe/London must not depend on host TZ), #46 (no DHCP
+lease renewal on manager-owned STA).
