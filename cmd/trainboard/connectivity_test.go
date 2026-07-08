@@ -295,6 +295,7 @@ func newTestWebService(t *testing.T, conn webConnSeams) *web.Service {
 		time.Now(),
 		&runtime.Soak{},
 		conn,
+		nil, // mdnsState: not under test here (see mdns_wiring_test.go)
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 }

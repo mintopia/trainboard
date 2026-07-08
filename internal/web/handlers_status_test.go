@@ -191,3 +191,36 @@ func TestStatusPageEventsPartialOnlyEventRows(t *testing.T) {
 		t.Fatalf("expected event rows in partial: %s", body)
 	}
 }
+
+// (g) Sources.MDNSState left nil (the zero value statusTestSources uses) is
+// nil-tolerated: Service.MDNSState() reads as "" (feature off), matching
+// SoakRemaining's nil-tolerance pattern.
+func TestServiceMDNSStateNilSourceSafe(t *testing.T) {
+	_, svc := newTestServerWithSources(t, statusTestSources(t))
+	if got := svc.MDNSState(); got != "" {
+		t.Fatalf("MDNSState() with nil Sources.MDNSState = %q, want empty", got)
+	}
+}
+
+// (h) the status page renders the mDNS dd only when Sources.MDNSState
+// reports a non-empty hostname.
+func TestStatusPageShowsMDNSNameOnlyWhenSet(t *testing.T) {
+	off := statusTestSources(t)
+	srvOff, _ := newTestServerWithSources(t, off)
+	cookieOff, _ := loginAs(t, srvOff, statusTestPassword)
+
+	rec := getPath(t, srvOff.Handler(), "/", cookieOff)
+	if strings.Contains(rec.Body.String(), "trainboard-ab12.local") {
+		t.Fatalf("mDNS row must not render without Sources.MDNSState: %s", rec.Body.String())
+	}
+
+	on := statusTestSources(t)
+	on.MDNSState = func() string { return "trainboard-ab12.local" }
+	srvOn, _ := newTestServerWithSources(t, on)
+	cookieOn, _ := loginAs(t, srvOn, statusTestPassword)
+
+	rec = getPath(t, srvOn.Handler(), "/", cookieOn)
+	if !strings.Contains(rec.Body.String(), "trainboard-ab12.local") {
+		t.Fatalf("expected mDNS hostname in body: %s", rec.Body.String())
+	}
+}

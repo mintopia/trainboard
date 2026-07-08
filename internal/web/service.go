@@ -28,6 +28,12 @@ type Sources struct {
 	// LastSTAError is the most recent failed WiFi-join error, preserved
 	// across AP restore for the reconnecting provisioning user; "" = none.
 	LastSTAError func() string
+	// MDNSState reports the board's mDNS hostname (e.g.
+	// "trainboard-ab12.local") when the responder is enabled; nil or ""
+	// means the feature is off (--mdns=false). This is a static name, not
+	// live per-interface state — per-interface add/remove detail is only in
+	// the log (YAGNI).
+	MDNSState func() string
 }
 
 // Actions are the write-side callbacks main wires up. Apply is invoked after
@@ -392,6 +398,15 @@ func (s *Service) LastSTAError() string {
 		return ""
 	}
 	return s.src.LastSTAError()
+}
+
+// MDNSState reports the board's mDNS hostname when the responder is
+// enabled ("" = off or --mdns=false). Nil-safe.
+func (s *Service) MDNSState() string {
+	if s.src.MDNSState == nil {
+		return ""
+	}
+	return s.src.MDNSState()
 }
 
 // WifiRetryNow asks the connectivity manager to attempt the configured WiFi
