@@ -230,7 +230,17 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
 2. Install `dnsmasq` if it isn't already present (`apt-get install -y
    dnsmasq`) — M3a never runs it; the connectivity manager's AP fallback
    needs it for DHCP + captive DNS on wlan0.
-3. Hand wlan0 over from ifupdown to the connectivity manager — this is a
+3. Switch NTP to daemon mode **before enabling `--manage-network`** (the bench
+   Pi is already converted):
+   ```bash
+   sed -i 's/CONFIG_NTP_MODE=./CONFIG_NTP_MODE=4/' /boot/dietpi.txt
+   systemctl enable --now systemd-timesyncd
+   ```
+   The default `CONFIG_NTP_MODE=2` syncs the clock once at boot only; this
+   device's wlan0 comes up later under the app's own network manager, so
+   boot-time sync never completes and the clock drifts (there is no RTC to
+   persist time). Mode 4 runs systemd-timesyncd as a daemon for ongoing sync.
+4. Hand wlan0 over from ifupdown to the connectivity manager — this is a
    one-way step, do it in this order:
    1. Comment out the `iface wlan0 ...` block (and any `wpa-conf`/
       `wpa-ssid` lines under it) in `/etc/network/interfaces`.
@@ -239,12 +249,12 @@ wlan0 over. Only pass `--manage-network` (or edit the systemd unit's
       generated — check `systemctl list-units 'ifup@wlan0*'` if the exact
       unit name differs).
    3. **Only then** add `--manage-network` to the unit's `ExecStart`.
-4. `systemctl daemon-reload && systemctl restart trainboard`.
-5. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
+5. `systemctl daemon-reload && systemctl restart trainboard`.
+6. Watch `journalctl -u trainboard -f` through the first STA attempt/AP
    fallback before disconnecting your other access path.
 
 From this point on, wlan0 is manager-owned at boot: ifupdown will not touch
-it again unless the interfaces-file edit from step 3.1 is reverted, so a
+it again unless the interfaces-file edit from step 4.1 is reverted, so a
 crash-looped `trainboard.service` means wlan0 sits idle rather than falling
 back to ifupdown's own DHCP client.
 

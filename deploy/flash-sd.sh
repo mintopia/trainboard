@@ -53,7 +53,11 @@ sed -i '' \
   -e 's/^AUTO_SETUP_NET_WIFI_COUNTRY_CODE=.*/AUTO_SETUP_NET_WIFI_COUNTRY_CODE=GB/' \
   -e 's/^AUTO_SETUP_NET_HOSTNAME=.*/AUTO_SETUP_NET_HOSTNAME=trainboard/' \
   -e 's/^AUTO_SETUP_HEADLESS=.*/AUTO_SETUP_HEADLESS=1/' \
+  -e 's/^CONFIG_NTP_MODE=.*/CONFIG_NTP_MODE=4/' \
   "$BOOT/dietpi.txt"
+
+# NTP daemon mode (CONFIG_NTP_MODE=4 = systemd-timesyncd) required because
+# boot-only sync never completes under manager-owned wlan0; no RTC to persist time.
 
 echo "== Writing WiFi credentials…"
 python3 - "$BOOT/dietpi-wifi.txt" "$WIFI_SSID" "$WIFI_PSK" <<'PY'
