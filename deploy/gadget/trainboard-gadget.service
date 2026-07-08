@@ -1,0 +1,15 @@
+# USB gadget ethernet (NCM + ECM) over the Pi's dwc2 OTG port. Installed to
+# /etc/systemd/system/trainboard-gadget.service; script lives at
+# /usr/local/lib/trainboard/trainboard-gadget.sh (see docs/deploy.md §9).
+[Unit]
+Description=Trainboard USB gadget ethernet (NCM+ECM)
+After=sys-kernel-config.mount modprobe@dwc2.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/trainboard/trainboard-gadget.sh start
+ExecStop=/usr/local/lib/trainboard/trainboard-gadget.sh stop
+
+[Install]
+WantedBy=multi-user.target
