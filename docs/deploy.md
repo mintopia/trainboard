@@ -311,23 +311,35 @@ works even with wlan0 down, the connectivity manager wedged, or
 The gadget needs the Broadcom dwc2 USB controller running in peripheral
 mode, which the DietPi default `config.txt`/`cmdline.txt` don't enable on
 their own. Do this once per device, over SSH, before installing anything
-else in this section:
+else in this section.
+
+**Find the firmware config first.** On DietPi Bookworm the firmware
+partition is mounted at `/boot/firmware/` (verified on the bench device);
+older images mount it directly at `/boot/`. `ls /boot/firmware/config.txt`
+tells you which layout you have — the commands below assume the Bookworm
+path; substitute `/boot/` on older images. Editing a `config.txt` that
+isn't on the mounted vfat firmware partition silently does nothing (the
+GPU never reads it), and `/boot/config.txt` may not even exist to warn
+you — a stray rootfs file gets created and the overlay never applies.
 
 ```
 ssh root@trainboard.local \
-  "grep -qx 'dtoverlay=dwc2' /boot/config.txt || echo 'dtoverlay=dwc2' >> /boot/config.txt"
+  "grep -qx 'dtoverlay=dwc2' /boot/firmware/config.txt || echo 'dtoverlay=dwc2' >> /boot/firmware/config.txt"
 ssh root@trainboard.local \
-  "grep -q 'modules-load=dwc2' /boot/cmdline.txt || sed -i '\$ s/\$/ modules-load=dwc2/' /boot/cmdline.txt"
+  "grep -q 'modules-load=dwc2' /boot/firmware/cmdline.txt || sed -i 's/rootwait/rootwait modules-load=dwc2/' /boot/firmware/cmdline.txt"
 ssh root@trainboard.local systemctl reboot
 ```
 
 Both commands are idempotent (safe to re-run) — the `grep` guard means a
 second pass is a no-op instead of a duplicate line. `cmdline.txt` is a
-**single-line file**: the `sed` above appends `modules-load=dwc2` with a
-leading space onto the existing line, it never inserts a newline. A stray
+**single-line file**: the `sed` above splices `modules-load=dwc2` after the
+`rootwait` token on the existing line, it never inserts a newline. A stray
 newline there is a classic way to make a Pi fail to boot. **A reboot is
 required** — the overlay is only applied at kernel boot, so nothing in the
-rest of this section works until the Pi comes back up.
+rest of this section works until the Pi comes back up. After it does,
+`ls /sys/class/udc/` must show a controller (e.g. `3f980000.usb`); if it's
+empty, the overlay didn't apply — check you edited the mounted firmware
+partition (`findmnt /boot/firmware`).
 
 ### Install
 
