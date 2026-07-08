@@ -34,6 +34,10 @@ const maxNameLength = 255
 // hostile/looping packet cannot hang the parser.
 const maxPointerJumps = 16
 
+// minQuestionBytes is the smallest a question can be on the wire: a 1-byte
+// root name (empty name), 2-byte type, 2-byte class.
+const minQuestionBytes = 5
+
 // header is the fixed 12-byte DNS message header.
 type header struct {
 	ID      uint16
@@ -323,7 +327,22 @@ func decodeQuery(pkt []byte) (header, []question, error) {
 	}
 
 	offset := 12
-	qs := make([]question, 0, h.QDCount)
+
+	// Pre-size the question slice from QDCount, but QDCount is attacker-
+	// controlled (up to 65535) and unrelated to the packet's actual size —
+	// cap the capacity at what the remaining bytes could plausibly encode
+	// (minQuestionBytes: a 1-byte root name + 2-byte type + 2-byte class,
+	// the smallest possible question on the wire) so a short packet with a
+	// bogus large QDCount can't force a huge allocation before the loop
+	// below even gets a chance to error out.
+	capQ := int(h.QDCount)
+	if maxQ := (len(pkt) - offset) / minQuestionBytes; capQ > maxQ {
+		capQ = maxQ
+	}
+	if capQ < 0 {
+		capQ = 0
+	}
+	qs := make([]question, 0, capQ)
 	for i := 0; i < int(h.QDCount); i++ {
 		name, next, err := decodeName(pkt, offset)
 		if err != nil {

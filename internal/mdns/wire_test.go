@@ -310,6 +310,28 @@ func TestDecodeTruncatedSafe(t *testing.T) {
 	}
 }
 
+// TestDecodeQueryHugeQDCountNoBody: a bare 12-byte header claiming a
+// maximal QDCount (65535) with no question bytes following it must error
+// out (there's no body to decode a single question from) rather than
+// pre-allocate a slice sized off the attacker-controlled QDCount. The
+// allocation bound itself is structural (capped against the packet's
+// remaining length in decodeQuery), so this test only asserts the
+// resulting error — it cannot directly observe the allocation size.
+func TestDecodeQueryHugeQDCountNoBody(t *testing.T) {
+	pkt := []byte{
+		0x00, 0x00, // ID
+		0x00, 0x00, // flags
+		0xFF, 0xFF, // QDCount = 65535
+		0x00, 0x00, // ANCount
+		0x00, 0x00, // NSCount
+		0x00, 0x00, // ARCount
+	}
+
+	if _, _, err := decodeQuery(pkt); err == nil {
+		t.Fatalf("decodeQuery(header-only, QDCount=65535) succeeded, want error")
+	}
+}
+
 func TestEncodeNameTooLong(t *testing.T) {
 	t.Run("label exceeds 63 bytes", func(t *testing.T) {
 		name := strings.Repeat("a", 64) + ".local"
