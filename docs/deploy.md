@@ -55,6 +55,11 @@ scene with fault code **E04** (configuration error) — this is expected and
 means the board is up and waiting to be configured, not a fault to
 investigate.
 
+The host's own system timezone doesn't matter and never needs configuring:
+the board always renders and compares times in Europe/London (BST-aware),
+via a zoneinfo database compiled into the binary — no dependency on the
+image shipping `/usr/share/zoneinfo`.
+
 ## 3. First-run provisioning (`/setup`)
 
 Browse to `http://trainboard.local/` from a device on the same LAN. With no

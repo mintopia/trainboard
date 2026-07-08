@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/mintopia/trainboard/internal/tz"
 )
 
 // httpDoer is the subset of *http.Client the data client needs (injectable
@@ -86,10 +88,6 @@ func (c *Client) Fetch(ctx context.Context, r Request) (*Board, error) {
 	if err != nil {
 		return nil, err
 	}
-	loc, err := londonLocation()
-	if err != nil {
-		return nil, err
-	}
-	reconstructTimes(b, loc)
+	reconstructTimes(b, tz.Location())
 	return b, nil
 }

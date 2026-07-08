@@ -5,10 +5,12 @@ import (
 	"time"
 
 	"github.com/mintopia/trainboard/internal/data"
+	"github.com/mintopia/trainboard/internal/tz"
 )
 
-// fixedNow is the wall-clock instant every golden test renders at.
-var fixedNow = time.Date(2026, 7, 6, 10, 30, 45, 0, time.UTC)
+// fixedNow is the wall-clock instant every golden test renders at, given
+// directly in Europe/London so it matches what the clock element displays.
+var fixedNow = time.Date(2026, 7, 6, 10, 30, 45, 0, tz.Location())
 
 func mustFonts(t *testing.T) *Fonts {
 	t.Helper()

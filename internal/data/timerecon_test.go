@@ -3,10 +3,12 @@ package data
 import (
 	"testing"
 	"time"
+
+	"github.com/mintopia/trainboard/internal/tz"
 )
 
 func TestReconstructTimesSameDay(t *testing.T) {
-	loc, _ := time.LoadLocation("Europe/London")
+	loc := tz.Location()
 	b := &Board{
 		GeneratedAt: time.Date(2026, 7, 2, 12, 30, 0, 0, loc),
 		Departures:  []Departure{{ScheduledTime: "12:45"}},
@@ -19,7 +21,7 @@ func TestReconstructTimesSameDay(t *testing.T) {
 }
 
 func TestReconstructTimesRollsPastMidnight(t *testing.T) {
-	loc, _ := time.LoadLocation("Europe/London")
+	loc := tz.Location()
 	// Board generated at 23:50; a 00:12 service is tomorrow.
 	b := &Board{
 		GeneratedAt: time.Date(2026, 7, 2, 23, 50, 0, 0, loc),
@@ -33,7 +35,7 @@ func TestReconstructTimesRollsPastMidnight(t *testing.T) {
 }
 
 func TestReconstructTimesRecentPastStaysToday(t *testing.T) {
-	loc, _ := time.LoadLocation("Europe/London")
+	loc := tz.Location()
 	// A std slightly before generatedAt (within 6h) is the same day, not tomorrow.
 	b := &Board{
 		GeneratedAt: time.Date(2026, 7, 2, 12, 30, 0, 0, loc),
@@ -47,7 +49,7 @@ func TestReconstructTimesRecentPastStaysToday(t *testing.T) {
 }
 
 func TestReconstructTimesDSTSpringForward(t *testing.T) {
-	loc, _ := time.LoadLocation("Europe/London")
+	loc := tz.Location()
 	// 2026 UK clocks go forward on 29 March. A board late on the 28th with an
 	// early-hours service on the 29th must land in BST (offset +1h).
 	b := &Board{
