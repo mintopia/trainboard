@@ -18,6 +18,7 @@ import (
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/data"
 	"github.com/mintopia/trainboard/internal/display"
+	netconn "github.com/mintopia/trainboard/internal/net"
 	"github.com/mintopia/trainboard/internal/obs"
 	"github.com/mintopia/trainboard/internal/runtime"
 	"github.com/mintopia/trainboard/internal/web"
@@ -53,6 +54,7 @@ func run() error {
 	fixture := flag.String("fixture", "", "JSON board fixture instead of live Darwin (dev)")
 	httpAddr := flag.String("http", ":80", "address for the embedded config/status web server")
 	manageNetwork := flag.Bool("manage-network", false, "drive wlan0 (STA connect / AP fallback) via the connectivity manager — safety interlock: only enable once the target device has been migrated off ifupdown-managed WiFi (see docs/deploy.md, Connectivity & AP mode)")
+	mdnsEnabled := flag.Bool("mdns", true, "advertise the board via mDNS as trainboard-xxxx.local")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -125,7 +127,7 @@ func run() error {
 		// on-screen and idle; the operator fixes the file via the embedded
 		// web UI's /setup and /config, which stay reachable in this path
 		// too. systemd keeps us alive.
-		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, wd, *manageNetwork, err)
+		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, wd, *manageNetwork, *mdnsEnabled, err)
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
 
@@ -147,14 +149,24 @@ func run() error {
 
 	snapshotSrc := poller.Snapshot
 	var conn webConnSeams // zero (all nil) unless --manage-network wires the manager in
+	var mgr *netconn.Manager
 	if *manageNetwork {
 		sta := staFromDisk(*cfgPath)
-		mgr := startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
+		mgr = startConnectivityManager(ctx, cfg, *cfgPath, log, wd, sta, poller.Poke)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot }, connFault(mgr))
 		conn = newWebConnSeams(mgr, time.Now)
 	}
 
-	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, log)
+	// mDNS runs independent of --manage-network: it's a software-only
+	// feature, so it must still work on a device that never touches the
+	// connectivity manager. mgr may be nil here; startMDNS/buildMDNSConfig
+	// are nil-safe over it.
+	mdnsState := mdnsStateFunc(*mdnsEnabled)
+	if *mdnsEnabled {
+		startMDNS(ctx, mgr, wd, log)
+	}
+
+	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, mdnsState, log)
 
 	loop := runtime.NewLoop(snapshotSrc, fl, cfg, fonts, buildinfo.Version(), log)
 	loop.SetBeat(wd.Register("render", renderBeatDeadline))
@@ -176,7 +188,7 @@ func run() error {
 // side of Apply must not add a second delay of its own. systemd is expected
 // to restart the process. Reboot shells out to systemctl and reports the
 // error rather than the web handler having to guess.
-func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, log *slog.Logger) *web.Service {
+func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, mdnsState func() string, log *slog.Logger) *web.Service {
 	actions := web.Actions{
 		Apply: func() {
 			log.Info("applying config: exiting for restart")
@@ -199,6 +211,7 @@ func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ri
 		SoakRemaining: func() time.Duration { return soak.Remaining(time.Now()) },
 		Hotspot:       conn.hotspot,
 		LastSTAError:  conn.lastSTAError,
+		MDNSState:     mdnsState,
 	}
 	return web.NewService(cfgPath, sources, actions, log)
 }
@@ -207,8 +220,8 @@ func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ri
 // the background for the remainder of ctx's lifetime. It is shared by both
 // boot paths (valid config and the E04 error loop) so a virgin or broken
 // device always has /setup and /config reachable to fix itself.
-func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, log *slog.Logger) {
-	svc := newWebService(cfgPath, snapshot, ring, previewLatest, startedAt, soak, conn, log)
+func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, mdnsState func() string, log *slog.Logger) {
+	svc := newWebService(cfgPath, snapshot, ring, previewLatest, startedAt, soak, conn, mdnsState, log)
 	srv := web.NewServer(svc, log)
 	log.Info("starting web server", "addr", httpAddr)
 	go func() {
@@ -259,24 +272,34 @@ func loadConfig(path string) (config.Config, error) {
 // APPassword/Web.PasswordHash — resolveAPPassword falls back to
 // config.Default()'s behaviour (mint + best-effort persist) only when
 // LoadRaw itself comes back empty (missing/unparsable file).
-func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork bool, err error) error {
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, err error) error {
 	log.Error("config error", "err", err.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
 	snapshotSrc := func() *board.Snapshot { return snap }
 
 	var conn webConnSeams // zero (all nil) unless manageNetwork wires the manager in
+	var mgr *netconn.Manager
 	if manageNetwork {
 		sta := staFromDisk(path)
 		raw, rawErr := config.LoadRaw(path)
 		if rawErr != nil {
 			log.Warn("connectivity: raw config read failed; AP password won't carry over this boot", "err", rawErr.Error())
 		}
-		mgr := startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
+		mgr = startConnectivityManager(ctx, resolveE04Config(raw, rawErr), path, log, wd, sta, nil)
 		snapshotSrc = runtime.HotspotSnapshotSource(snapshotSrc, func() *board.Hotspot { return mgr.Status().Hotspot }, connFault(mgr))
 		conn = newWebConnSeams(mgr, time.Now)
 	}
 
-	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, log)
+	// mDNS runs independent of manageNetwork, same as the valid-config boot
+	// path: it's a software-only feature that must still work on a wholly
+	// unconfigured device. mgr may be nil here; startMDNS/buildMDNSConfig are
+	// nil-safe over it.
+	mdnsState := mdnsStateFunc(mdnsEnabled)
+	if mdnsEnabled {
+		startMDNS(ctx, mgr, wd, log)
+	}
+
+	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, mdnsState, log)
 
 	loop := runtime.NewLoop(snapshotSrc, fl, config.Default(), fonts, buildinfo.Version(), log)
 	loop.SetBeat(wd.Register("render", renderBeatDeadline))

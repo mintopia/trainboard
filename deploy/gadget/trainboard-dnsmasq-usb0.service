@@ -1,0 +1,14 @@
+# DHCP server for the USB gadget's usb0 interface. Installed to
+# /etc/systemd/system/trainboard-dnsmasq-usb0.service; conf lives at
+# /usr/local/lib/trainboard/dnsmasq-usb0.conf (see docs/deploy.md §9).
+[Unit]
+Description=Trainboard dnsmasq (usb0 DHCP)
+After=trainboard-gadget.service
+Requires=trainboard-gadget.service
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --conf-file=/usr/local/lib/trainboard/dnsmasq-usb0.conf --keep-in-foreground --pid-file=/run/trainboard-dnsmasq-usb0.pid
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

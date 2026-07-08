@@ -144,6 +144,7 @@ up a newly-copied binary or config without a full reboot.
 | `--fixture` | *(none)* | Path to a JSON board fixture, bypassing live Darwin (dev only) |
 | `--http` | `:80` | Address the embedded config/status web server listens on |
 | `--manage-network` | `false` | Drive wlan0 (STA connect / AP fallback) via the connectivity manager. **Safety interlock — see §8 before enabling.** |
+| `--mdns` | `true` | Advertise the board via mDNS as `trainboard-XXXX.local` (see §9) |
 | `--version` | | Print version and exit |
 
 The shipped unit runs `trainboard --production` with no `--http` override, so
@@ -296,7 +297,166 @@ the unit. That reboot is the intended escalation path, not a bug: don't
 by silencing it without first checking what actually failed (radio,
 firmware, hardware).
 
-## 9. Benchmarks
+## 9. USB gadget ethernet + mDNS discovery (M4)
+
+A second, independent way to reach the board: plug a USB cable into the Pi
+Zero 2 W's OTG **data** port and the board shows up as its own USB network
+adapter — no WiFi, no router, no `--manage-network` involvement at all. This
+is entirely OS-level (a kernel gadget driver plus two systemd units), so it
+works even with wlan0 down, the connectivity manager wedged, or
+`trainboard.service` itself dead.
+
+### One-time device prep: the dwc2 overlay
+
+The gadget needs the Broadcom dwc2 USB controller running in peripheral
+mode, which the DietPi default `config.txt`/`cmdline.txt` don't enable on
+their own. Do this once per device, over SSH, before installing anything
+else in this section:
+
+```
+ssh root@trainboard.local \
+  "grep -qx 'dtoverlay=dwc2' /boot/config.txt || echo 'dtoverlay=dwc2' >> /boot/config.txt"
+ssh root@trainboard.local \
+  "grep -q 'modules-load=dwc2' /boot/cmdline.txt || sed -i '\$ s/\$/ modules-load=dwc2/' /boot/cmdline.txt"
+ssh root@trainboard.local systemctl reboot
+```
+
+Both commands are idempotent (safe to re-run) — the `grep` guard means a
+second pass is a no-op instead of a duplicate line. `cmdline.txt` is a
+**single-line file**: the `sed` above appends `modules-load=dwc2` with a
+leading space onto the existing line, it never inserts a newline. A stray
+newline there is a classic way to make a Pi fail to boot. **A reboot is
+required** — the overlay is only applied at kernel boot, so nothing in the
+rest of this section works until the Pi comes back up.
+
+### Install
+
+Ship `deploy/gadget/*` to the Pi and enable the two units. This uses the
+same no-scp cat-over-ssh idiom as the `bench` binary in
+[`docs/benchmarks/README.md`](benchmarks/README.md) — no `scp` binary needed
+on either end, just `ssh` and a redirect:
+
+```
+ssh root@trainboard.local mkdir -p /usr/local/lib/trainboard
+ssh root@trainboard.local 'cat > /usr/local/lib/trainboard/trainboard-gadget.sh' \
+  < deploy/gadget/trainboard-gadget.sh
+ssh root@trainboard.local 'cat > /usr/local/lib/trainboard/dnsmasq-usb0.conf' \
+  < deploy/gadget/dnsmasq-usb0.conf
+ssh root@trainboard.local chmod +x /usr/local/lib/trainboard/trainboard-gadget.sh
+
+ssh root@trainboard.local 'cat > /etc/systemd/system/trainboard-gadget.service' \
+  < deploy/gadget/trainboard-gadget.service
+ssh root@trainboard.local 'cat > /etc/systemd/system/trainboard-dnsmasq-usb0.service' \
+  < deploy/gadget/trainboard-dnsmasq-usb0.service
+
+ssh root@trainboard.local systemctl daemon-reload
+ssh root@trainboard.local systemctl enable --now trainboard-gadget trainboard-dnsmasq-usb0
+```
+
+`trainboard-gadget.service` builds the gadget's configfs descriptor and
+brings up `usb0` and `usb1` (NCM and ECM, respectively — same address on
+both, only one is ever active per host); `trainboard-dnsmasq-usb0.service`
+(`Requires=`/`After=` the former) runs a DHCP-only dnsmasq scoped to both
+interfaces. Both are
+`WantedBy=multi-user.target`, so a normal reboot brings the gadget back
+without re-running any of this.
+
+### What you get
+
+Plug a USB cable into the Pi's OTG **data** port (the inner micro-USB port —
+**not** the PWR-labelled one, which is power-only and has no data lines) into
+any laptop or desktop. The host enumerates a native USB network adapter (NCM
+on macOS/Windows 11/modern Linux, falling back to the older ECM class on
+hosts without NCM support — deliberately never RNDIS, which exists only for
+Windows compatibility baggage this project doesn't need) and DHCP-leases an
+address in `10.55.0.2`–`10.55.0.6` from the board's `10.55.0.1`. Only one of
+NCM (`usb0`) or ECM (`usb1`) is ever active per host, and both carry the
+same `10.55.0.1/29` addressing and DHCP range, so this is transparent to the
+operator — whichever class the host negotiates, `10.55.0.1` answers the
+same way. From there the board answers on:
+
+- `http://10.55.0.1` — the point-to-point gadget address, always works
+- `http://trainboard-XXXX.local` — mDNS rides `usb0` exactly like every
+  other eligible interface (see below)
+
+Because the gadget is a kernel driver plus two independently-running
+systemd units, none of this depends on `trainboard.service` being healthy —
+it's there even with wlan0 down, the connectivity manager wedged mid-AP
+fallback, or the trainboard binary itself crash-looping.
+
+### Dongle path (wired eth0, hardware validation pending)
+
+If the Pi instead has a USB Ethernet dongle (rather than being plugged in
+via its own OTG gadget port), add a standard DHCP-client stanza to
+`/etc/network/interfaces`:
+
+```
+allow-hotplug eth0
+iface eth0 inet dhcp
+```
+
+`eth0` is untouched by the connectivity manager — it only ever drives wlan0
+— so ifupdown's normal DHCP client handles it exactly as on a stock DietPi
+install, and the mDNS responder picks the interface up automatically once
+it's up with an address, the same as any other eligible interface. This
+path has not yet been exercised against real dongle hardware; **issue #14
+stays open on the dongle-validation item** until that hardware pass runs.
+
+### mDNS
+
+The board announces itself over multicast DNS on every eligible interface
+(wlan0, `usb0`, and — once validated — a dongle's `eth0`) under two names:
+
+- `trainboard-XXXX.local` — `XXXX` is the last 4 hex characters of wlan0's
+  MAC address, uppercased (the same suffix the AP hotspot SSID uses)
+- `trainboard.local` — a fixed alias, so the guide's existing
+  `ping trainboard.local` / `ssh root@trainboard.local` instructions (§2)
+  keep working regardless of which board is on the network
+- `_http._tcp` — the admin/config web UI is also advertised as a DNS-SD
+  service, so it shows up in service-browser tools, not just as a bare
+  hostname
+
+It's on by default; disable it with `--mdns=false` (see the flags table in
+§5). **wlan0 goes silent while the AP hotspot is up** (§8) — the hotspot's
+own dnsmasq already answers DHCP/DNS on that subnet, and the responder would
+just be contending for the same broadcast domain — but `usb0` (and a wired
+dongle) keep answering throughout, which is exactly what makes the gadget
+useful as a recovery path when wlan0 is mid-AP-fallback.
+
+Verify it from another machine on the same network:
+
+```
+dns-sd -B _http._tcp local.          # macOS
+avahi-browse -rt _http._tcp          # Linux
+```
+
+Both should list the board's service instance; resolving
+`trainboard-XXXX.local` or `trainboard.local` (e.g. `ping` or a browser)
+should return an address on whichever interface(s) are currently eligible.
+
+### Attended acceptance checklist (#14 / #15)
+
+This is the on-hardware gate — none of it can be verified from a
+workstation alone. Run it with a Mac (or other NCM-capable host) and a USB
+cable connected to the Pi's OTG data port:
+
+- [ ] The adapter enumerates on the host (visible in System
+      Settings/Network or `ip link`) without installing any driver
+- [ ] A DHCP lease appears within roughly 5 seconds of plugging in
+- [ ] All three URLs load: `http://10.55.0.1`,
+      `http://trainboard-XXXX.local`, and `http://trainboard.local`
+- [ ] Unplug/replug the cable three times in a row — the board stays
+      healthy and re-enumerates cleanly each time, no restart needed
+- [ ] `dns-sd -B _http._tcp local.` (or `avahi-browse -rt _http._tcp`)
+      shows the board's service on **both** WiFi and `usb0` simultaneously
+- [ ] AP mode: bring the hotspot up (§8), confirm `trainboard-XXXX.local`
+      does **not** answer on the AP's own subnet (192.168.4.0/24) — wlan0
+      suppression working — but **does** still answer over `usb0`
+
+Once this passes, close #14 (minus the dongle-validation note above, which
+stays open until a dongle is tested) and #15.
+
+## 10. Benchmarks
 
 `cmd/bench` measures SSD1322 flush performance on real hardware and gates the
 render architecture (full-frame vs. dirty-region flush). Build, ship, and run

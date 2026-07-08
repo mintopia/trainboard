@@ -17,6 +17,9 @@ type statusPageData struct {
 	// SoakRemainingText is the humanised running-soak countdown; "" hides
 	// the row.
 	SoakRemainingText string
+	// MDNSState is the board's mDNS hostname (e.g. "trainboard-ab12.local");
+	// "" hides the row (feature off or --mdns=false).
+	MDNSState string
 }
 
 // handleIndex renders the authed status page: board state/fault, version,
@@ -36,6 +39,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		basePage:   basePage{LoggedIn: true, CSRF: csrfFrom(r)},
 		Status:     st,
 		UptimeText: humanUptime(st.Uptime),
+		MDNSState:  s.svc.MDNSState(),
 	}
 	if st.SoakRemaining > 0 {
 		data.SoakRemainingText = humanUptime(st.SoakRemaining)
