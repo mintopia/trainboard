@@ -79,7 +79,9 @@ start() {
     local bound_udc
     bound_udc=$(cat "$GADGET_DIR/UDC" 2>/dev/null || true)
     if [[ -n "$bound_udc" ]]; then
-      log "gadget already built and bound to UDC $bound_udc; nothing to do"
+      log "gadget already built and bound to UDC $bound_udc; re-applying usb0 IP config"
+      ip addr replace 10.55.0.1/29 dev usb0
+      ip link set usb0 up
       return 0
     fi
   fi
