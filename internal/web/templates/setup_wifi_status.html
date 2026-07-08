@@ -1,0 +1,10 @@
+{{define "title"}}wifi status — trainboard{{end}}
+{{define "content"}}
+<h2>Trying to join your WiFi</h2>
+{{if .LastError}}
+<p class="error">The last attempt to join {{if .SSID}}{{.SSID}}{{else}}your WiFi{{end}} failed: {{.LastError}}</p>
+{{else}}
+<p>The board is still trying to join {{if .SSID}}{{.SSID}}{{else}}your WiFi{{end}}.</p>
+{{end}}
+<p>To change the WiFi settings or retry the join now, log in at <a href="http://192.168.4.1/login">http://192.168.4.1/login</a> and use &ldquo;Retry WiFi now&rdquo; on the actions page.</p>
+{{end}}

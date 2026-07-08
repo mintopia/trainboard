@@ -44,6 +44,21 @@ type setupPageData struct {
 	LastError string
 }
 
+// setupWifiStatusPageData is setup_wifi_status.html's render data: the
+// pre-auth, read-only status view served on GET /setup once a device is
+// provisioned but still in AP fallback (Hotspot() != nil). It deliberately
+// carries ONLY the last join error and the configured SSID — no secrets, no
+// other config, no runtime status — because /setup has no session behind it.
+type setupWifiStatusPageData struct {
+	basePage
+	// LastError is the most recent failed WiFi-join error (Service.LastSTAError),
+	// or "" when none is recorded yet (the "still trying" copy path).
+	LastError string
+	// SSID is the configured WiFi network name (Wifi.SSID), read via the
+	// existing ConfigRedacted path; it is not a secret. "" when unavailable.
+	SSID string
+}
+
 // setupWifiDonePageData is setup_wifi_done.html's render data: the
 // credential-handoff page shown after a successful AP-mode partial setup.
 type setupWifiDonePageData struct {
@@ -167,6 +182,16 @@ func (s *Server) setupGate(next http.Handler) http.Handler {
 			return
 		}
 		if r.URL.Path == "/setup" {
+			// Provisioned device (a password exists). In AP fallback
+			// (Hotspot() != nil) a phone that reconnected to the hotspot after
+			// a failed WiFi join still needs the join error, which is only ever
+			// rendered on /setup — so GET serves the read-only status view (see
+			// handleSetupGet). POST /setup stays refused, and in LAN mode
+			// (Hotspot()==nil) /setup 404s for every method exactly as before.
+			if r.Method == http.MethodGet && s.svc.Hotspot() != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
@@ -221,6 +246,8 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = setupDoneTemplate
 	case "setupWifiDone":
 		t = setupWifiDoneTemplate
+	case "setupWifiStatus":
+		t = setupWifiStatusTemplate
 	case "login":
 		t = loginTemplate
 	case "index":
@@ -274,10 +301,35 @@ func expireSessionCookie(w http.ResponseWriter) {
 // form, with any previously-recorded STA join error surfaced for a phone
 // reconnecting to the hotspot after a failed attempt.
 func (s *Server) handleSetupGet(w http.ResponseWriter, _ *http.Request) {
+	// A provisioned device still in AP fallback: the setup form is gone
+	// (setupGate 404s POST /setup once a password exists), but a phone
+	// reconnecting to the hotspot after a failed WiFi join needs the join
+	// error, which lives only here. Serve the read-only status view — no
+	// form, no config beyond the (non-secret) SSID, no secrets, no status
+	// internals — since this route is pre-auth.
+	if s.svc.Hotspot() != nil && !s.needsSetup() {
+		s.render(w, "setupWifiStatus", setupWifiStatusPageData{
+			LastError: s.svc.LastSTAError(),
+			SSID:      s.configuredSSID(),
+		})
+		return
+	}
 	s.render(w, "setup", setupPageData{
 		APMode:    s.svc.Hotspot() != nil,
 		LastError: s.svc.LastSTAError(),
 	})
+}
+
+// configuredSSID returns the stored WiFi SSID via the existing
+// Service.ConfigRedacted read path (SSID is not a secret; Redacted masks only
+// the PSK). It returns "" on any load error rather than surfacing it: the
+// read-only status view names the network only as a convenience.
+func (s *Server) configuredSSID() string {
+	cfg, err := s.svc.ConfigRedacted()
+	if err != nil {
+		return ""
+	}
+	return cfg.Wifi.SSID
 }
 
 // handleSetupPost validates and stores the submitted first-boot config on

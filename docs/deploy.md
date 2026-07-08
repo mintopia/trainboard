@@ -266,6 +266,23 @@ duration.
 **Fault codes E05/E06** (§6) are only ever surfaced behind this flag — with
 it off, wlan0 is left to the OS as before and neither can occur.
 
+**Recovering WiFi after provisioning (AP fallback).** Once a board has been
+provisioned it will not re-run first-time setup, so `/setup`'s WiFi form is
+gone. If the configured network later becomes unreachable (bad PSK, router
+swap, outage) the board drops back to its own hotspot. To recover: rejoin the
+`Trainboard-XXXX` hotspot (or let the captive-portal sheet pop) and open
+`http://192.168.4.1/` — `/setup` now shows a small read-only status page with
+the last join error. From there log in at `http://192.168.4.1/login` and use
+**Retry WiFi now** on the actions page (or fix `wifi.ssid`/`wifi.psk` at
+`/config` first). Two caveats worth knowing: (1) any HTTP request from a
+client on the AP subnet counts as provisioning activity and *defers* the
+manager's periodic auto-retry, so a phone left sitting on the status page can
+delay a spontaneous rejoin — the **Retry WiFi now** action always bypasses
+this suppression, so use it rather than waiting; (2) the `192.168.4.1`
+address and the AP subnet are hardcoded to `192.168.4.0/24` (see
+`internal/web`'s `apSetupURL` and the captive-portal probe handlers) — a board
+brought up on a different AP subnet would not match these on-screen URLs.
+
 **Watchdog:** `trainboard.service` already ships with `WatchdogSec=30` (see
 the unit file) regardless of `--manage-network`; the internal aggregator
 (`internal/obs.Watchdog`) only pets systemd once every 10s tick where the
