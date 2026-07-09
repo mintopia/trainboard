@@ -31,15 +31,18 @@ type updaterSeams struct {
 
 // buildUpdater assembles the checker + applier. The updater is enabled
 // only when this is a slot install (state file present) AND the keyring is
-// non-empty (key ceremony done) AND the loaded config was valid (cfgValid
-// false = E04 loop: no live config to read a channel from — a disabled
-// checker still renders status so the operator sees why). A disabled
-// updater is still non-nil: every seam stays callable and reports
-// "unavailable" gracefully.
-func buildUpdater(cfg config.Config, cfgValid bool, slotsDir, statePath string, log *slog.Logger) *updaterSeams {
+// non-empty (key ceremony done) — config validity plays no part: even in
+// an E04/E07 fault loop the operator can still fix things from the
+// recovery web UI, including manually applying a known-working update
+// (spec §2), so a disabled updater there would take away the one recovery
+// path that doesn't need physical access. What a fault loop actually does
+// is never start the checker's background Run loop (see runFaultLoop), not
+// disable the updater seam itself. A disabled updater is still non-nil:
+// every seam stays callable and reports "unavailable" gracefully.
+func buildUpdater(cfg config.Config, slotsDir, statePath string, log *slog.Logger) *updaterSeams {
 	keys, keyErr := update.Keyring()
 	_, stateErr := update.LoadState(statePath)
-	enabled := cfgValid && keyErr == nil && stateErr == nil
+	enabled := keyErr == nil && stateErr == nil
 	if keyErr != nil {
 		log.Info("self-update unavailable: keyring", "reason", keyErr.Error())
 	}
@@ -66,8 +69,11 @@ func (u *updaterSeams) webActions() (check, apply func(ctx context.Context) erro
 	return u.checker.CheckNow, u.checker.ApplyNow, func() error { return update.DismissRollback(u.statePath) }
 }
 
-// updateAvailable is the render loop's hint probe.
-func (u *updaterSeams) updateAvailable() bool { return u.checker.Status().Available != "" }
+// updateAvailable is the render loop's hint probe. It calls Checker.Available
+// rather than Status: the render loop probes this at frame rate (~25fps),
+// and Status's LoadState disk read + JSON parse is not something to pay on
+// every frame.
+func (u *updaterSeams) updateAvailable() bool { return u.checker.Available() }
 
 // probeURL derives the loopback health-probe URL from the web listen
 // address: an empty or wildcard host becomes 127.0.0.1. /login is the

@@ -147,7 +147,7 @@ func run() error {
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
 
-	upd := buildUpdater(cfg, true, *slotsDir, *statePath, log)
+	upd := buildUpdater(cfg, *slotsDir, *statePath, log)
 
 	var fetcher runtime.Fetcher
 	if *fixture != "" {
@@ -326,7 +326,7 @@ func runFaultLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, l
 	// known-working update"), but nothing runs unattended here: the
 	// checker's Run loop is never started in a fault loop, and there is no
 	// Health promotion (no live poller/config to promote around).
-	upd := buildUpdater(config.Default(), true, slotsDir, statePath, log)
+	upd := buildUpdater(config.Default(), slotsDir, statePath, log)
 
 	var conn webConnSeams // zero (all nil) unless manageNetwork wires the manager in
 	var mgr *netconn.Manager

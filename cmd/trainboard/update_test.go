@@ -21,7 +21,7 @@ func testLogSink(t *testing.T) *slog.Logger {
 func TestBuildUpdaterDisabledWithoutStateFile(t *testing.T) {
 	// Dev machine / pre-migration Pi: no state file ⇒ updater disabled but
 	// non-nil (web shows "not available", nothing crashes).
-	u := buildUpdater(config.Default(), true, t.TempDir(), filepath.Join(t.TempDir(), "absent.json"), testLogSink(t))
+	u := buildUpdater(config.Default(), t.TempDir(), filepath.Join(t.TempDir(), "absent.json"), testLogSink(t))
 	if u == nil || u.enabled {
 		t.Fatalf("updater = %+v, want non-nil disabled", u)
 	}
@@ -36,7 +36,7 @@ func TestBuildUpdaterDisabledWithEmptyKeyring(t *testing.T) {
 	if err := update.SaveState(statePath, update.DefaultState()); err != nil {
 		t.Fatal(err)
 	}
-	u := buildUpdater(config.Default(), true, t.TempDir(), statePath, testLogSink(t))
+	u := buildUpdater(config.Default(), t.TempDir(), statePath, testLogSink(t))
 	// With embeddedKeys still empty this must be disabled; once the key
 	// ceremony fills the keyring this branch flips — assert consistency
 	// with update.Keyring() rather than a fixed expectation.

@@ -175,10 +175,13 @@ or `b`) the updater state file names as active, so applying a new release
 never touches the running payload's own binary. Releases are published as
 a manifest plus asset, both signed with minisign; the payload only ever
 installs a manifest whose signature verifies against the device's embedded
-keyring, downloads and health-checks it in the *inactive* slot, and only
-flips `active` once it's confirmed booting — if the new slot fails to stay
-up, the launcher itself flips back to the last known-good slot on its own,
-no operator intervention required. The full design, including the anti-rollback
+keyring, downloads it into the *inactive* slot, and flips `active` to it
+immediately once the download and signature check pass. `known_good` is
+the field that's confirmation-gated: it only advances to the new slot once
+the payload has actually booted there and passed its post-start health
+check — if that never happens, the launcher itself flips `active` back to
+the last known-good slot on its own, no operator intervention required.
+The full design, including the anti-rollback
 version floor and the double-fault recovery path, is in
 [`docs/superpowers/specs/2026-07-09-m5-self-update-design.md`](superpowers/specs/2026-07-09-m5-self-update-design.md).
 
@@ -217,6 +220,13 @@ scp deploy/trainboard.service root@trainboard.local:/etc/systemd/system/trainboa
 # (--manage-network), re-add them to the new ExecStart line first.
 ssh root@trainboard.local 'systemctl daemon-reload && systemctl restart trainboard'
 ```
+
+The new unit's `StartLimitIntervalSec=0` line matters here, not just as
+boilerplate: without it, systemd's own start-limit can mark the unit
+"failed" partway through the rollback ladder (§6 below) before the
+launcher's boot-attempt counter gets a chance to converge — an operator
+hand-editing an old unit in place instead of copying the new one must add
+that line too.
 
 Once the board is confirmed up under the launcher (`systemctl status
 trainboard` shows the launcher's PID execing into the payload), delete the
@@ -285,9 +295,22 @@ longer be installable — not for routine releases.
       /opt/trainboard/slots/b/trainboard` after staging an update, before
       restart); observe 3 failed boots then automatic rollback + web UI
       banner.
-- [ ] Force a double fault (corrupt BOTH slot binaries with the unit
-      stopped, then start); observe E07 on-glass + web UI reachable;
-      restore by re-applying a release from the recovery web UI.
+- [ ] Force a double fault so the ladder actually reaches E07 — corrupting
+      a binary so `execve` itself fails (e.g. `echo garbage > ...`) doesn't
+      work for this: the launcher's fast-fallback path treats an exec
+      failure as instant (single-boot) rollback to known-good, so the
+      3-strikes ladder never runs and E07 is never reached (systemd just
+      loops the launcher instead). Corrupt both slots in an
+      exec-succeeds-but-unhealthy way instead, so each boot burns a real
+      attempt against `BootAttempts`:
+      ```
+      ssh root@trainboard.local systemctl stop trainboard
+      ssh root@trainboard.local 'cp /bin/false /opt/trainboard/slots/a/trainboard; cp /bin/false /opt/trainboard/slots/b/trainboard'
+      ssh root@trainboard.local systemctl start trainboard
+      ```
+      Observe the ladder run its full course (3 boots on the active slot,
+      rollback, 3 boots on the other slot) and end in E07 on-glass + web UI
+      reachable; restore by re-applying a release from the recovery web UI.
 
 ## 7. Fault codes
 

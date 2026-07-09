@@ -41,3 +41,4 @@ jobs:
             -min-version "$(tr -d '[:space:]' < deploy/release/MIN_VERSION)" > manifest.json
           minisign -S -s dry.key -m manifest.json -x manifest.json.minisig -t "dry run"
           minisign -V -p dry.pub -m manifest.json -x manifest.json.minisig
+          go run ./cmd/verifymanifest -pub dry.pub -m manifest.json -x manifest.json.minisig

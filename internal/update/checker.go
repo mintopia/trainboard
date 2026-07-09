@@ -118,6 +118,16 @@ func (c *Checker) tick(ctx context.Context, restart func()) {
 	if avail == nil || !c.cfg.Update.AutoApply || !c.cfg.InUpdateWindow(time.Now()) {
 		return
 	}
+	// Don't auto-apply a version the launcher just rolled back from: it's
+	// still the newest release on the feed until a fix ships, so every
+	// subsequent tick would otherwise find it "available" again and
+	// reapply it forever, undoing the rollback nightly. A manual ApplyNow
+	// (operator override, via the web UI) is deliberately NOT gated here —
+	// only this unattended path is.
+	if s, err := LoadState(c.applier.StatePath); err == nil && s.RolledBackFrom == avail.Version {
+		c.log.Info("auto-apply suppressed: rolled-back version; waiting for a newer release", "version", avail.Version)
+		return
+	}
 	c.log.Info("auto-applying update", "version", avail.Version)
 	if err := c.ApplyNow(ctx); err != nil {
 		c.log.Error("auto-apply failed", "error", err.Error())
@@ -201,6 +211,18 @@ func (c *Checker) ApplyNow(ctx context.Context) error {
 	c.lastErr = ""
 	c.mu.Unlock()
 	return nil
+}
+
+// Available reports whether a newer release is currently known, from the
+// in-memory cache only — no disk I/O, no JSON parse. It exists for the
+// render loop's per-frame hint-dot probe (25fps: Status()'s LoadState call
+// is too expensive to run that often); Status() remains the richer
+// snapshot for web requests, where a live RolledBackFrom read matters more
+// than a few extra microseconds.
+func (c *Checker) Available() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.available != nil
 }
 
 // Status assembles the render-ready snapshot. RolledBackFrom is read live
