@@ -57,6 +57,16 @@ const (
 	// binds. 90s would already be exceeded by the main chain alone, so this
 	// is 150s (~20s margin over the 130s worst case) rather than adding yet
 	// another mid-chain beat.
+	//
+	// The boot-time STA grace loop (issue #54, internal/net's bootSTA) is
+	// bounded independently and never competes with the chain above — boot
+	// and AP-fallback retries are mutually exclusive phases of the same Run
+	// loop. It can run for up to bootSTAGraceWindow (90s), well past a single
+	// staAttemptBound (45s), but it calls Beat once per retry (its own
+	// bootSTARetryPause, 5s, cadence) exactly as waitAPFallback's 30s
+	// heartbeat does for AP fallback — so the worst un-beaten gap it can ever
+	// produce is one retry pause plus one bounded attempt (5 + 45 = 50s),
+	// comfortably under this deadline.
 	managerBeatDeadline = 150 * time.Second
 	// httpProbeTimeout bounds the captive-portal probe request.
 	httpProbeTimeout = 10 * time.Second
