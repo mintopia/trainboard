@@ -82,7 +82,7 @@ func TestStatusPageShowsSoftwareSection(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"v0.2.0",
-		"Rolled back from v0.1.9",
+		"v0.1.9 failed to boot repeatedly",
 		"boom",
 		`action="/actions/update/check"`,
 		`action="/actions/update/apply"`,

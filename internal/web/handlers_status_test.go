@@ -97,8 +97,12 @@ func TestStatusPageAuthedShowsDeparturesVersionAndEventOrder(t *testing.T) {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "departures") {
-		t.Fatalf("expected state 'departures' in body: %s", body)
+	// The fixture's LastFetch is a fixed past timestamp, so the statebar
+	// may read either "Running normally" or (once stale) "Running — data
+	// is stale" — both share "Running", which is what this test cares
+	// about: a departures-derived state rendered as running, not a fault.
+	if !strings.Contains(body, "Running") {
+		t.Fatalf("expected a running state label in body: %s", body)
 	}
 	if !strings.Contains(body, "v-status-test") {
 		t.Fatalf("expected version string in body: %s", body)
@@ -142,16 +146,18 @@ func TestServiceMDNSStateNilSourceSafe(t *testing.T) {
 	}
 }
 
-// (e) the status page renders the mDNS dd only when Sources.MDNSState
-// reports a non-empty hostname.
+// (e) the status page's Address row appends the mDNS alias hostname only
+// when Sources.MDNSState reports a non-empty hostname (the row shows the
+// fixed "trainboard.local" alias, not the per-device unique name — see
+// internal/mdns/records.go's aliasName).
 func TestStatusPageShowsMDNSNameOnlyWhenSet(t *testing.T) {
 	off := statusTestSources(t)
 	srvOff, _ := newTestServerWithSources(t, off)
 	cookieOff, _ := loginAs(t, srvOff, statusTestPassword)
 
 	rec := getPath(t, srvOff.Handler(), "/", cookieOff)
-	if strings.Contains(rec.Body.String(), "trainboard-ab12.local") {
-		t.Fatalf("mDNS row must not render without Sources.MDNSState: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "trainboard.local") {
+		t.Fatalf("mDNS alias must not render without Sources.MDNSState: %s", rec.Body.String())
 	}
 
 	on := statusTestSources(t)
@@ -160,8 +166,8 @@ func TestStatusPageShowsMDNSNameOnlyWhenSet(t *testing.T) {
 	cookieOn, _ := loginAs(t, srvOn, statusTestPassword)
 
 	rec = getPath(t, srvOn.Handler(), "/", cookieOn)
-	if !strings.Contains(rec.Body.String(), "trainboard-ab12.local") {
-		t.Fatalf("expected mDNS hostname in body: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "trainboard.local") {
+		t.Fatalf("expected mDNS alias hostname in body: %s", rec.Body.String())
 	}
 }
 
@@ -193,6 +199,31 @@ func TestStatusPageHasBoardContainer(t *testing.T) {
 	for _, want := range []string{`id="board"`, `data-endpoint="/api/board"`, `/static/board.js`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("status page missing %q", want)
+		}
+	}
+}
+
+// TestStateLine locks down the runtime-state-to-headline mapping the status
+// page's statebar reads: label text, css class ("ok"|"warn"|"bad"), for the
+// states an operator actually sees plus the stale-fetch override.
+func TestStateLine(t *testing.T) {
+	cases := []struct {
+		name      string
+		st        StatusData
+		wantLabel string
+		wantClass string
+	}{
+		{"departures", StatusData{State: "departures", LastFetch: time.Now()}, "Running normally", "ok"},
+		{"no services", StatusData{State: "no-services", LastFetch: time.Now()}, "Running — no services to show", "ok"},
+		{"initialising", StatusData{State: "initialising"}, "Starting up", "warn"},
+		{"clock", StatusData{State: "clock-not-synced"}, "Waiting for clock sync", "warn"},
+		{"fault", StatusData{State: "error", Fault: "E02"}, "Fault E02", "bad"},
+		{"stale", StatusData{State: "departures", LastFetch: time.Now().Add(-10 * time.Minute)}, "Running — data is stale", "warn"},
+	}
+	for _, c := range cases {
+		label, class, _ := stateLine(c.st, time.Now())
+		if label != c.wantLabel || class != c.wantClass {
+			t.Errorf("%s: got (%q,%q), want (%q,%q)", c.name, label, class, c.wantLabel, c.wantClass)
 		}
 	}
 }

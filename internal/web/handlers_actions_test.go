@@ -322,8 +322,8 @@ func TestStatusPageShowsSoakCountdown(t *testing.T) {
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if !strings.Contains(rec.Body.String(), "Soak") {
-		t.Fatal("status page: no soak row while soaking")
+	if !strings.Contains(rec.Body.String(), "Burn-in soak") {
+		t.Fatal("status page: no soak notice while soaking")
 	}
 	if !strings.Contains(rec.Body.String(), "1h0m") {
 		t.Fatalf("status page: remaining time not rendered; body: %.400s", rec.Body.String())

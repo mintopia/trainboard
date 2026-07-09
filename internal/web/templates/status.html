@@ -1,53 +1,62 @@
-{{define "title"}}status — trainboard{{end}}
-{{define "bodyclass"}}legacy-page{{end}}
+{{define "title"}}Status — Trainboard{{end}}
 {{define "content"}}
-<h2>Status</h2>
+<div class="statebar">
+  <span class="dot{{if eq .StateClass "warn"}} amber{{else if eq .StateClass "bad"}} red{{end}}"></span>
+  {{.StateLabel}}
+  <span class="since">up {{.UptimeText}}</span>
+</div>
+{{if .StateDetail}}<p class="caption" style="margin-top:-.4rem">{{.StateDetail}}</p>{{end}}
+
 <section>
   <div class="board" id="board" data-endpoint="/api/board" role="img" aria-label="live departure board preview"></div>
   <p class="caption" id="board-caption">Live panel · rendered in your browser</p>
 </section>
-<script src="/static/board.js" defer></script>
-<dl class="facts">
-  <dt>State</dt><dd class="state">{{.Status.State}}{{if .Status.Fault}} ({{.Status.Fault}}){{end}}</dd>
-  <dt>Version</dt><dd>{{.Status.Version}}</dd>
-  <dt>Uptime</dt><dd>{{.UptimeText}}</dd>
-  <dt>Last fetch</dt><dd>{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</dd>
-  <dt>Addresses</dt><dd>{{range .Status.IPs}}{{.}} {{end}}</dd>
-  {{if .SoakRemainingText}}<dt>Soak</dt><dd>{{.SoakRemainingText}} remaining</dd>{{end}}
-  {{if .MDNSState}}<dt>mDNS</dt><dd>{{.MDNSState}}</dd>{{end}}
-</dl>
-<h3>Software</h3>
+
+{{if .HotspotActive}}
+<div class="notice"><strong>Hotspot mode.</strong> The board couldn't join your WiFi and is running its own hotspot. <a href="/actions">Retry from Actions</a> once your network is back.</div>
+{{end}}
+
 {{with .Status.Update}}
 {{if .RolledBackFrom}}
-<p class="error">Rolled back from {{.RolledBackFrom}} after repeated failed boots — running {{.Running}} instead.
-  <form method="post" action="/actions/update/dismiss" style="display:inline">
-    <input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Dismiss</button></form></p>
+<div class="notice fault"><strong>Rolled back.</strong> {{.RolledBackFrom}} failed to boot repeatedly — running {{.Running}} instead.
+  <form method="post" action="/actions/update/dismiss" class="btnrow" style="margin-top:.6rem"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button class="btn ghost" type="submit">Dismiss</button></form>
+</div>
 {{end}}
-<dl class="facts">
-  <dt>Running</dt><dd>{{.Running}}</dd>
-  {{if .Available}}<dt>Available</dt><dd>{{.Available}}{{if .NotesURL}} — <a href="{{.NotesURL}}" target="_blank" rel="noopener">release notes</a>{{end}}</dd>{{end}}
-  {{if not .LastCheck.IsZero}}<dt>Last check</dt><dd>{{.LastCheck.Format "15:04:05"}}</dd>{{end}}
-  {{if .LastError}}<dt>Update error</dt><dd class="error">{{.LastError}}</dd>{{end}}
-</dl>
-{{if .Enabled}}
-<form method="post" action="/actions/update/check"><input type="hidden" name="csrf" value="{{$.CSRF}}">
-  <button type="submit">Check for updates now</button></form>
 {{if .Available}}
-<form method="post" action="/actions/update/apply" onsubmit="return confirm('Download and install {{.Available}}? The board restarts into the new version.')">
-  <input type="hidden" name="csrf" value="{{$.CSRF}}">
-  <button type="submit" class="primary">Install {{.Available}}</button></form>
+<div class="notice"><strong>Update available.</strong> {{.Available}} is ready to install — the board restarts and is back in about a minute.{{if .NotesURL}} <a href="{{.NotesURL}}" target="_blank" rel="noopener">Release notes</a>.{{end}}</div>
+<div class="btnrow" style="margin-bottom:1rem">
+  <form method="post" action="/actions/update/apply"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button class="btn" type="submit">Install {{.Available}}</button></form>
+  <form method="post" action="/actions/update/check"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button class="btn ghost" type="submit">Check again</button></form>
+</div>
+{{else if .Enabled}}
+<form method="post" action="/actions/update/check" style="margin:0 0 1rem"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button class="btn ghost" type="submit">Check for updates</button></form>
 {{end}}
-{{else}}
-<p>Self-update is not available on this device (not a slot install, or no trusted keys).</p>
+{{if .LastError}}<p class="error">Update check failed: {{.LastError}}</p>{{end}}
 {{end}}
+
+{{if .SoakRemainingText}}
+<div class="notice calm">Burn-in soak running — {{.SoakRemainingText}} remaining. The panel cycles white/black; departures resume when it ends. <a href="/actions">Cancel from Actions</a>.</div>
 {{end}}
+
+<h3>This board</h3>
+<div class="rows">
+  <div class="r"><span class="k">Software</span><span class="v">{{.Status.Update.Running}}{{if not .Status.Update.Running}}{{.Status.Version}}{{end}}</span></div>
+  <div class="r"><span class="k">Address</span><span class="v">{{range $i, $ip := .Status.IPs}}{{if $i}} · {{end}}{{$ip}}{{end}}{{if .MDNSState}} · trainboard.local{{end}}</span></div>
+  <div class="r"><span class="k">Last data fetch</span><span class="v">{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</span></div>
+</div>
+
 <h3>Recent events</h3>
 <div id="events" hx-get="/events" hx-trigger="every 5s" hx-swap="innerHTML">
   {{template "eventlist" .Status.Events}}
 </div>
+<script src="/static/board.js" defer></script>
 {{end}}
 {{define "eventlist"}}
 <table class="events"><tbody>
-{{range .}}<tr data-level="{{.Level}}"><td>{{.Time.Format "15:04:05"}}</td><td>{{.Level}}</td><td>{{.Msg}}</td></tr>{{end}}
+{{range .}}<tr{{if or (eq .Level.String "WARN") (eq .Level.String "ERROR")}} class="warn"{{end}}><td class="t">{{.Time.Format "15:04:05"}}</td><td class="lvl"><span class="pip"></span></td><td>{{.Msg}}</td></tr>{{end}}
 </tbody></table>
 {{end}}
