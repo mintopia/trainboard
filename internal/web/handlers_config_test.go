@@ -68,7 +68,6 @@ func newConfigTestServerCore(t *testing.T, conn *connFakes) (srv *Server, svc *S
 	src := Sources{
 		Snapshot:      func() *board.Snapshot { return nil },
 		Ring:          obs.NewRing(8),
-		PreviewPNG:    func() []byte { return nil },
 		Version:       "vtest",
 		StartedAt:     time.Now(),
 		SoakRemaining: func() time.Duration { return soakRem },

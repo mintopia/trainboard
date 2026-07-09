@@ -29,12 +29,11 @@ func newVirginAPTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
-		Hotspot:    func() *board.Hotspot { return apHotspot },
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now(),
+		Hotspot:   func() *board.Hotspot { return apHotspot },
 	}
 	act := Actions{Apply: func() {}, Reboot: func() error { return nil }}
 	svc := NewService(path, src, act, testLog())

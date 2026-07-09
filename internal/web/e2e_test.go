@@ -31,11 +31,10 @@ func e2eNewService(t *testing.T, path string) (*Service, chan struct{}) {
 	t.Helper()
 	applyCh := make(chan struct{}, 1)
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "v-e2e",
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "v-e2e",
+		StartedAt: time.Now(),
 	}
 	act := Actions{
 		Apply:  func() { applyCh <- struct{}{} },
@@ -298,7 +297,6 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	Route                          | method | no session   | valid session
 //	-------------------------------|--------|--------------|----------------
 //	/                              | GET    | 302 /login   | 200
-//	/preview.png                   | GET    | 302 /login   | 404 (no preview wired in this harness)
 //	/events                        | GET    | 302 /login   | 200
 //	/config                        | GET    | 302 /login   | 200
 //	/config                        | POST   | 302 /login   | 200
@@ -342,7 +340,6 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	// session still being alive.
 	routeMatrix := []routeCase{
 		{name: "GET /", method: http.MethodGet, path: "/", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "GET /preview.png", method: http.MethodGet, path: "/preview.png", body: noBody, wantAuthedStatus: http.StatusNotFound},
 		{name: "GET /events", method: http.MethodGet, path: "/events", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /config", method: http.MethodGet, path: "/config", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /config", method: http.MethodPost, path: "/config", body: htmlForm(baseConfigForm()), wantAuthedStatus: http.StatusOK, appliesAsync: true},

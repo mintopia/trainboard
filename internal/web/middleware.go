@@ -220,7 +220,7 @@ func (sw *statusWriter) WriteHeader(code int) {
 //
 // Routine (status < 400) requests log at DEBUG — below the obs tee logger's
 // Info threshold, so they never reach the diagnostics ring or the journal.
-// Without this, the status page's own polling (/preview.png every second,
+// Without this, the status page's own polling (/api/board every 5 seconds,
 // /events every five seconds) floods the ring's fixed capacity within
 // minutes, evicting the rare events an operator actually needs. Failures
 // (status >= 400) log at WARN, so they stay visible in both places alongside

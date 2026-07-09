@@ -68,23 +68,6 @@ func humanUptime(d time.Duration) string {
 	}
 }
 
-// handlePreviewPNG streams the current live panel preview with headers that
-// keep it fresh on every request: no caching, no CDN, always the latest
-// frame. Sources.PreviewPNG returning nil or empty (preview not yet
-// available, e.g. before the board's first render) is a 404, not an empty
-// 200 — the status page's polling <img> and any test decoding the body both
-// need to be able to tell "no preview yet" apart from "a valid empty image".
-func (s *Server) handlePreviewPNG(w http.ResponseWriter, r *http.Request) {
-	data := s.svc.src.PreviewPNG()
-	if len(data) == 0 {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(data)
-}
-
 // handleEvents renders just the "eventlist" partial for htmx's polling
 // GET /events, so the status page's event feed can refresh without a full
 // page reload.

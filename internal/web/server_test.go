@@ -64,11 +64,10 @@ func newTestServerWithApply(t *testing.T) (*Server, *Service, chan struct{}) {
 	}
 	applyCh := make(chan struct{}, 1)
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now(),
 	}
 	act := Actions{
 		Apply:  func() { applyCh <- struct{}{} },
@@ -325,5 +324,20 @@ func TestStaticFontsServed(t *testing.T) {
 		if rec.Body.Len() < 1000 {
 			t.Errorf("GET %s: suspiciously small body (%d bytes)", path, rec.Body.Len())
 		}
+	}
+}
+
+// TestStaticBoardJSServed confirms board.js (Task 4's client-side board
+// renderer) is served, without auth, the same way as style.css and the
+// fonts — picked up automatically by //go:embed templates/* static/*, no
+// dedicated route.
+func TestStaticBoardJSServed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rec := getPath(t, srv.Handler(), "/static/board.js")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "/api/board") {
+		t.Fatalf("board.js body does not reference /api/board: %s", rec.Body.String())
 	}
 }

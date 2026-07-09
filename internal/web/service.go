@@ -16,11 +16,10 @@ import (
 
 // Sources are the read-side seams the UI renders from.
 type Sources struct {
-	Snapshot   func() *board.Snapshot
-	Ring       *obs.Ring
-	PreviewPNG func() []byte
-	Version    string
-	StartedAt  time.Time
+	Snapshot  func() *board.Snapshot
+	Ring      *obs.Ring
+	Version   string
+	StartedAt time.Time
 	// SoakRemaining reports the burn-in soak's remaining time (0 =
 	// inactive). Optional: nil reads as never-soaking.
 	SoakRemaining func() time.Duration

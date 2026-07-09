@@ -75,10 +75,11 @@ type loginPageData struct {
 }
 
 // NewServer builds the full route table: /setup, /login, /logout, /static/,
-// the authed status page (/), its live preview image (/preview.png), its
-// polled event feed (/events), and later tasks add the rest. authLimit gates
-// setup/login POSTs at a burst of 5/min; actionLimit gates other
-// state-changing routes at 30/min.
+// the authed status page (/) — whose live board renders client-side from
+// GET /api/board (board.js), not a server-streamed image — its polled event
+// feed (/events), and later tasks add the rest. authLimit gates setup/login
+// POSTs at a burst of 5/min; actionLimit gates other state-changing routes
+// at 30/min.
 func NewServer(svc *Service, log *slog.Logger) *Server {
 	s := &Server{
 		svc:         svc,
@@ -97,7 +98,6 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /logout", chain(http.HandlerFunc(s.handleLogout),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
-	s.mux.Handle("GET /preview.png", chain(http.HandlerFunc(s.handlePreviewPNG), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /config", chain(http.HandlerFunc(s.handleConfigPost),

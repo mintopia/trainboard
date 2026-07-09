@@ -47,11 +47,10 @@ func newAPSetupTestServer(t *testing.T) (srv *Server, svc *Service, path string,
 	path = filepath.Join(t.TempDir(), "config.json")
 	fakes = &apSetupFakes{hs: &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}}
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now(),
 		Hotspot: func() *board.Hotspot {
 			fakes.mu.Lock()
 			defer fakes.mu.Unlock()
@@ -230,7 +229,6 @@ func newProvisionedAPFallbackTestServer(t *testing.T, lastErr string, hotspot bo
 	src := Sources{
 		Snapshot:     func() *board.Snapshot { return nil },
 		Ring:         obs.NewRing(8),
-		PreviewPNG:   func() []byte { return nil },
 		Version:      "vtest",
 		StartedAt:    time.Now(),
 		LastSTAError: func() string { return lastErr },

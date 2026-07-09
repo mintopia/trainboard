@@ -2,14 +2,11 @@
 {{define "bodyclass"}}legacy-page{{end}}
 {{define "content"}}
 <h2>Status</h2>
-<section class="panel-preview">
-  <img id="preview" src="/preview.png" alt="live panel preview" width="512" height="128">
-  <script>
-    setInterval(function () {
-      document.getElementById('preview').src = '/preview.png?' + Date.now();
-    }, 1000);
-  </script>
+<section>
+  <div class="board" id="board" data-endpoint="/api/board" role="img" aria-label="live departure board preview"></div>
+  <p class="caption" id="board-caption">Live panel · rendered in your browser</p>
 </section>
+<script src="/static/board.js" defer></script>
 <dl class="facts">
   <dt>State</dt><dd class="state">{{.Status.State}}{{if .Status.Fault}} ({{.Status.Fault}}){{end}}</dd>
   <dt>Version</dt><dd>{{.Status.Version}}</dd>

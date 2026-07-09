@@ -188,7 +188,6 @@ tr.warn td:last-child { color: var(--red-text); }
 .legacy-page dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1rem; margin: 0 0 1.5rem; }
 .legacy-page dl.facts dt { color: #8a6200; }
 .legacy-page dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.legacy-page .panel-preview img { display: block; width: 100%; max-width: 512px; aspect-ratio: 4 / 1; background: #000; border: 1px solid #ffb000; image-rendering: pixelated; }
 .legacy-page table.events td { border-bottom: 1px solid #1a1400; color: #ffb000; }
 .legacy-page table.events tr[data-level="WARN"] td, .legacy-page table.events tr[data-level="ERROR"] td { color: #ff4d3d; }
 
