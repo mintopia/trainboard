@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -55,6 +56,7 @@ func run() error {
 	httpAddr := flag.String("http", ":80", "address for the embedded config/status web server")
 	manageNetwork := flag.Bool("manage-network", false, "drive wlan0 (STA connect / AP fallback) via the connectivity manager — safety interlock: only enable once the target device has been migrated off ifupdown-managed WiFi (see docs/deploy.md, Connectivity & AP mode)")
 	mdnsEnabled := flag.Bool("mdns", true, "advertise the board via mDNS as trainboard-xxxx.local")
+	recovery := flag.Bool("recovery", false, "recovery mode: web UI + AP only (set by the launcher on double fault)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -119,6 +121,17 @@ func run() error {
 		fl = sink
 		previewLatest = sink.Latest
 		log.Info("preview mode", "dir", *previewDir)
+	}
+
+	if *recovery {
+		// Double-fault recovery (launcher appended --recovery): the most
+		// conservative useful posture. No poller, no periodic update
+		// checks — just the fault scene, the web UI (config fixes +
+		// manual update apply, wired in the M5 main-wiring task), the AP
+		// fallback, and mDNS.
+		return runFaultLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest,
+			startedAt, soak, wd, *manageNetwork, *mdnsEnabled,
+			obs.FaultUpdateRecovery, errors.New("launcher double fault"))
 	}
 
 	cfg, err := loadConfig(*cfgPath)
@@ -249,12 +262,20 @@ func loadConfig(path string) (config.Config, error) {
 	return cfg, nil
 }
 
-// runConfigErrorLoop renders the E04 fault scene and idles forever (until
-// ctx is cancelled): the shared fallback for both a Load error (unreadable
+// runConfigErrorLoop renders the E04 fault scene and idles; see
+// runFaultLoop for the shared machinery (M5 generalised it so --recovery
+// can render E07 through the identical path).
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, err error) error {
+	return runFaultLoop(ctx, fl, fonts, log, path, httpAddr, ring, previewLatest, startedAt, soak, wd, manageNetwork, mdnsEnabled, obs.FaultConfigError, err)
+}
+
+// runFaultLoop renders the given fault scene and idles forever (until ctx
+// is cancelled): the shared fallback for both a Load error (unreadable
 // file) and a Validate error (missing/invalid values, including the
-// fresh-install case where Default() doesn't pass Validate). The web server
-// still runs here, over the SAME config path, so a virgin or broken device
-// can be fixed from /setup or /config without needing physical access.
+// fresh-install case where Default() doesn't pass Validate), as well as
+// the launcher's --recovery double-fault path. The web server still runs
+// here, over the SAME config path, so a virgin or broken device can be
+// fixed from /setup or /config without needing physical access.
 //
 // manageNetwork wires the connectivity manager here too (M3 spec: the AP
 // must work even on a wholly unconfigured device): its STA closure always
@@ -271,9 +292,9 @@ func loadConfig(path string) (config.Config, error) {
 // LoadRaw's un-validated parse still carries its real Web.PasswordHash and
 // WiFi credentials. The setup AP is open (no password — issue #44), so the
 // AP identity is just its SSID, derived from wlan0's MAC on every boot.
-func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, err error) error {
-	log.Error("config error", "err", err.Error(), "path", path)
-	snap := &board.Snapshot{State: board.StateError, Fault: obs.FaultConfigError}
+func runFaultLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, fault obs.FaultCode, cause error) error {
+	log.Error("fault loop", "fault", string(fault), "err", cause.Error(), "path", path)
+	snap := &board.Snapshot{State: board.StateError, Fault: fault}
 	snapshotSrc := func() *board.Snapshot { return snap }
 
 	var conn webConnSeams // zero (all nil) unless manageNetwork wires the manager in
