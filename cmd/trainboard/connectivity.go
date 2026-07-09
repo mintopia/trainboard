@@ -68,9 +68,9 @@ const (
 	// retry pause plus one bounded attempt (5 + 45 = 50s); the TERMINAL gap
 	// on grace-window exhaustion is larger, because the deadline check
 	// returns without a Beat and runBoot proceeds straight into toAP:
-	//   5 (pause) + 45 (final attempt) + 40 (toAP w/ internal retry)
-	//   = ~90s before the next loop-top Beat.
-	// Still under this deadline, but with ~60s margin, not ~100s — anyone
+	//   5 (pause) + 5 (Prereqs) + 45 (final attempt) + 40 (toAP w/ retry)
+	//   = ~95s before the next loop-top Beat.
+	// Still under this deadline, but with ~55s margin, not ~100s — anyone
 	// growing staAttemptBound, the toAP budget, or adding a leg to that
 	// chain must redo THIS sum.
 	managerBeatDeadline = 150 * time.Second
