@@ -10,7 +10,12 @@ Description=Train departure board
 # The embedded admin/config web UI listens on :80 by default (--http flag);
 # User=root above is what makes binding that port possible without extra
 # capability grants — see docs/deploy.md.
-ExecStart=/usr/local/bin/trainboard --production
+# M5 self-update: ExecStart runs the stable launcher, which selects the
+# active A/B slot and exec()s /opt/trainboard/slots/{a,b}/trainboard —
+# process replacement, so WatchdogSec/NotifyAccess below still govern the
+# payload. Add --manage-network here (after the wlan0 migration, see
+# docs/deploy.md) exactly as before; the launcher passes all flags through.
+ExecStart=/opt/trainboard/launcher --production
 Restart=always
 RestartSec=2
 User=root
