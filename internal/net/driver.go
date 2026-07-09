@@ -139,7 +139,18 @@ network={
 // stops it and when. It does not evaluate connectivity beyond dhclient's
 // initial exit (it daemonizes once it has a lease) — the layered Check owns
 // that.
-func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, renderConf func(STAConfig) ([]byte, error), writeFile func(string, []byte) error, sleep func(time.Duration)) error {
+//
+// assocPolls is the association-wait budget passed to pollStatus (issue
+// #54): hostapdDriver passes the shared pollAttempts (its own wpa_supplicant
+// instance is already running, so the default 10-poll/5s budget is enough),
+// while mode2Driver passes the larger staAssocPolls (20/10s) because its
+// AttemptSTA may itself have just spawned a cold wpa_supplicant (see
+// mode2Driver.ensureDaemon) — the same daemon-bring-up race issue #48 fixed
+// for StartAP's AP-active wait applies equally to the STA path's association
+// wait, and reusing the plain pollAttempts budget here was the root cause of
+// the STA-restart wedge (a cold-daemon STA attempt failing outright and
+// paying a full AP-fallback detour on every trainboard.service restart).
+func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, renderConf func(STAConfig) ([]byte, error), writeFile func(string, []byte) error, assocPolls int, sleep func(time.Duration)) error {
 	killDHClient(ctx, r, nil)
 
 	body, err := renderConf(sta)
@@ -155,7 +166,7 @@ func staAttempt(ctx context.Context, r Runner, iface string, sta STAConfig, rend
 	if _, err := r.Run(ctx, "wpa_cli", "-i", iface, "select_network", "0"); err != nil {
 		return fmt.Errorf("net: staAttempt: select_network 0: %w", err)
 	}
-	if err := pollStatus(ctx, r, iface, sleep, pollAttempts, func(kv map[string]string) bool {
+	if err := pollStatus(ctx, r, iface, sleep, assocPolls, func(kv map[string]string) bool {
 		return kv["wpa_state"] == "COMPLETED"
 	}, "STA not associated"); err != nil {
 		return fmt.Errorf("net: staAttempt: %w", err)

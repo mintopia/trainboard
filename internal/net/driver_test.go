@@ -24,7 +24,7 @@ func TestStaAttemptDHClientArgvIsDaemonModeWithPidfile(t *testing.T) {
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
 	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
 
-	err := staAttempt(context.Background(), r, "wlan0", STAConfig{SSID: "HomeWifi", PSK: "psk"}, staTestRender, func(string, []byte) error { return nil }, noopSleep)
+	err := staAttempt(context.Background(), r, "wlan0", STAConfig{SSID: "HomeWifi", PSK: "psk"}, staTestRender, func(string, []byte) error { return nil }, pollAttempts, noopSleep)
 	if err != nil {
 		t.Fatalf("staAttempt() = %v, want nil", err)
 	}
@@ -58,7 +58,7 @@ func TestStaAttemptKillsDHClientBeforeConfWrite(t *testing.T) {
 		return errors.New("disk full")
 	}
 
-	err := staAttempt(context.Background(), r, "wlan0", STAConfig{SSID: "HomeWifi", PSK: "psk"}, staTestRender, writeFile, noopSleep)
+	err := staAttempt(context.Background(), r, "wlan0", STAConfig{SSID: "HomeWifi", PSK: "psk"}, staTestRender, writeFile, pollAttempts, noopSleep)
 	if err == nil {
 		t.Fatal("staAttempt() = nil, want error (writeFile fails)")
 	}
@@ -84,7 +84,7 @@ func TestStaAttemptProceedsWhenDHClientKillFails(t *testing.T) {
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
 	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
 
-	err := staAttempt(context.Background(), r, "wlan0", STAConfig{SSID: "HomeWifi", PSK: "psk"}, staTestRender, func(string, []byte) error { return nil }, noopSleep)
+	err := staAttempt(context.Background(), r, "wlan0", STAConfig{SSID: "HomeWifi", PSK: "psk"}, staTestRender, func(string, []byte) error { return nil }, pollAttempts, noopSleep)
 	if err != nil {
 		t.Fatalf("staAttempt() = %v, want nil (a failed pkill must be tolerated)", err)
 	}

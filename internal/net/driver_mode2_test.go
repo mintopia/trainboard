@@ -135,14 +135,16 @@ func TestMode2DriverStartAPFailsWhenModeNeverAP(t *testing.T) {
 	}
 }
 
-// (c) AttemptSTA happy path kills any stale dhclient daemon first, then ends
-// with the daemon-mode `dhclient -v -pf <pidfile> wlan0` (issue #46).
-func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
+// (c) AttemptSTA happy path (warm daemon: wpa_supplicant already running)
+// ensures the daemon via ensureDaemon (branch decision + reconfigure, no
+// spawn — issue #54), then kills any stale dhclient daemon and ends with the
+// daemon-mode `dhclient -v -pf <pidfile> wlan0` (issue #46).
+func TestMode2DriverAttemptSTAWarmDaemonNoSpawnReconfigurePath(t *testing.T) {
 	r := NewFakeRunner()
-	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
-	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
-	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
+	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
 
 	d, fw, _ := newTestMode2Driver(r)
@@ -157,19 +159,28 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	if len(calls) == 0 || calls[len(calls)-1] != wantLast {
 		t.Fatalf("last call = %q, want %q (calls: %v)", calls[len(calls)-1], wantLast, calls)
 	}
-	if calls[0] != "pkill -F "+dhclientPidfile+" dhclient" {
-		t.Fatalf("first call = %q, want the kill-before-start pkill (calls: %v)", calls[0], calls)
+	if calls[0] != "wpa_cli -i wlan0 status" {
+		t.Fatalf("first call = %q, want ensureDaemon's branch-decision status (calls: %v)", calls[0], calls)
 	}
+	for _, c := range calls {
+		if strings.HasPrefix(c, "wpa_supplicant -B") {
+			t.Fatalf("Calls() contains a daemon-spawn call, want the already-running branch (no spawn): %v", calls)
+		}
+	}
+
+	// ensureDaemon writes the conf once (before it decides whether to spawn),
+	// and staAttempt writes it again itself (idempotent on the already-running
+	// branch) — see mode2Driver.AttemptSTA's doc comment.
 	writes := fw.writes()
-	if len(writes) != 1 {
-		t.Fatalf("writeFile called %d times, want 1", len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("writeFile called %d times, want 2 (pre-ensureDaemon write + staAttempt's own)", len(writes))
 	}
 
 	// The mode2 conf is a single file holding both the STA and AP network
 	// blocks (switched between via select_network) — see mode2Driver's doc
 	// comment. A live reconfigure during AttemptSTA must not drop the AP
 	// block, or a subsequent StartAP would have nothing to select.
-	conf := string(writes[0].data)
+	conf := string(writes[len(writes)-1].data)
 	for _, want := range []string{`id_str="sta"`, `id_str="ap"`, "mode=2"} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("AttemptSTA conf missing %q; conf must retain the AP block:\n%s", want, conf)
@@ -177,13 +188,93 @@ func TestMode2DriverAttemptSTAHappyPathEndsWithDHClient(t *testing.T) {
 	}
 }
 
+// (c2) AttemptSTA's cold-daemon path (issue #54): when wpa_supplicant is not
+// running (e.g. trainboard.service just restarted and killed it via
+// KillMode=control-group), AttemptSTA must ensure it — spawn, then wait for
+// the ctrl socket — exactly as StartAP already does, rather than racing
+// select_network/association against a daemon that isn't listening yet.
+func TestMode2DriverAttemptSTAColdDaemonSpawnsWaitsThenAssociates(t *testing.T) {
+	base := NewFakeRunner()
+	base.Script("wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", "", nil)
+	base.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+	base.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+	base.Script("wpa_cli -i wlan0 select_network 0", "", nil)
+	base.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "bound to 192.168.3.181\n", nil)
+
+	// sequencedStatusRunner (defined above): fails the first "wpa_cli status"
+	// call (ensureDaemon's branch decision — not running), succeeds every
+	// call after (the ctrl-socket-wait poll, then staAttempt's own assoc
+	// poll).
+	r := &sequencedStatusRunner{Runner: base, statusCmd: "wpa_cli -i wlan0 status"}
+	d, fw, _ := newTestMode2Driver(r)
+
+	err := d.AttemptSTA(context.Background(), STAConfig{SSID: "HomeWifi", PSK: "supersecretpsk"})
+	if err != nil {
+		t.Fatalf("AttemptSTA() = %v, want nil", err)
+	}
+
+	want := []string{
+		"wpa_cli -i wlan0 status",                                // ensureDaemon: branch decision, not running
+		"wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf", // cold spawn (issue #54)
+		"wpa_cli -i wlan0 status",                                // ensureDaemon: ctrl-socket ready poll
+		"pkill -F " + dhclientPidfile + " dhclient",              // staAttempt kill-before-start
+		"wpa_cli -i wlan0 reconfigure",                           // staAttempt's own reconfigure
+		"wpa_cli -i wlan0 select_network 0",
+		"wpa_cli -i wlan0 status",                     // staAttempt's assoc poll
+		"dhclient -v -pf " + dhclientPidfile + " wlan0",
+	}
+	if got := r.Calls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Calls() =\n%v\nwant\n%v", got, want)
+	}
+
+	if len(fw.writes()) != 2 {
+		t.Fatalf("writeFile called %d times, want 2 (pre-spawn conf write + staAttempt's own)", len(fw.writes()))
+	}
+
+	starts := 0
+	for _, c := range r.Calls() {
+		if c == "wpa_supplicant -B -i wlan0 -c /run/trainboard-wpa.conf" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("wpa_supplicant -B started %d times, want exactly 1", starts)
+	}
+}
+
+// (c3) AttemptSTA's association wait uses the extended staAssocPolls (20)
+// budget, not the plain pollAttempts (10) — issue #54: the observed
+// STA-restart failure needed more than pollAttempts*pollInterval (5s) to
+// associate after a daemon bring-up. Here association never completes, so
+// the poll must exhaust exactly staAssocPolls before failing.
+func TestMode2DriverAttemptSTAUsesExtendedAssocPollBudget(t *testing.T) {
+	r := NewFakeRunner()
+	r.Script("wpa_cli -i wlan0 status", "wpa_state=SCANNING\n", nil) // never COMPLETED
+	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
+
+	d, _, sl := newTestMode2Driver(r)
+
+	err := d.AttemptSTA(context.Background(), STAConfig{SSID: "HomeWifi", PSK: "supersecretpsk"})
+	if err == nil {
+		t.Fatal("AttemptSTA() = nil, want error (never associates)")
+	}
+	if !strings.Contains(err.Error(), "STA not associated after 20 polls") {
+		t.Fatalf("err = %v, want containing %q (staAssocPolls must be 20, not the default pollAttempts=10)", err, "STA not associated after 20 polls")
+	}
+	if got := sl.calls(); got != staAssocPolls-1 {
+		t.Fatalf("sleep called %d times, want %d", got, staAssocPolls-1)
+	}
+}
+
 // (d) AttemptSTA surfaces dhclient failure.
 func TestMode2DriverAttemptSTASurfacesDHClientFailure(t *testing.T) {
 	r := NewFakeRunner()
-	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
-	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
-	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("wpa_cli -i wlan0 status", "wpa_state=COMPLETED\n", nil)
+	r.Script("wpa_cli -i wlan0 reconfigure", "", nil)
+	r.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+	r.Script("wpa_cli -i wlan0 select_network 0", "", nil)
 	r.Script("dhclient -v -pf "+dhclientPidfile+" wlan0", "No DHCPOFFERS received.\n", errors.New("exit status 2"))
 
 	d, _, _ := newTestMode2Driver(r)

@@ -112,6 +112,12 @@ func (d *hostapdDriver) StopAP(ctx context.Context) error {
 // the shared wpa_cli/dhclient STA flow, writing an STA-only conf. The hostapd
 // driver has no AP block of its own to retain in that conf (hostapd owns the
 // AP separately, via renderHostapdConf).
+//
+// Unlike mode2Driver.AttemptSTA (issue #54), this driver has no ensureDaemon
+// step: it relies on a wpa_supplicant instance managed outside this driver
+// (hostapd owns the AP radio separately), so staAttempt gets the plain
+// pollAttempts association budget rather than mode2's extended
+// staAssocPolls — there is no cold-daemon-spawn race for this path to cover.
 func (d *hostapdDriver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	if err := d.StopAP(ctx); err != nil {
 		return fmt.Errorf("net: hostapd: AttemptSTA: %w", err)
@@ -120,7 +126,7 @@ func (d *hostapdDriver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 		body, err := renderSTAConf(s, d.country)
 		return []byte(body), err
 	}
-	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, d.sleep); err != nil {
+	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, pollAttempts, d.sleep); err != nil {
 		return fmt.Errorf("net: hostapd: AttemptSTA: %w", err)
 	}
 	return nil
