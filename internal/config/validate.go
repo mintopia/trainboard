@@ -41,6 +41,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: powersaving.brightness %d out of range 0-255", c.Powersaving.Brightness)
 		}
 	}
+	if c.Update.Channel != "" && c.Update.Channel != "stable" && c.Update.Channel != "prerelease" {
+		return fmt.Errorf("config: update.channel %q must be stable or prerelease", c.Update.Channel)
+	}
 	if err := c.validateWifi(); err != nil {
 		return err
 	}
