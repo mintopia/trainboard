@@ -108,10 +108,10 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
-	// GET /config is the settings list (this task); the old full-form
-	// handleConfigGet is no longer routed but stays defined (see
-	// handlers_config.go's doc comment on renderConfig) since POST /config
-	// below still targets it and Task 7 retires both together.
+	// GET /config is the settings list (this task); the old full-form GET
+	// handler (handleConfigGet) is deleted. Of the monolith only
+	// handleConfigPost — and the renderConfig/config.html error re-render it
+	// uses — remains, behind POST /config below, until Task 7 retires it.
 	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigList), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesPost),

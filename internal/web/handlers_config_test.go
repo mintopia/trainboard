@@ -363,6 +363,45 @@ func TestConfigDeparturesValidationError(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
+// TestConfigDeparturesValidationPreservesTypedReplacements covers the
+// replacements textarea itself failing to parse: the error re-render must
+// echo the user's typed (invalid) text back into the textarea, not the
+// stored value — a parse failure is exactly when the user most needs to see
+// what they actually typed in order to fix it.
+func TestConfigDeparturesValidationPreservesTypedReplacements(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseDeparturesForm()
+	form.Set("board.replacements", "badline")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/departures", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, ">badline</textarea>") {
+		t.Errorf("expected the typed replacements text preserved in the textarea: %s", body)
+	}
+	if !strings.Contains(body, "board.replacements: invalid line") {
+		t.Errorf("expected the replacements parse error message in the body: %s", body)
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
 // TestConfigDeparturesReplacementsRoundTrip covers the replacements textarea
 // specifically (migrated from the old monolith's GET /config assertion, now
 // that GET /config no longer renders it — see TestConfigGetRendersFormWithoutLeakingSecrets's

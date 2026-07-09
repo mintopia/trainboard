@@ -23,8 +23,10 @@ const applyDelay = 500 * time.Millisecond
 // --- Settings list + per-section pages (departures, display) ---------------
 //
 // GET /config now renders this settings list instead of the old monolith
-// form (configPageData/renderConfig/handleConfigGet below, kept for POST
-// /config's error re-render — see its doc comment). Each row links to a
+// form; that form's GET handler (handleConfigGet) is gone, and only
+// handleConfigPost/renderConfig/configPageData/config.html survive below for
+// POST /config's save + error re-render path until Task 7 retires them — see
+// configPageData's doc comment. Each row links to a
 // sub-page that owns a slice of config.Config and saves ONLY that slice: the
 // handler loads the full current config via Service.ConfigRedacted, mutates
 // just its own fields, and passes the WHOLE cfg back to Service.UpdateConfig
@@ -156,20 +158,26 @@ func (s *Server) handleConfigDeparturesGet(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "config unreadable", http.StatusInternalServerError)
 		return
 	}
-	s.renderConfigDepartures(w, r, cfg, "")
+	s.renderConfigDepartures(w, r, cfg, formatReplacements(cfg.Board.Replacements), "")
 }
 
 // renderConfigDepartures builds configDeparturesPageData from cfg (which, on
 // a validation failure, is the user's SUBMITTED values, not the stored
 // ones — see handleConfigDeparturesPost) and renders the departures page.
-func (s *Server) renderConfigDepartures(w http.ResponseWriter, r *http.Request, cfg config.Config, errMsg string) {
+// replacementsText is passed separately rather than derived from
+// cfg.Board.Replacements because the two legitimately diverge on a
+// replacements PARSE failure: cfg still holds the stored map (there is
+// nothing valid to overwrite it with), but the textarea must echo the raw
+// text the user actually typed so they can see and fix it. GET passes
+// formatReplacements(stored map); POST always passes the submitted raw text.
+func (s *Server) renderConfigDepartures(w http.ResponseWriter, r *http.Request, cfg config.Config, replacementsText, errMsg string) {
 	d := configDeparturesPageData{
 		basePage:         s.pageBase(r, "config"),
 		Cfg:              cfg,
 		Error:            errMsg,
 		PlatformsCSV:     joinCSV(cfg.Board.Platforms),
 		TOCsCSV:          joinCSV(cfg.Board.TOCs),
-		ReplacementsText: formatReplacements(cfg.Board.Replacements),
+		ReplacementsText: replacementsText,
 	}
 	d.OriginName, _ = stations.Name(cfg.Board.Origin)
 	d.DestinationName, _ = stations.Name(cfg.Board.Destination)
@@ -219,7 +227,8 @@ func (s *Server) handleConfigDeparturesPost(w http.ResponseWriter, r *http.Reque
 	cfg.Board.TimeWindowMinutes, perr = parseIntField(r, "board.timeWindowMinutes")
 	keepFirst(perr)
 
-	reps, perr := parseReplacements(r.PostFormValue("board.replacements"))
+	rawReps := r.PostFormValue("board.replacements")
+	reps, perr := parseReplacements(rawReps)
 	keepFirst(perr)
 	if perr == nil {
 		cfg.Board.Replacements = reps
@@ -233,7 +242,10 @@ func (s *Server) handleConfigDeparturesPost(w http.ResponseWriter, r *http.Reque
 		firstErr = s.svc.UpdateConfig(ConfigUpdate{Cfg: cfg})
 	}
 	if firstErr != nil {
-		s.renderConfigDepartures(w, r, cfg, firstErr.Error())
+		// rawReps, not formatReplacements(cfg.Board.Replacements): on a
+		// replacements parse failure cfg still holds the STORED map, and the
+		// re-render must echo what the user typed (see renderConfigDepartures).
+		s.renderConfigDepartures(w, r, cfg, rawReps, firstErr.Error())
 		return
 	}
 	s.scheduleApply()
