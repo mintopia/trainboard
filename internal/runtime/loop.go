@@ -17,6 +17,10 @@ const TickInterval = 40 * time.Millisecond
 // 256-entry ring keeps history instead of being flooded at 25fps.
 const timingEveryTicks = 375
 
+// updateHintLevel is the greyscale level (0-15) of the update-available
+// dot: visible if you look, invisible if you don't.
+const updateHintLevel = 6
+
 // Flusher is the panel seam: *display.SSD1322 in production, the PNG
 // preview transport on host, a fake in tests.
 type Flusher interface {
@@ -45,6 +49,7 @@ type Loop struct {
 	soak       *Soak // optional soak override; nil = feature not wired
 	soaking    bool  // previous tick was a soak frame (drives exit cleanup)
 	beat       func()
+	updateHint func() bool
 }
 
 // NewLoop wires a snapshot source (Poller.Snapshot) to a Flusher.
@@ -59,6 +64,14 @@ func (l *Loop) UseSoak(s *Soak) { l.soak = s }
 // SetBeat installs a heartbeat callback invoked once per rendered tick
 // (called from step). nil (the default) disables the hook.
 func (l *Loop) SetBeat(f func()) { l.beat = f }
+
+// SetUpdateHint installs the "update available" probe. When it reports
+// true, step overlays a dim 2x2 dot in the bottom-left corner after the
+// scene renders — the subtle on-screen hint from the M5 spec (#19). It is
+// an overlay on the framebuffer, not a scene element, so it cannot
+// interact with scene caching (ADR 0002); soak frames never draw it. nil
+// (the default) disables the feature.
+func (l *Loop) SetUpdateHint(f func() bool) { l.updateHint = f }
 
 // Run ticks until ctx cancels. A flush error is returned (fatal: the panel
 // is unreachable; systemd restarts the unit).
@@ -111,6 +124,9 @@ func (l *Loop) step(now time.Time) error {
 	l.fb.Clear()
 	renderStart := time.Now()
 	l.scene.Render(l.fb, l.tick, now)
+	if l.updateHint != nil && l.updateHint() {
+		drawUpdateHint(l.fb)
+	}
 	packed := l.fb.Pack()
 	renderDur := time.Since(renderStart)
 	flushStart := time.Now()
@@ -148,4 +164,13 @@ func (l *Loop) soakStep(now time.Time) error {
 		l.fb.Pix[i] = level
 	}
 	return l.fl.Flush(l.fb.Pack())
+}
+
+// drawUpdateHint lights the 2x2 bottom-left block. Bottom-left is unused
+// by every scene (the clock is centred, text rows sit above it), so the
+// dot never collides with content.
+func drawUpdateHint(fb *render.Framebuffer) {
+	for _, p := range [][2]int{{0, fb.H - 1}, {1, fb.H - 1}, {0, fb.H - 2}, {1, fb.H - 2}} {
+		fb.SetPixel(p[0], p[1], updateHintLevel)
+	}
 }
