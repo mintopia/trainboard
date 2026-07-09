@@ -9,6 +9,7 @@ import (
 
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/obs"
+	"github.com/mintopia/trainboard/internal/stations"
 	"github.com/mintopia/trainboard/internal/update"
 )
 
@@ -97,6 +98,20 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 // as JSON.
 func (s *Server) handleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, toStatusJSON(s.svc.Status()))
+}
+
+// handleAPIStation is GET /api/station?crs=XXX: an offline CRS-code →
+// station-name lookup (internal/stations), used by the web UI to resolve
+// codes as the user types. Deliberately public — no auth, no setupGate — so
+// the pre-auth setup pages can use it too (see setupGate's exemption list).
+func (s *Server) handleAPIStation(w http.ResponseWriter, r *http.Request) {
+	crs := r.URL.Query().Get("crs")
+	name, ok := stations.Name(crs)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "unknown station code")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"crs": strings.ToUpper(crs), "name": name})
 }
 
 // handleAPIConfigGet is GET /api/config: the redacted config, as JSON.

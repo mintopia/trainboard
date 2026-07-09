@@ -128,6 +128,12 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /actions/update/dismiss", chain(http.HandlerFunc(s.handleUpdateDismiss),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 
+	// GET /api/station is public (offline CRS→name lookup, used by pre-auth
+	// setup pages) — deliberately outside the requireAuth/apiJSONErrors chain
+	// below, and exempted from setupGate alongside /static/ and the portal
+	// probes.
+	s.mux.Handle("GET /api/station", http.HandlerFunc(s.handleAPIStation))
+
 	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
 	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
 	// also translate the shared csrfProtect/rateLimit middleware's plain-text
@@ -158,12 +164,14 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	return s
 }
 
-// setupGate redirects every request but /setup, /static/, and the
-// captive-portal probe endpoints to /setup while no admin password is
+// setupGate redirects every request but /setup, /static/, /api/station, and
+// the captive-portal probe endpoints to /setup while no admin password is
 // stored; once one exists, /setup itself 404s. The probe endpoints are
 // exempted like /static/ so they always reach their own AP-mode-aware
 // handlers instead of setupGate's generic redirect, which cannot answer the
-// OS-specific bodies those probes expect (see handlers_portal.go).
+// OS-specific bodies those probes expect (see handlers_portal.go). /api/station
+// is exempted because the pre-auth setup pages use it (CRS→name lookup as the
+// user types) and it carries no secrets — see handleAPIStation.
 //
 // While a password is still needed, the redirect target is normally the
 // relative "/setup" — but in AP mode (svc.Hotspot() != nil) a
@@ -174,7 +182,7 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 // displays.
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") || isPortalProbePath(r.URL.Path) {
+		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/api/station" || isPortalProbePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
