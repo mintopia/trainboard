@@ -140,6 +140,8 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	// 403/429 into the API's uniform {"error":"..."} shape.
 	s.mux.Handle("GET /api/status", chain(http.HandlerFunc(s.handleAPIStatus),
 		apiJSONErrors, requireAuth(s.sessions, true)))
+	s.mux.Handle("GET /api/board", chain(http.HandlerFunc(s.handleAPIBoard),
+		apiJSONErrors, requireAuth(s.sessions, true)))
 	s.mux.Handle("GET /api/config", chain(http.HandlerFunc(s.handleAPIConfigGet),
 		apiJSONErrors, requireAuth(s.sessions, true)))
 	s.mux.Handle("PUT /api/config", chain(http.HandlerFunc(s.handleAPIConfigPut),
