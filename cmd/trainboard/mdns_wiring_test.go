@@ -100,6 +100,7 @@ func TestNewWebServiceWiresMDNSState(t *testing.T) {
 			&runtime.Soak{},
 			webConnSeams{},
 			mdnsState,
+			nil, // upd: not under test here (see update_test.go)
 			slog.New(slog.NewTextHandler(io.Discard, nil)),
 		)
 	}

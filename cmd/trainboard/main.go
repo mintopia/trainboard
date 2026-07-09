@@ -22,6 +22,7 @@ import (
 	netconn "github.com/mintopia/trainboard/internal/net"
 	"github.com/mintopia/trainboard/internal/obs"
 	"github.com/mintopia/trainboard/internal/runtime"
+	"github.com/mintopia/trainboard/internal/update"
 	"github.com/mintopia/trainboard/internal/web"
 )
 
@@ -57,6 +58,8 @@ func run() error {
 	manageNetwork := flag.Bool("manage-network", false, "drive wlan0 (STA connect / AP fallback) via the connectivity manager — safety interlock: only enable once the target device has been migrated off ifupdown-managed WiFi (see docs/deploy.md, Connectivity & AP mode)")
 	mdnsEnabled := flag.Bool("mdns", true, "advertise the board via mDNS as trainboard-xxxx.local")
 	recovery := flag.Bool("recovery", false, "recovery mode: web UI + AP only (set by the launcher on double fault)")
+	slotsDir := flag.String("slots", update.DefaultSlotsDir, "A/B slot directory (self-update)")
+	statePath := flag.String("update-state", update.DefaultStatePath, "updater state file (self-update)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -130,7 +133,7 @@ func run() error {
 		// manual update apply, wired in the M5 main-wiring task), the AP
 		// fallback, and mDNS.
 		return runFaultLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest,
-			startedAt, soak, wd, *manageNetwork, *mdnsEnabled,
+			startedAt, soak, wd, *manageNetwork, *mdnsEnabled, *slotsDir, *statePath,
 			obs.FaultUpdateRecovery, errors.New("launcher double fault"))
 	}
 
@@ -140,9 +143,11 @@ func run() error {
 		// on-screen and idle; the operator fixes the file via the embedded
 		// web UI's /setup and /config, which stay reachable in this path
 		// too. systemd keeps us alive.
-		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, wd, *manageNetwork, *mdnsEnabled, err)
+		return runConfigErrorLoop(ctx, fl, fonts, log, *cfgPath, *httpAddr, ring, previewLatest, startedAt, soak, wd, *manageNetwork, *mdnsEnabled, *slotsDir, *statePath, err)
 	}
 	log.Info("config loaded", "config", cfg.Redacted().String())
+
+	upd := buildUpdater(cfg, true, *slotsDir, *statePath, log)
 
 	var fetcher runtime.Fetcher
 	if *fixture != "" {
@@ -179,11 +184,27 @@ func run() error {
 		startMDNS(ctx, mgr, wd, log)
 	}
 
-	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, mdnsState, log)
+	startWebServer(ctx, *cfgPath, *httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, mdnsState, upd, log)
 
 	loop := runtime.NewLoop(snapshotSrc, fl, cfg, fonts, buildinfo.Version(), log)
 	loop.SetBeat(wd.Register("render", renderBeatDeadline))
 	loop.UseSoak(soak)
+	loop.SetUpdateHint(upd.updateAvailable)
+	firstFrame := make(chan struct{})
+	loop.SetOnFirstFrame(func() { close(firstFrame) })
+	go update.Health{
+		FirstFrame: firstFrame,
+		Probe:      webProbe(probeURL(*httpAddr)),
+		Deadline:   healthDeadline,
+		StatePath:  *statePath,
+		Version:    buildinfo.Version(),
+		Log:        log,
+	}.Run(ctx)
+	go upd.checker.Run(ctx, func() {
+		log.Info("auto-applied update: exiting for restart into new slot")
+		os.Exit(0)
+	})
+
 	log.Info("starting render loop", "version", buildinfo.Version())
 	return loop.Run(ctx)
 }
@@ -201,7 +222,7 @@ func run() error {
 // side of Apply must not add a second delay of its own. systemd is expected
 // to restart the process. Reboot shells out to systemctl and reports the
 // error rather than the web handler having to guess.
-func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, mdnsState func() string, log *slog.Logger) *web.Service {
+func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, mdnsState func() string, upd *updaterSeams, log *slog.Logger) *web.Service {
 	actions := web.Actions{
 		Apply: func() {
 			log.Info("applying config: exiting for restart")
@@ -226,6 +247,9 @@ func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ri
 		LastSTAError:  conn.lastSTAError,
 		MDNSState:     mdnsState,
 	}
+	if upd != nil {
+		mergeUpdateSeams(&sources, &actions, upd)
+	}
 	return web.NewService(cfgPath, sources, actions, log)
 }
 
@@ -233,8 +257,8 @@ func newWebService(cfgPath string, snapshot func() *board.Snapshot, ring *obs.Ri
 // the background for the remainder of ctx's lifetime. It is shared by both
 // boot paths (valid config and the E04 error loop) so a virgin or broken
 // device always has /setup and /config reachable to fix itself.
-func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, mdnsState func() string, log *slog.Logger) {
-	svc := newWebService(cfgPath, snapshot, ring, previewLatest, startedAt, soak, conn, mdnsState, log)
+func startWebServer(ctx context.Context, cfgPath, httpAddr string, snapshot func() *board.Snapshot, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, conn webConnSeams, mdnsState func() string, upd *updaterSeams, log *slog.Logger) {
+	svc := newWebService(cfgPath, snapshot, ring, previewLatest, startedAt, soak, conn, mdnsState, upd, log)
 	srv := web.NewServer(svc, log)
 	log.Info("starting web server", "addr", httpAddr)
 	go func() {
@@ -265,8 +289,8 @@ func loadConfig(path string) (config.Config, error) {
 // runConfigErrorLoop renders the E04 fault scene and idles; see
 // runFaultLoop for the shared machinery (M5 generalised it so --recovery
 // can render E07 through the identical path).
-func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, err error) error {
-	return runFaultLoop(ctx, fl, fonts, log, path, httpAddr, ring, previewLatest, startedAt, soak, wd, manageNetwork, mdnsEnabled, obs.FaultConfigError, err)
+func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, slotsDir, statePath string, err error) error {
+	return runFaultLoop(ctx, fl, fonts, log, path, httpAddr, ring, previewLatest, startedAt, soak, wd, manageNetwork, mdnsEnabled, slotsDir, statePath, obs.FaultConfigError, err)
 }
 
 // runFaultLoop renders the given fault scene and idles forever (until ctx
@@ -292,10 +316,17 @@ func runConfigErrorLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fo
 // LoadRaw's un-validated parse still carries its real Web.PasswordHash and
 // WiFi credentials. The setup AP is open (no password — issue #44), so the
 // AP identity is just its SSID, derived from wlan0's MAC on every boot.
-func runFaultLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, fault obs.FaultCode, cause error) error {
+func runFaultLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, log *slog.Logger, path, httpAddr string, ring *obs.Ring, previewLatest func() []byte, startedAt time.Time, soak *runtime.Soak, wd *obs.Watchdog, manageNetwork, mdnsEnabled bool, slotsDir, statePath string, fault obs.FaultCode, cause error) error {
 	log.Error("fault loop", "fault", string(fault), "err", cause.Error(), "path", path)
 	snap := &board.Snapshot{State: board.StateError, Fault: fault}
 	snapshotSrc := func() *board.Snapshot { return snap }
+
+	// Recovery/E04 web UI can still manually check/apply updates (spec §2:
+	// "from the recovery web UI the operator can … manually apply a
+	// known-working update"), but nothing runs unattended here: the
+	// checker's Run loop is never started in a fault loop, and there is no
+	// Health promotion (no live poller/config to promote around).
+	upd := buildUpdater(config.Default(), true, slotsDir, statePath, log)
 
 	var conn webConnSeams // zero (all nil) unless manageNetwork wires the manager in
 	var mgr *netconn.Manager
@@ -319,7 +350,7 @@ func runFaultLoop(ctx context.Context, fl runtime.Flusher, fonts *board.Fonts, l
 		startMDNS(ctx, mgr, wd, log)
 	}
 
-	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, mdnsState, log)
+	startWebServer(ctx, path, httpAddr, snapshotSrc, ring, previewLatest, startedAt, soak, conn, mdnsState, upd, log)
 
 	loop := runtime.NewLoop(snapshotSrc, fl, config.Default(), fonts, buildinfo.Version(), log)
 	loop.SetBeat(wd.Register("render", renderBeatDeadline))
