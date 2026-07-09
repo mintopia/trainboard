@@ -32,6 +32,15 @@ type basePage struct {
 	Active   string // which tab: "status" | "config" | "actions" | ""
 }
 
+// pageBase fills the fields every logged-in page shares: LoggedIn is always
+// true (every caller sits behind requireAuth), CSRF comes from the session,
+// and active is the nav tab to highlight. Introduced by the config list +
+// departures/display sub-pages (this task); later tasks reuse it instead of
+// building basePage by hand.
+func (s *Server) pageBase(r *http.Request, active string) basePage {
+	return basePage{LoggedIn: true, CSRF: csrfFrom(r), Active: active}
+}
+
 type setupPageData struct {
 	basePage
 	Error string
@@ -99,7 +108,21 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
-	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigGet), requireAuth(s.sessions, false)))
+	// GET /config is the settings list (this task); the old full-form
+	// handleConfigGet is no longer routed but stays defined (see
+	// handlers_config.go's doc comment on renderConfig) since POST /config
+	// below still targets it and Task 7 retires both together.
+	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigList), requireAuth(s.sessions, false)))
+	s.mux.Handle("GET /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/display", chain(http.HandlerFunc(s.handleConfigDisplayGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/display", chain(http.HandlerFunc(s.handleConfigDisplayPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	// POST /config is the old monolith form's save route — deliberately left
+	// wired (see handlers_config.go): network/updates/admin fields have no
+	// dedicated sub-page yet, so this is still how they get saved from the
+	// HTML surface until Task 7. No template links to it any more.
 	s.mux.Handle("POST /config", chain(http.HandlerFunc(s.handleConfigPost),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
@@ -273,6 +296,12 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = statusTemplate
 	case "config":
 		t = configTemplate
+	case "configList":
+		t = configListTemplate
+	case "configDepartures":
+		t = configDeparturesTemplate
+	case "configDisplay":
+		t = configDisplayTemplate
 	case "applied":
 		t = appliedTemplate
 	case "actions":

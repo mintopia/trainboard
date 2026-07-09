@@ -1,0 +1,9 @@
+{{define "title"}}Configuration — Trainboard{{end}}
+{{define "content"}}
+<h2>Configuration</h2>
+<div class="setlist">
+{{range .Sections}}
+  <a class="setrow" href="/config/{{.Slug}}"><span><span class="t">{{.Title}}</span><div class="s">{{.Summary}}</div></span><span class="chev">&rsaquo;</span></a>
+{{end}}
+</div>
+{{end}}

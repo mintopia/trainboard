@@ -107,15 +107,30 @@ func TestE2EFullJourney(t *testing.T) {
 		t.Fatal("step3: session not found in store after setup")
 	}
 
-	// 4. POST /config changing refresh + setting Darwin token "tok-e2e" ->
-	// applied; Apply fired.
+	// 4a. POST /config/departures changing refresh -> 303, Apply fired. This
+	// is the new per-section route (this task); board.origin is resubmitted
+	// unchanged (PAD) since the departures form owns the whole board.*
+	// fieldset, not just refreshSeconds.
+	depForm := baseDeparturesForm()
+	depForm.Set("board.refreshSeconds", "90")
+	depForm.Set("csrf", csrf)
+	recDep := postForm(t, h, "/config/departures", depForm, cookie)
+	if recDep.Code != http.StatusSeeOther {
+		t.Fatalf("step4a POST /config/departures: want 303, got %d body=%s", recDep.Code, recDep.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	// 4b. POST /config setting Darwin token "tok-e2e" -> applied; Apply
+	// fired. darwin.token has no dedicated sub-page until Task 7, so it's
+	// still saved via the old monolith route (untouched by this task — see
+	// handlers_config.go's doc comments).
 	cfgForm := baseConfigForm()
-	cfgForm.Set("board.refreshSeconds", "90")
+	cfgForm.Set("board.refreshSeconds", "90") // keep step 4a's change; parseConfigForm parses every field unconditionally
 	cfgForm.Set("darwin.token", "tok-e2e")
 	cfgForm.Set("csrf", csrf)
 	recCfg := postForm(t, h, "/config", cfgForm, cookie)
 	if recCfg.Code != http.StatusOK {
-		t.Fatalf("step4 POST /config: want 200, got %d body=%s", recCfg.Code, recCfg.Body.String())
+		t.Fatalf("step4b POST /config: want 200, got %d body=%s", recCfg.Code, recCfg.Body.String())
 	}
 	awaitApply(t, applyCh)
 
@@ -300,6 +315,10 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/events                        | GET    | 302 /login   | 200
 //	/config                        | GET    | 302 /login   | 200
 //	/config                        | POST   | 302 /login   | 200
+//	/config/departures             | GET    | 302 /login   | 200
+//	/config/departures             | POST   | 302 /login   | 303 /config
+//	/config/display                | GET    | 302 /login   | 200
+//	/config/display                | POST   | 302 /login   | 303 /config
 //	/actions                       | GET    | 302 /login   | 200
 //	/actions/restart               | POST   | 302 /login   | 200
 //	/actions/reboot                | POST   | 302 /login   | 200
@@ -343,6 +362,10 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "GET /events", method: http.MethodGet, path: "/events", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /config", method: http.MethodGet, path: "/config", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /config", method: http.MethodPost, path: "/config", body: htmlForm(baseConfigForm()), wantAuthedStatus: http.StatusOK, appliesAsync: true},
+		{name: "GET /config/departures", method: http.MethodGet, path: "/config/departures", body: noBody, wantAuthedStatus: http.StatusOK},
+		{name: "POST /config/departures", method: http.MethodPost, path: "/config/departures", body: htmlForm(baseDeparturesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "GET /config/display", method: http.MethodGet, path: "/config/display", body: noBody, wantAuthedStatus: http.StatusOK},
+		{name: "POST /config/display", method: http.MethodPost, path: "/config/display", body: htmlForm(baseDisplayForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
 		{name: "GET /actions", method: http.MethodGet, path: "/actions", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /actions/restart", method: http.MethodPost, path: "/actions/restart", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK, appliesAsync: true},
 		{name: "POST /actions/reboot", method: http.MethodPost, path: "/actions/reboot", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},

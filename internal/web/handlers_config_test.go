@@ -186,9 +186,10 @@ func assertApplyNotCalled(t *testing.T, ch chan struct{}) {
 	}
 }
 
-// (a) GET /config authed -> 200; the token/psk inputs are present but with
-// EMPTY value attributes (never pre-filled), and the literal stored token is
-// never present anywhere in the body.
+// (a) GET /config authed -> 200 (the settings list, this task). It must
+// never leak the stored Darwin token — the list only ever renders section
+// summaries, never a raw secret — and must link to every section, including
+// the departures/display sub-pages this task adds.
 func TestConfigGetRendersFormWithoutLeakingSecrets(t *testing.T) {
 	srv, _, _, _ := newConfigTestServer(t)
 	cookie, _ := loginAs(t, srv, configTestPassword)
@@ -199,24 +200,297 @@ func TestConfigGetRendersFormWithoutLeakingSecrets(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if strings.Contains(body, configTestToken) {
-		t.Fatalf("stored Darwin token leaked into config page body: %s", body)
+		t.Fatalf("stored Darwin token leaked into config list page body: %s", body)
 	}
-	if !strings.Contains(body, `name="darwin.token"`) {
-		t.Fatalf("expected darwin.token input in body: %s", body)
+	for _, want := range []string{"/config/departures", "/config/display"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("config list missing link %q: %s", want, body)
+		}
 	}
-	if !strings.Contains(body, `name="wifi.psk"`) {
-		t.Fatalf("expected wifi.psk input in body: %s", body)
+}
+
+// TestConfigListShowsSummaries pins the settings list's contract: every
+// section is listed and linked, including network/updates/admin, which have
+// no sub-page of their own until Task 7 (their links 404 until then — see
+// handleConfigList's doc comment).
+func TestConfigListShowsSummaries(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	// Neither secret input carries a pre-filled value attribute.
-	if strings.Contains(body, `name="darwin.token" value=`) {
-		t.Fatalf("darwin.token input must not have a value attribute: %s", body)
+	body := rec.Body.String()
+	for _, want := range []string{"/config/departures", "/config/display", "/config/network", "/config/updates", "/config/admin"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("config list missing link %q", want)
+		}
 	}
-	if strings.Contains(body, `name="wifi.psk" value=`) {
-		t.Fatalf("wifi.psk input must not have a value attribute: %s", body)
+	// The baseline config (origin PAD) resolves to a station name in the
+	// departures summary.
+	if !strings.Contains(body, "London Paddington") {
+		t.Errorf("expected departures summary to resolve PAD to a station name: %s", body)
 	}
-	if !strings.Contains(body, `placeholder="unchanged"`) {
-		t.Fatalf("expected 'unchanged' placeholder on secret inputs: %s", body)
+}
+
+// baseDeparturesForm returns a fresh, fully-populated, valid form matching
+// the baseline config written by newConfigTestServer's departures fields
+// (origin PAD, config.Default()'s Board defaults). Callers mutate the
+// returned map per-test.
+func baseDeparturesForm() url.Values {
+	return url.Values{
+		"board.origin":            {"PAD"},
+		"board.destination":       {""},
+		"board.platforms":         {""},
+		"board.tocs":              {""},
+		"board.services":          {"3"},
+		"board.cutoffHours":       {"8"},
+		"board.refreshSeconds":    {"60"},
+		"board.timeWindowMinutes": {"120"},
+		"board.replacements":      {""},
 	}
+}
+
+// baseDisplayForm returns a fresh, fully-populated, valid form matching the
+// baseline config written by newConfigTestServer's display fields
+// (config.Default()'s Powersaving/Layout defaults).
+func baseDisplayForm() url.Values {
+	return url.Values{
+		"powersaving.start":      {"23:00"},
+		"powersaving.end":        {"07:00"},
+		"powersaving.brightness": {"32"},
+		"layout.times":           {"on"},
+		// powersaving.enabled deliberately absent: config.Default() has it
+		// false, and checkbox semantics say an absent key means false.
+	}
+}
+
+// TestConfigDepartures covers GET pre-filling the departures form and a
+// valid POST saving a changed origin, scheduling Actions.Apply.
+func TestConfigDepartures(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/departures", cookie)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="board.origin"`) {
+		t.Fatalf("GET form: code %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	form := baseDeparturesForm()
+	form.Set("board.origin", "EUS")
+	form.Set("board.destination", "MAN")
+	form.Set("board.platforms", "1, 2")
+	form.Set("board.tocs", "GW, XR")
+	form.Set("board.refreshSeconds", "30")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/departures", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Board.Origin != "EUS" || cur.Board.RefreshSeconds != 30 {
+		t.Fatalf("Board = %+v, want origin EUS refreshSeconds 30", cur.Board)
+	}
+	if cur.Board.Destination != "MAN" {
+		t.Fatalf("Board.Destination = %q, want MAN", cur.Board.Destination)
+	}
+	if !reflect.DeepEqual(cur.Board.Platforms, []string{"1", "2"}) {
+		t.Fatalf("Board.Platforms = %#v, want [1 2]", cur.Board.Platforms)
+	}
+	if !reflect.DeepEqual(cur.Board.TOCs, []string{"GW", "XR"}) {
+		t.Fatalf("Board.TOCs = %#v, want [GW XR]", cur.Board.TOCs)
+	}
+	// Darwin token (a different section) must pass through untouched.
+	if cur.Darwin.Token != configTestToken {
+		t.Fatalf("Darwin.Token = %q, want unchanged %q (departures POST must not touch other sections)", cur.Darwin.Token, configTestToken)
+	}
+
+	// GET must pre-fill every field from what was just saved, including the
+	// resolved destination station name.
+	recGet := getPath(t, srv.Handler(), "/config/departures", cookie)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("GET after save: want 200, got %d", recGet.Code)
+	}
+	body := recGet.Body.String()
+	for _, want := range []string{`value="EUS"`, `value="MAN"`, `value="1, 2"`, `value="GW, XR"`, `value="30"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s in re-rendered form: %s", want, body)
+		}
+	}
+}
+
+// TestConfigDeparturesValidationError covers an unrecognised origin CRS:
+// re-render (200, not a redirect) with an error naming the station code, and
+// the user's other typed values preserved.
+func TestConfigDeparturesValidationError(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseDeparturesForm()
+	form.Set("board.origin", "XX")
+	form.Set("board.refreshSeconds", "90")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/departures", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "station code") {
+		t.Errorf("expected a validation message naming the station code: %s", body)
+	}
+	if !strings.Contains(body, `value="90"`) {
+		t.Errorf("expected refreshSeconds=90 preserved in re-rendered form: %s", body)
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigDeparturesReplacementsRoundTrip covers the replacements textarea
+// specifically (migrated from the old monolith's GET /config assertion, now
+// that GET /config no longer renders it — see TestConfigGetRendersFormWithoutLeakingSecrets's
+// updated doc comment).
+func TestConfigDeparturesReplacementsRoundTrip(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := baseDeparturesForm()
+	form.Set("board.replacements", "Bristol Temple Meads=Bristol TM")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/departures", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("want 303, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cur.Board.Replacements["Bristol Temple Meads"]; got != "Bristol TM" {
+		t.Fatalf("Replacements[Bristol Temple Meads] = %q, want %q", got, "Bristol TM")
+	}
+
+	rec2 := getPath(t, srv.Handler(), "/config/departures", cookie)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec2.Code)
+	}
+	if !strings.Contains(rec2.Body.String(), "Bristol Temple Meads=Bristol TM") {
+		t.Fatalf("expected replacements textarea to round-trip, got: %s", rec2.Body.String())
+	}
+}
+
+// TestConfigDisplay covers GET pre-filling the display form and a valid POST
+// saving changed powersaving/layout fields, scheduling Actions.Apply.
+func TestConfigDisplay(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/display", cookie)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="powersaving.brightness"`) {
+		t.Fatalf("GET form: code %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	form := baseDisplayForm()
+	form.Set("powersaving.enabled", "on")
+	form.Set("powersaving.start", "22:30")
+	form.Set("powersaving.end", "06:15")
+	form.Set("powersaving.brightness", "64")
+	form.Del("layout.times")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/display", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cur.Powersaving.Enabled || cur.Powersaving.Brightness != 64 {
+		t.Fatalf("Powersaving = %+v, want Enabled=true Brightness=64", cur.Powersaving)
+	}
+	if cur.Powersaving.Start != "22:30" || cur.Powersaving.End != "06:15" {
+		t.Fatalf("Powersaving window = %s-%s, want 22:30-06:15", cur.Powersaving.Start, cur.Powersaving.End)
+	}
+	if cur.Layout.Times {
+		t.Fatalf("Layout.Times = true, want false (checkbox key absent)")
+	}
+	// Board (a different section) must pass through untouched.
+	if cur.Board.Origin != "PAD" {
+		t.Fatalf("Board.Origin = %q, want unchanged %q (display POST must not touch other sections)", cur.Board.Origin, "PAD")
+	}
+
+	// GET must pre-fill every field from what was just saved.
+	recGet := getPath(t, srv.Handler(), "/config/display", cookie)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("GET after save: want 200, got %d", recGet.Code)
+	}
+	body := recGet.Body.String()
+	for _, want := range []string{`name="powersaving.enabled" checked`, `value="22:30"`, `value="06:15"`, `value="64"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s in re-rendered form: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `name="layout.times" checked`) {
+		t.Errorf("expected layout.times unchecked in re-rendered form: %s", body)
+	}
+}
+
+// TestConfigDisplayValidationError covers an invalid HH:MM value while
+// powersaving is enabled: re-render (200) with the error, typed values
+// preserved, file unchanged.
+func TestConfigDisplayValidationError(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseDisplayForm()
+	form.Set("powersaving.enabled", "on")
+	form.Set("powersaving.start", "not-a-time")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/display", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "powersaving") {
+		t.Errorf("expected a powersaving validation message: %s", body)
+	}
+	if !strings.Contains(body, `value="not-a-time"`) {
+		t.Errorf("expected the invalid start value preserved in re-rendered form: %s", body)
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
 }
 
 // (b) unauthenticated GET /config redirects to /login.
@@ -290,22 +564,10 @@ func TestConfigPostRoundTripsUpdateFields(t *testing.T) {
 	if !cur.Update.DisableChecks {
 		t.Fatal("update.checks unchecked must set DisableChecks = true")
 	}
-
-	// GET /config must pre-fill the form from what was just saved.
-	recGet := getPath(t, srv.Handler(), "/config", cookie)
-	if recGet.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", recGet.Code, recGet.Body.String())
-	}
-	body := recGet.Body.String()
-	if !strings.Contains(body, `<option value="prerelease" selected>prerelease</option>`) {
-		t.Fatalf("expected prerelease selected in body: %s", body)
-	}
-	if !strings.Contains(body, `name="update.autoApply" checked`) {
-		t.Fatalf("expected update.autoApply checked in body: %s", body)
-	}
-	if strings.Contains(body, `name="update.checks" checked`) {
-		t.Fatalf("expected update.checks unchecked in body: %s", body)
-	}
+	// The disk-based checks above already confirm the round trip; there is
+	// no GET-based re-render check here any more because GET /config now
+	// serves the settings list (this task), not the old monolith form —
+	// there is no dedicated updates sub-page to pre-fill from until Task 7.
 }
 
 // (d) POST /config with blank secret fields keeps the stored Darwin token
@@ -502,38 +764,10 @@ func TestConfigPostShortPasswordRerendersWithError(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
-// (h) the replacements textarea round-trips: "Bristol Temple Meads=Bristol
-// TM" submitted, saved, reloaded from the redacted config, and re-rendered
-// in the textarea in the same "from=to" form.
-func TestConfigReplacementsRoundTrip(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	form := baseConfigForm()
-	form.Set("board.replacements", "Bristol Temple Meads=Bristol TM")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	awaitApply(t, applyCh)
-
-	cur, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cur.Board.Replacements["Bristol Temple Meads"]; got != "Bristol TM" {
-		t.Fatalf("Replacements[Bristol Temple Meads] = %q, want %q", got, "Bristol TM")
-	}
-
-	rec2 := getPath(t, srv.Handler(), "/config", cookie)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec2.Code)
-	}
-	if !strings.Contains(rec2.Body.String(), "Bristol Temple Meads=Bristol TM") {
-		t.Fatalf("expected replacements textarea to round-trip, got: %s", rec2.Body.String())
-	}
-}
+// The replacements-textarea round trip (POST -> saved -> re-rendered) is
+// covered by TestConfigDeparturesReplacementsRoundTrip now that board.* is a
+// dedicated sub-page (this task) instead of a fieldset on the monolith form
+// GET /config used to serve.
 
 // --- parsing helper unit tests ---
 

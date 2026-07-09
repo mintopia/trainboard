@@ -1,0 +1,27 @@
+{{define "title"}}Display — Trainboard{{end}}
+{{define "content"}}
+<div class="backrow"><a href="/config">&lsaquo; Configuration</a></div>
+<h3>Display</h3>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="/config/display">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label class="check"><input type="checkbox" name="powersaving.enabled" {{if .Cfg.Powersaving.Enabled}}checked{{end}}> Dim the panel overnight</label>
+<label class="f">Dim from
+  <input type="text" name="powersaving.start" value="{{.Cfg.Powersaving.Start}}" maxlength="5" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="23:00" style="max-width:8rem">
+  <div class="hint">24-hour HH:MM</div>
+</label>
+<label class="f">Until
+  <input type="text" name="powersaving.end" value="{{.Cfg.Powersaving.End}}" maxlength="5" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="07:00" style="max-width:8rem">
+  <div class="hint">24-hour HH:MM</div>
+</label>
+<label class="f">Dimmed brightness
+  <input type="number" name="powersaving.brightness" value="{{.Cfg.Powersaving.Brightness}}" min="0" max="255" style="max-width:8rem">
+  <div class="hint">0-255</div>
+</label>
+<label class="check"><input type="checkbox" name="layout.times" {{if .Cfg.Layout.Times}}checked{{end}}> Show calling-point times on the panel</label>
+<div class="savebar">
+  <span class="consequence">Restarts the board &mdash; departures pause ~15 seconds.</span>
+  <button class="btn" type="submit">Save</button>
+</div>
+</form>
+{{end}}

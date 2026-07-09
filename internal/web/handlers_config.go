@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mintopia/trainboard/internal/config"
+	"github.com/mintopia/trainboard/internal/stations"
 )
 
 // applyDelay is how long after rendering the applied page the server waits
@@ -19,11 +20,304 @@ import (
 // Production's Actions.Apply is an immediate os.Exit, wired up by main.
 const applyDelay = 500 * time.Millisecond
 
-// configPageData is the render data for the config editor: basePage
-// (nav/CSRF), the config to pre-fill from (secrets never populated — see
-// config.html, which never references Cfg.Darwin.Token/Cfg.Wifi.PSK), any
-// validation error to display, and the stringified forms of the fields that
-// don't map 1:1 onto an HTML input (CSV lists, the replacements map).
+// --- Settings list + per-section pages (departures, display) ---------------
+//
+// GET /config now renders this settings list instead of the old monolith
+// form (configPageData/renderConfig/handleConfigGet below, kept for POST
+// /config's error re-render — see its doc comment). Each row links to a
+// sub-page that owns a slice of config.Config and saves ONLY that slice: the
+// handler loads the full current config via Service.ConfigRedacted, mutates
+// just its own fields, and passes the WHOLE cfg back to Service.UpdateConfig
+// — which is safe because UpdateConfig only ever re-persists Board, Layout,
+// Powersaving, Wifi.SSID, and Update from ConfigUpdate.Cfg (never
+// Darwin.Token or Wifi.PSK, which stay write-only via NewToken/NewWifiPSK),
+// so a redacted round-trip through this handler can't corrupt or leak a
+// secret even though ConfigRedacted's Darwin.Token/Wifi.PSK values are
+// "***REDACTED***" placeholders rather than the real secrets.
+
+// configListPageData is GET /config's render data: just the section
+// summaries, one row per settings sub-page.
+type configListPageData struct {
+	basePage
+	Sections []configSectionSummary
+}
+
+// configSectionSummary is one row of the settings list: Slug builds the link
+// (/config/{{Slug}}), Title is the row's heading, Summary is a one-line
+// preview of that section's current values.
+type configSectionSummary struct {
+	Slug, Title, Summary string
+}
+
+// handleConfigList renders GET /config: the settings list. Network, Updates,
+// and Admin are listed (and linked) even though their sub-pages don't exist
+// until Task 7 — the link and summary are harmless ahead of that page
+// existing (they simply 404 until then), and listing every section here now
+// means Task 7 only has to add the page, not touch this list.
+func (s *Server) handleConfigList(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.svc.ConfigRedacted()
+	if err != nil {
+		http.Error(w, "config unreadable", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, "configList", configListPageData{
+		basePage: s.pageBase(r, "config"),
+		Sections: []configSectionSummary{
+			{"departures", "Departures", summarizeDepartures(cfg)},
+			{"display", "Display", summarizeDisplay(cfg)},
+			{"network", "Network", summarizeNetwork(cfg)},
+			{"updates", "Updates", summarizeUpdates(cfg)},
+			{"admin", "Admin", "Password"},
+		},
+	})
+}
+
+// summarizeDepartures renders the departures section's one-line preview:
+// origin (resolved to a station name where recognised) → destination, plus
+// the service count. An unset origin (a still-provisioning device) reads as
+// "Not set" rather than falling through to " · 0 services".
+func summarizeDepartures(cfg config.Config) string {
+	if cfg.Board.Origin == "" {
+		return "Not set"
+	}
+	origin := cfg.Board.Origin
+	if name, ok := stations.Name(origin); ok {
+		origin = name
+	}
+	sum := origin
+	if cfg.Board.Destination != "" {
+		dest := cfg.Board.Destination
+		if name, ok := stations.Name(dest); ok {
+			dest = name
+		}
+		sum += " → " + dest
+	}
+	return fmt.Sprintf("%s · %d services", sum, cfg.Board.Services)
+}
+
+// summarizeDisplay renders the display section's one-line preview.
+func summarizeDisplay(cfg config.Config) string {
+	if !cfg.Powersaving.Enabled {
+		return "Full brightness all day"
+	}
+	return fmt.Sprintf("Dim %s–%s · brightness %d", cfg.Powersaving.Start, cfg.Powersaving.End, cfg.Powersaving.Brightness)
+}
+
+// summarizeNetwork renders the network section's one-line preview. It never
+// renders the WiFi PSK or Darwin token themselves — only whether a token is
+// present — which is safe against ConfigRedacted's masking: a redacted
+// token is "***REDACTED***" (non-empty), so a real stored secret still
+// reads as "set" here.
+func summarizeNetwork(cfg config.Config) string {
+	ssid := cfg.Wifi.SSID
+	if ssid == "" {
+		ssid = "WiFi not set"
+	}
+	token := "Darwin token not set"
+	if cfg.Darwin.Token != "" {
+		token = "Darwin token set"
+	}
+	return ssid + " · " + token
+}
+
+// summarizeUpdates renders the updates section's one-line preview.
+func summarizeUpdates(cfg config.Config) string {
+	sum := cfg.Update.EffectiveChannel()
+	if cfg.Update.AutoApply {
+		sum += " · automatic overnight"
+	}
+	if cfg.Update.DisableChecks {
+		sum += " · checks off"
+	}
+	return sum
+}
+
+// configDeparturesPageData is GET/POST /config/departures's render data.
+// OriginName/DestinationName are resolved once at render time so the page
+// shows a station name next to the CRS code without a round trip through
+// htmx on first load; the htmx-driven /api/station lookup takes over from
+// there as the user edits either field.
+type configDeparturesPageData struct {
+	basePage
+	Cfg              config.Config
+	Error            string
+	PlatformsCSV     string
+	TOCsCSV          string
+	ReplacementsText string
+	OriginName       string
+	DestinationName  string
+}
+
+// handleConfigDeparturesGet renders the departures form pre-filled from the
+// stored config.
+func (s *Server) handleConfigDeparturesGet(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.svc.ConfigRedacted()
+	if err != nil {
+		http.Error(w, "config unreadable", http.StatusInternalServerError)
+		return
+	}
+	s.renderConfigDepartures(w, r, cfg, "")
+}
+
+// renderConfigDepartures builds configDeparturesPageData from cfg (which, on
+// a validation failure, is the user's SUBMITTED values, not the stored
+// ones — see handleConfigDeparturesPost) and renders the departures page.
+func (s *Server) renderConfigDepartures(w http.ResponseWriter, r *http.Request, cfg config.Config, errMsg string) {
+	d := configDeparturesPageData{
+		basePage:         s.pageBase(r, "config"),
+		Cfg:              cfg,
+		Error:            errMsg,
+		PlatformsCSV:     joinCSV(cfg.Board.Platforms),
+		TOCsCSV:          joinCSV(cfg.Board.TOCs),
+		ReplacementsText: formatReplacements(cfg.Board.Replacements),
+	}
+	d.OriginName, _ = stations.Name(cfg.Board.Origin)
+	d.DestinationName, _ = stations.Name(cfg.Board.Destination)
+	s.render(w, "configDepartures", d)
+}
+
+// handleConfigDeparturesPost parses ONLY the board.* fields onto a freshly
+// loaded copy of the stored config (so Layout/Powersaving/Wifi/Update/Darwin
+// pass through untouched — see this section's top-of-file doc comment) and
+// saves it. Every field is parsed unconditionally, mirroring
+// parseConfigForm's "only the first error wins, but every field still
+// populates cfg" contract, so a re-render on error preserves every value the
+// user typed. Origin is additionally checked against the offline stations
+// table (not just isCRS's 3-letter-shape check inside config.Validate) so an
+// unrecognised code gets a friendly, code-naming error instead of the
+// generic CRS-shape one.
+func (s *Server) handleConfigDeparturesPost(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	cfg, err := s.svc.ConfigRedacted()
+	if err != nil {
+		http.Error(w, "config unreadable", http.StatusInternalServerError)
+		return
+	}
+
+	var firstErr error
+	keepFirst := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	cfg.Board.Origin = strings.ToUpper(strings.TrimSpace(r.PostFormValue("board.origin")))
+	cfg.Board.Destination = strings.ToUpper(strings.TrimSpace(r.PostFormValue("board.destination")))
+	cfg.Board.Platforms = splitCSV(r.PostFormValue("board.platforms"))
+	cfg.Board.TOCs = splitCSV(r.PostFormValue("board.tocs"))
+
+	var perr error
+	cfg.Board.Services, perr = parseIntField(r, "board.services")
+	keepFirst(perr)
+	cfg.Board.CutoffHours, perr = parseIntField(r, "board.cutoffHours")
+	keepFirst(perr)
+	cfg.Board.RefreshSeconds, perr = parseIntField(r, "board.refreshSeconds")
+	keepFirst(perr)
+	cfg.Board.TimeWindowMinutes, perr = parseIntField(r, "board.timeWindowMinutes")
+	keepFirst(perr)
+
+	reps, perr := parseReplacements(r.PostFormValue("board.replacements"))
+	keepFirst(perr)
+	if perr == nil {
+		cfg.Board.Replacements = reps
+	}
+
+	if _, ok := stations.Name(cfg.Board.Origin); !ok && firstErr == nil {
+		firstErr = fmt.Errorf("%q is not a station code we recognise — 3 letters, e.g. PAD", cfg.Board.Origin)
+	}
+
+	if firstErr == nil {
+		firstErr = s.svc.UpdateConfig(ConfigUpdate{Cfg: cfg})
+	}
+	if firstErr != nil {
+		s.renderConfigDepartures(w, r, cfg, firstErr.Error())
+		return
+	}
+	s.scheduleApply()
+	// TODO(task-8): redirect to /restarting once that page exists.
+	http.Redirect(w, r, "/config", http.StatusSeeOther)
+}
+
+// configDisplayPageData is GET/POST /config/display's render data.
+type configDisplayPageData struct {
+	basePage
+	Cfg   config.Config
+	Error string
+}
+
+// handleConfigDisplayGet renders the display form pre-filled from the stored
+// config.
+func (s *Server) handleConfigDisplayGet(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.svc.ConfigRedacted()
+	if err != nil {
+		http.Error(w, "config unreadable", http.StatusInternalServerError)
+		return
+	}
+	s.renderConfigDisplay(w, r, cfg, "")
+}
+
+// renderConfigDisplay builds configDisplayPageData and renders the display
+// page — see renderConfigDepartures's doc comment for why cfg carries the
+// user's submitted values (not the stored ones) on a validation failure.
+func (s *Server) renderConfigDisplay(w http.ResponseWriter, r *http.Request, cfg config.Config, errMsg string) {
+	s.render(w, "configDisplay", configDisplayPageData{
+		basePage: s.pageBase(r, "config"),
+		Cfg:      cfg,
+		Error:    errMsg,
+	})
+}
+
+// handleConfigDisplayPost parses ONLY the powersaving.* and layout.times
+// fields onto a freshly loaded copy of the stored config and saves it — see
+// this section's top-of-file doc comment for why that's safe for the fields
+// it doesn't touch.
+func (s *Server) handleConfigDisplayPost(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	cfg, err := s.svc.ConfigRedacted()
+	if err != nil {
+		http.Error(w, "config unreadable", http.StatusInternalServerError)
+		return
+	}
+
+	cfg.Powersaving.Enabled = formHasKey(r, "powersaving.enabled")
+	cfg.Powersaving.Start = strings.TrimSpace(r.PostFormValue("powersaving.start"))
+	cfg.Powersaving.End = strings.TrimSpace(r.PostFormValue("powersaving.end"))
+	cfg.Layout.Times = formHasKey(r, "layout.times")
+
+	brightness, perr := parseIntField(r, "powersaving.brightness")
+	cfg.Powersaving.Brightness = brightness
+
+	if perr == nil {
+		perr = s.svc.UpdateConfig(ConfigUpdate{Cfg: cfg})
+	}
+	if perr != nil {
+		s.renderConfigDisplay(w, r, cfg, perr.Error())
+		return
+	}
+	s.scheduleApply()
+	// TODO(task-8): redirect to /restarting once that page exists.
+	http.Redirect(w, r, "/config", http.StatusSeeOther)
+}
+
+// --- Old monolith config editor (POST /config only — see doc comments) -----
+
+// configPageData is the render data for the OLD monolith config editor:
+// basePage (nav/CSRF), the config to pre-fill from (secrets never populated
+// — see config.html, which never references Cfg.Darwin.Token/Cfg.Wifi.PSK),
+// any validation error to display, and the stringified forms of the fields
+// that don't map 1:1 onto an HTML input (CSV lists, the replacements map).
+//
+// GET /config no longer routes to this page (handleConfigList — the
+// settings list — took over that route this task); POST /config still does,
+// since network/updates/admin fields have no dedicated sub-page yet and this
+// remains the only way to save them from the HTML surface until Task 7
+// retires this whole file section alongside config.html.
 type configPageData struct {
 	basePage
 	Cfg              config.Config
@@ -43,19 +337,6 @@ func (s *Server) renderConfig(w http.ResponseWriter, r *http.Request, cfg config
 		TOCsCSV:          joinCSV(cfg.Board.TOCs),
 		ReplacementsText: formatReplacements(cfg.Board.Replacements),
 	})
-}
-
-// handleConfigGet renders the config form pre-filled from the stored config
-// with secrets redacted. config.html never renders a value for the secret
-// inputs regardless (they carry no value attribute at all), but Redacted is
-// used anyway as defence in depth against a future template change.
-func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.svc.ConfigRedacted()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.renderConfig(w, r, cfg, "")
 }
 
 // handleConfigPost parses the submitted form into a ConfigUpdate and applies
