@@ -1,0 +1,70 @@
+# Release pipeline (M5 spec §1): tag push → test gate → arm64 build →
+# manifest → minisign → GitHub release. The MINISIGN_SECRET_KEY repo secret
+# holds the CI signing key (unencrypted minisign secret key; the offline
+# recovery key never touches CI — see docs/deploy.md §Self-update).
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./... -count=1
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.10.1
+      - name: build arm64 binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
+            -ldflags "-X github.com/mintopia/trainboard/internal/buildinfo.version=${VERSION}" \
+            -o trainboard ./cmd/trainboard
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
+            -ldflags "-X github.com/mintopia/trainboard/internal/buildinfo.version=${VERSION}" \
+            -o trainboard-launcher ./cmd/trainboard-launcher
+      - name: manifest and assets
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          # A semver prerelease suffix (v0.3.0-rc1) IS the prerelease channel.
+          CHANNEL=stable
+          case "$VERSION" in *-*) CHANNEL=prerelease;; esac
+          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+          go run ./cmd/mkmanifest \
+            -version "$VERSION" -channel "$CHANNEL" -commit "${GITHUB_SHA:0:7}" \
+            -asset "trainboard_${VERSION}_linux_arm64.gz" -binary trainboard \
+            -min-version "$(tr -d '[:space:]' < deploy/release/MIN_VERSION)" > manifest.json
+          gzip -9 -c trainboard > "trainboard_${VERSION}_linux_arm64.gz"
+          gzip -9 -c trainboard-launcher > "trainboard-launcher_${VERSION}_linux_arm64.gz"
+      - name: sign manifest
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > minisign.key
+          minisign -S -s minisign.key -m manifest.json -x manifest.json.minisig \
+            -t "trainboard ${{ github.ref_name }}"
+          rm -f minisign.key
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          FLAGS="--generate-notes"
+          [ "$CHANNEL" = "prerelease" ] && FLAGS="$FLAGS --prerelease"
+          gh release create "$VERSION" $FLAGS \
+            "trainboard_${VERSION}_linux_arm64.gz" \
+            "trainboard-launcher_${VERSION}_linux_arm64.gz" \
+            manifest.json manifest.json.minisig
