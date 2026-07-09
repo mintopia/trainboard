@@ -152,9 +152,15 @@ func baseConfigForm() url.Values {
 		"powersaving.brightness": {"32"},
 		"wifi.ssid":              {""},
 		"wifi.psk":               {""},
-		"darwin.token":           {""},
-		"web.password":           {""},
-		"web.password.confirm":   {""},
+		"update.channel":         {"stable"},
+		// update.checks deliberately present ("on"): its checkbox defaults to
+		// checked (DisableChecks false), same reasoning as layout.times above.
+		// update.autoApply deliberately absent, same reasoning as
+		// powersaving.enabled above (its default is unchecked/off).
+		"update.checks":        {"on"},
+		"darwin.token":         {""},
+		"web.password":         {""},
+		"web.password.confirm": {""},
 	}
 }
 
@@ -250,6 +256,57 @@ func TestConfigPostValidChangeAppliesAndPersists(t *testing.T) {
 	}
 
 	awaitApply(t, applyCh)
+}
+
+// (c2) POST /config round-trips the Update fieldset, including the inverted
+// update.checks checkbox (checked = DisableChecks false, unchecked =
+// DisableChecks true — see config.UpdateConfig's doc comment) and confirms
+// GET /config pre-fills the select/checkboxes from what was just saved.
+func TestConfigPostRoundTripsUpdateFields(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	// Submit prerelease + autoApply on + checks unchecked (key absent).
+	form := baseConfigForm()
+	form.Set("update.channel", "prerelease")
+	form.Set("update.autoApply", "on")
+	form.Del("update.checks")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 applied page, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if cur.Update.Channel != "prerelease" {
+		t.Fatalf("update.channel = %q, want prerelease", cur.Update.Channel)
+	}
+	if !cur.Update.AutoApply {
+		t.Fatal("update.autoApply = false, want true")
+	}
+	if !cur.Update.DisableChecks {
+		t.Fatal("update.checks unchecked must set DisableChecks = true")
+	}
+
+	// GET /config must pre-fill the form from what was just saved.
+	recGet := getPath(t, srv.Handler(), "/config", cookie)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", recGet.Code, recGet.Body.String())
+	}
+	body := recGet.Body.String()
+	if !strings.Contains(body, `<option value="prerelease" selected>prerelease</option>`) {
+		t.Fatalf("expected prerelease selected in body: %s", body)
+	}
+	if !strings.Contains(body, `name="update.autoApply" checked`) {
+		t.Fatalf("expected update.autoApply checked in body: %s", body)
+	}
+	if strings.Contains(body, `name="update.checks" checked`) {
+		t.Fatalf("expected update.checks unchecked in body: %s", body)
+	}
 }
 
 // (d) POST /config with blank secret fields keeps the stored Darwin token

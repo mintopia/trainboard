@@ -108,7 +108,15 @@ apply-by-restart path is used by the `/actions/restart` button.
 `/actions/reboot` is different: it shells out to `systemctl reboot`, so it
 restarts the whole Pi, not just the process.
 
-## 5. Install / update the binary
+## 5. Install the binary (first-time bootstrap)
+
+> **This is the one-time bootstrap flow only.** Once a device has been
+> migrated to the A/B slot layout (§6), stop using `scp` for updates — cut a
+> signed release and apply it from the web UI or let the board pick it up
+> on its own. The manual flow below still matters for getting the very
+> first binary onto a brand-new device (there's nothing in `/usr/local/bin`
+> for `migrate-to-slots.sh` to migrate otherwise), and for the launcher
+> binary itself, which is shipped the same way.
 
 Cross-compile on your workstation and ship the binary over:
 
@@ -148,8 +156,8 @@ up a newly-copied binary or config without a full reboot.
 | `--preview-dir` | `./preview` | Where preview PNGs are written in non-production mode |
 | `--fixture` | *(none)* | Path to a JSON board fixture, bypassing live Darwin (dev only) |
 | `--http` | `:80` | Address the embedded config/status web server listens on |
-| `--manage-network` | `false` | Drive wlan0 (STA connect / AP fallback) via the connectivity manager. **Safety interlock — see §8 before enabling.** |
-| `--mdns` | `true` | Advertise the board via mDNS as `trainboard-XXXX.local` (see §9) |
+| `--manage-network` | `false` | Drive wlan0 (STA connect / AP fallback) via the connectivity manager. **Safety interlock — see §9 before enabling.** |
+| `--mdns` | `true` | Advertise the board via mDNS as `trainboard-XXXX.local` (see §10) |
 | `--version` | | Print version and exit |
 
 The shipped unit runs `trainboard --production` with no `--http` override, so
@@ -158,7 +166,153 @@ already (needed for SPI/GPIO access), so binding `:80` needs no additional
 capability grant — this was confirmed while writing this guide; no unit
 change was required for the web server.
 
-## 6. Fault codes
+## 6. Self-update (M5)
+
+From this milestone on, the board updates itself instead of waiting for an
+operator with `scp`. A stable **launcher** binary (`ExecStart` in
+`deploy/trainboard.service`) execs whichever of two on-disk **slots** (`a`
+or `b`) the updater state file names as active, so applying a new release
+never touches the running payload's own binary. Releases are published as
+a manifest plus asset, both signed with minisign; the payload only ever
+installs a manifest whose signature verifies against the device's embedded
+keyring, downloads it into the *inactive* slot, and flips `active` to it
+immediately once the download and signature check pass. `known_good` is
+the field that's confirmation-gated: it only advances to the new slot once
+the payload has actually booted there and passed its post-start health
+check — if that never happens, the launcher itself flips `active` back to
+the last known-good slot on its own, no operator intervention required.
+The full design, including the anti-rollback
+version floor and the double-fault recovery path, is in
+[`docs/superpowers/specs/2026-07-09-m5-self-update-design.md`](superpowers/specs/2026-07-09-m5-self-update-design.md).
+
+### Where things live
+
+| What | Path |
+|---|---|
+| Launcher (stable shim) | `/opt/trainboard/launcher` |
+| Slot binaries | `/opt/trainboard/slots/{a,b}/trainboard` |
+| Updater state | `/var/lib/trainboard/updater/state.json` |
+| Version floor (repo) | `deploy/release/MIN_VERSION` |
+
+### Migrating an existing device
+
+A device that predates M5 has a single binary at `/usr/local/bin/trainboard`
+and no slot layout yet. `deploy/migrate-to-slots.sh` does the one-time move;
+copy the launcher over first, then run the script against the Pi:
+
+```
+scp trainboard-launcher root@trainboard.local:/opt/trainboard/launcher
+ssh root@trainboard.local 'sh -s' < deploy/migrate-to-slots.sh
+```
+
+It creates the `a`/`b` slot directories, moves the existing binary into slot
+`a`, and seeds `state.json` marking slot `a` both active and known-good at
+whatever version that binary reports (a dev build's non-semver `dev`
+version is fine here — it never blocks the first real update, it's just
+not a version the anti-rollback floor can compare against). It refuses to
+run if the launcher isn't in place yet, and is safe to re-run: both the
+slot-`a` copy and the state seed are skipped once they already exist.
+Finish by installing the updated unit and restarting:
+
+```
+scp deploy/trainboard.service root@trainboard.local:/etc/systemd/system/trainboard.service
+# IMPORTANT: if your current unit's ExecStart carries extra flags
+# (--manage-network), re-add them to the new ExecStart line first.
+ssh root@trainboard.local 'systemctl daemon-reload && systemctl restart trainboard'
+```
+
+The new unit's `StartLimitIntervalSec=0` line matters here, not just as
+boilerplate: without it, systemd's own start-limit can mark the unit
+"failed" partway through the rollback ladder (§6 below) before the
+launcher's boot-attempt counter gets a chance to converge — an operator
+hand-editing an old unit in place instead of copying the new one must add
+that line too.
+
+Once the board is confirmed up under the launcher (`systemctl status
+trainboard` shows the launcher's PID execing into the payload), delete the
+now-unused old binary: `ssh root@trainboard.local rm /usr/local/bin/trainboard`.
+
+### Key ceremony
+
+Run once, on your workstation, before the first release can be cut. Two
+minisign key pairs exist by design: a CI signing key that lives unencrypted
+in a GitHub Actions secret (so the release workflow can sign headlessly),
+and an offline recovery key that never leaves your password manager. Either
+key alone is enough to satisfy the device's keyring check, which is what
+makes rotating one of them later a normal signed update rather than a
+reflash.
+
+```
+brew install minisign
+
+# CI signing key (unencrypted — it lives in a GitHub Actions secret):
+minisign -G -W -f -p ci.pub -s ci.key -c "trainboard CI signing key"
+gh secret set MINISIGN_SECRET_KEY < ci.key
+
+# Offline recovery key (password-protected; NEVER uploaded anywhere):
+minisign -G -f -p recovery.pub -s recovery.key -c "trainboard recovery key"
+# → store recovery.key's CONTENT and its password in the password manager.
+
+# Embed both PUBLIC keys in the device keyring: copy the second line of
+# ci.pub and recovery.pub into internal/update/keyring.go's embeddedKeys
+# slice, then commit. Finally: rm ci.key recovery.key ci.pub recovery.pub
+```
+
+`-W` on the CI key generation skips the passphrase prompt, since a key that
+GitHub Actions must use non-interactively can't be protected by one; the
+recovery key omits `-W` deliberately, so it's useless to anyone who doesn't
+also have its password.
+
+### Cutting a release
+
+```
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The release workflow (`.github/workflows/release.yml`) picks up the tag
+push, builds and signs the manifest, and publishes a GitHub release. A
+prerelease suffix on the tag (`v0.1.0-rc1`) routes it to the `prerelease`
+channel instead of `stable` — use that for anything you want on a bench
+device before it reaches every board.
+
+`deploy/release/MIN_VERSION` is the anti-rollback floor baked into every
+manifest: a device won't accept a manifest whose `min_version` is lower
+than the highest floor it's already seen, so replaying an old signed
+manifest can't downgrade a board. Bump this file (and cut a release off the
+bump) when a security fix or a key rotation means older versions should no
+longer be installable — not for routine releases.
+
+### On-hardware test checklist (attended, after first release exists)
+
+- [ ] Migrate the Pi (`migrate-to-slots.sh`), confirm board boots via
+      launcher (`systemctl status trainboard` shows launcher → payload PID).
+- [ ] Cut `v0.1.0`, then `v0.1.1`; web UI shows "Available v0.1.1"; Apply;
+      board restarts into v0.1.1; status shows promoted
+      (`known_good_version: v0.1.1` in `state.json`).
+- [ ] Pull power mid-download; on reboot the board still runs the old
+      version and a re-apply succeeds.
+- [ ] Break slot b deliberately (`ssh: echo garbage >
+      /opt/trainboard/slots/b/trainboard` after staging an update, before
+      restart); observe 3 failed boots then automatic rollback + web UI
+      banner.
+- [ ] Force a double fault so the ladder actually reaches E07 — corrupting
+      a binary so `execve` itself fails (e.g. `echo garbage > ...`) doesn't
+      work for this: the launcher's fast-fallback path treats an exec
+      failure as instant (single-boot) rollback to known-good, so the
+      3-strikes ladder never runs and E07 is never reached (systemd just
+      loops the launcher instead). Corrupt both slots in an
+      exec-succeeds-but-unhealthy way instead, so each boot burns a real
+      attempt against `BootAttempts`:
+      ```
+      ssh root@trainboard.local systemctl stop trainboard
+      ssh root@trainboard.local 'cp /bin/false /opt/trainboard/slots/a/trainboard; cp /bin/false /opt/trainboard/slots/b/trainboard'
+      ssh root@trainboard.local systemctl start trainboard
+      ```
+      Observe the ladder run its full course (3 boots on the active slot,
+      rollback, 3 boots on the other slot) and end in E07 on-glass + web UI
+      reachable; restore by re-applying a release from the recovery web UI.
+
+## 7. Fault codes
 
 The board shows a short fault code in the corner of the Error / waiting
 scenes for field diagnosis (`internal/obs/faults.go`):
@@ -169,10 +323,11 @@ scenes for field diagnosis (`internal/obs/faults.go`):
 | E02 | Darwin token rejected | The token entered at `/setup` or `/config` — re-check it's a valid, current OpenLDBWS token |
 | E03 | Waiting for time sync | The Pi hasn't got NTP time yet (common right after boot); wait, or check network/NTP reachability |
 | E04 | Configuration error | No config file yet, or the stored config fails validation — visit `/setup` (fresh install) or `/config` (existing install) to fix it |
-| E05 | WiFi radio blocked | wlan0 is rfkill soft-blocked or its regulatory domain is unset — only surfaced behind `--manage-network` (§8); check for a hardware kill switch, or run `rfkill unblock wifi` / `iw reg set GB` by hand |
-| E06 | Network connectivity | The layered connectivity check (association / DHCP / DNS / captive-portal) failed at the stage it names — only surfaced behind `--manage-network` (§8); the board falls back to its own AP hotspot rather than staying stuck here |
+| E05 | WiFi radio blocked | wlan0 is rfkill soft-blocked or its regulatory domain is unset — only surfaced behind `--manage-network` (§9); check for a hardware kill switch, or run `rfkill unblock wifi` / `iw reg set GB` by hand |
+| E06 | Network connectivity | The layered connectivity check (association / DHCP / DNS / captive-portal) failed at the stage it names — only surfaced behind `--manage-network` (§9); the board falls back to its own AP hotspot rather than staying stuck here |
+| E07 | Update recovery mode | The launcher hit a double fault (both slots failing); the board serves only the web UI + AP. Fix config or apply a known-good release from the web UI, or reflash. |
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 **Board renders fine but the web UI is unreachable at
 `http://trainboard.local/`:** the render loop and the web server run
@@ -199,7 +354,7 @@ as a corrupted config, not routine first-boot: until `/setup` is completed,
 the device is claimable by anyone who can reach it on the LAN. Re-run setup
 promptly to restore a valid config and close that window.
 
-## 8. Connectivity & AP mode (M3, behind `--manage-network`)
+## 9. Connectivity & AP mode (M3, behind `--manage-network`)
 
 > **Do not enable `--manage-network` on any device whose WiFi you currently
 > rely on to reach it, until it has been through the M3b bench migration
@@ -279,7 +434,7 @@ the bench session itself like the migration's SSH warning above: drive it
 over ethernet/console, or accept that wlan0 is unavailable to you for its
 duration.
 
-**Fault codes E05/E06** (§6) are only ever surfaced behind this flag — with
+**Fault codes E05/E06** (§7) are only ever surfaced behind this flag — with
 it off, wlan0 is left to the OS as before and neither can occur.
 
 **Recovering WiFi after provisioning (AP fallback).** Once a board has been
@@ -312,7 +467,7 @@ the unit. That reboot is the intended escalation path, not a bug: don't
 by silencing it without first checking what actually failed (radio,
 firmware, hardware).
 
-## 9. USB gadget ethernet + mDNS discovery (M4)
+## 10. USB gadget ethernet + mDNS discovery (M4)
 
 A second, independent way to reach the board: plug a USB cable into the Pi
 Zero 2 W's OTG **data** port and the board shows up as its own USB network
@@ -444,7 +599,7 @@ The board announces itself over multicast DNS on every eligible interface
   hostname
 
 It's on by default; disable it with `--mdns=false` (see the flags table in
-§5). **wlan0 goes silent while the AP hotspot is up** (§8) — the hotspot's
+§5). **wlan0 goes silent while the AP hotspot is up** (§9) — the hotspot's
 own dnsmasq already answers DHCP/DNS on that subnet, and the responder would
 just be contending for the same broadcast domain — but `usb0` (and a wired
 dongle) keep answering throughout, which is exactly what makes the gadget
@@ -476,14 +631,14 @@ cable connected to the Pi's OTG data port:
       healthy and re-enumerates cleanly each time, no restart needed
 - [ ] `dns-sd -B _http._tcp local.` (or `avahi-browse -rt _http._tcp`)
       shows the board's service on **both** WiFi and `usb0` simultaneously
-- [ ] AP mode: bring the hotspot up (§8), confirm `trainboard-XXXX.local`
+- [ ] AP mode: bring the hotspot up (§9), confirm `trainboard-XXXX.local`
       does **not** answer on the AP's own subnet (192.168.4.0/24) — wlan0
       suppression working — but **does** still answer over `usb0`
 
 Once this passes, close #14 (minus the dongle-validation note above, which
 stays open until a dongle is tested) and #15.
 
-## 10. Benchmarks
+## 11. Benchmarks
 
 `cmd/bench` measures SSD1322 flush performance on real hardware and gates the
 render architecture (full-frame vs. dirty-region flush). Build, ship, and run

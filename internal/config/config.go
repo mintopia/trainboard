@@ -14,6 +14,7 @@ type Config struct {
 	Powersaving PowersavingConfig `json:"powersaving"`
 	Web         WebConfig         `json:"web"`
 	Wifi        WifiConfig        `json:"wifi"`
+	Update      UpdateConfig      `json:"update"`
 }
 
 // DarwinConfig holds the Darwin Lite access token (secret).
@@ -69,6 +70,30 @@ type WifiConfig struct {
 	Country string `json:"country"`
 }
 
+// UpdateConfig controls M5 self-update behaviour. Field polarity is chosen
+// so the ZERO VALUE is the desired default for configs written before this
+// section existed (a missing JSON key unmarshals to the zero value):
+// Channel "" means stable, DisableChecks false means periodic checks run.
+// That is why this is DisableChecks and not the spec table's checkEnabled —
+// same behaviour, migration-free encoding.
+type UpdateConfig struct {
+	// Channel is "stable" (or "", its equivalent) or "prerelease".
+	Channel string `json:"channel"`
+	// AutoApply applies available updates unattended during
+	// Config.InUpdateWindow. Off by default: manual apply from the web UI.
+	AutoApply bool `json:"autoApply"`
+	// DisableChecks turns the periodic GitHub release check off entirely.
+	DisableChecks bool `json:"disableChecks"`
+}
+
+// EffectiveChannel maps the empty channel to "stable".
+func (u UpdateConfig) EffectiveChannel() string {
+	if u.Channel == "" {
+		return "stable"
+	}
+	return u.Channel
+}
+
 // Default returns a config populated with sane defaults.
 func Default() Config {
 	return Config{
@@ -86,6 +111,7 @@ func Default() Config {
 			End:        "07:00",
 			Brightness: 32,
 		},
-		Wifi: WifiConfig{Country: "GB"},
+		Wifi:   WifiConfig{Country: "GB"},
+		Update: UpdateConfig{Channel: "stable"},
 	}
 }

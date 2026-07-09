@@ -18,6 +18,31 @@
   {{if .SoakRemainingText}}<dt>Soak</dt><dd>{{.SoakRemainingText}} remaining</dd>{{end}}
   {{if .MDNSState}}<dt>mDNS</dt><dd>{{.MDNSState}}</dd>{{end}}
 </dl>
+<h3>Software</h3>
+{{with .Status.Update}}
+{{if .RolledBackFrom}}
+<p class="error">Rolled back from {{.RolledBackFrom}} after repeated failed boots — running {{.Running}} instead.
+  <form method="post" action="/actions/update/dismiss" style="display:inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Dismiss</button></form></p>
+{{end}}
+<dl class="facts">
+  <dt>Running</dt><dd>{{.Running}}</dd>
+  {{if .Available}}<dt>Available</dt><dd>{{.Available}}{{if .NotesURL}} — <a href="{{.NotesURL}}" target="_blank" rel="noopener">release notes</a>{{end}}</dd>{{end}}
+  {{if not .LastCheck.IsZero}}<dt>Last check</dt><dd>{{.LastCheck.Format "15:04:05"}}</dd>{{end}}
+  {{if .LastError}}<dt>Update error</dt><dd class="error">{{.LastError}}</dd>{{end}}
+</dl>
+{{if .Enabled}}
+<form method="post" action="/actions/update/check"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button type="submit">Check for updates now</button></form>
+{{if .Available}}
+<form method="post" action="/actions/update/apply" onsubmit="return confirm('Download and install {{.Available}}? The board restarts into the new version.')">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button type="submit" class="primary">Install {{.Available}}</button></form>
+{{end}}
+{{else}}
+<p>Self-update is not available on this device (not a slot install, or no trusted keys).</p>
+{{end}}
+{{end}}
 <h3>Recent events</h3>
 <div id="events" hx-get="/events" hx-trigger="every 5s" hx-swap="innerHTML">
   {{template "eventlist" .Status.Events}}

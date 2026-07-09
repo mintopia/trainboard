@@ -318,6 +318,12 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/api/actions/soak/cancel       | POST   | 401 JSON     | 200
 //	/api/actions/wifi-retry        | POST   | 401 JSON     | 200
 //	/logout                        | POST   | 302 /login   | 302 /login (destroys session; kept LAST)
+//
+// Task 13's five new routes (/actions/update/{check,apply,dismiss},
+// /api/actions/update/{check,apply}) are NOT rows in this table — see
+// TestRouteSecurityInvariantMatrixUpdateRoutes below, which checks them
+// against its own Server so their extra requests don't blow this table's
+// shared actionLimit budget (see that test's doc comment for why).
 func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	srv, _, _, applyCh := newConfigTestServer(t)
 	h := srv.Handler()
@@ -364,57 +370,100 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	cookie, csrf := loginAs(t, srv, configTestPassword)
 
 	for _, tc := range routeMatrix {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Run("no session", func(t *testing.T) {
-				body, ct, csrfHdr := tc.body("unused-no-session")
-				req := httptest.NewRequest(tc.method, tc.path, body)
-				if ct != "" {
-					req.Header.Set("Content-Type", ct)
-				}
-				if csrfHdr != "" {
-					req.Header.Set("X-CSRF-Token", csrfHdr)
-				}
-				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, req)
+		runRouteCase(t, h, tc, cookie, csrf, applyCh)
+	}
+}
 
-				if tc.isAPI {
-					if rec.Code != http.StatusUnauthorized {
-						t.Fatalf("no session: want 401, got %d body=%s", rec.Code, rec.Body.String())
-					}
-					if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-						t.Fatalf("no session: want application/json, got %q", ct)
-					}
-				} else {
-					if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
-						t.Fatalf("no session: want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
-					}
-				}
-			})
+// runRouteCase exercises a single routeMatrix row's two arms (no session /
+// valid session) against h, using cookie/csrf for the authed arm. Shared by
+// TestRouteSecurityInvariantMatrix and TestRouteSecurityInvariantMatrixUpdateRoutes
+// so both tables are checked identically.
+func runRouteCase(t *testing.T, h http.Handler, tc routeCase, cookie *http.Cookie, csrf string, applyCh chan struct{}) {
+	t.Run(tc.name, func(t *testing.T) {
+		t.Run("no session", func(t *testing.T) {
+			body, ct, csrfHdr := tc.body("unused-no-session")
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			if ct != "" {
+				req.Header.Set("Content-Type", ct)
+			}
+			if csrfHdr != "" {
+				req.Header.Set("X-CSRF-Token", csrfHdr)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
 
-			t.Run("valid session", func(t *testing.T) {
-				body, ct, csrfHdr := tc.body(csrf)
-				req := httptest.NewRequest(tc.method, tc.path, body)
-				if ct != "" {
-					req.Header.Set("Content-Type", ct)
+			if tc.isAPI {
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("no session: want 401, got %d body=%s", rec.Code, rec.Body.String())
 				}
-				if csrfHdr != "" {
-					req.Header.Set("X-CSRF-Token", csrfHdr)
+				if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+					t.Fatalf("no session: want application/json, got %q", ct)
 				}
-				req.AddCookie(cookie)
-				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, req)
-
-				if rec.Code != tc.wantAuthedStatus {
-					t.Fatalf("valid session: want %d, got %d body=%s", tc.wantAuthedStatus, rec.Code, rec.Body.String())
+			} else {
+				if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+					t.Fatalf("no session: want 302 /login, got %d %q", rec.Code, rec.Header().Get("Location"))
 				}
-				if tc.wantAuthedLoc != "" && rec.Header().Get("Location") != tc.wantAuthedLoc {
-					t.Fatalf("valid session: want Location %q, got %q", tc.wantAuthedLoc, rec.Header().Get("Location"))
-				}
-				if tc.appliesAsync {
-					awaitApply(t, applyCh)
-				}
-			})
+			}
 		})
+
+		t.Run("valid session", func(t *testing.T) {
+			body, ct, csrfHdr := tc.body(csrf)
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			if ct != "" {
+				req.Header.Set("Content-Type", ct)
+			}
+			if csrfHdr != "" {
+				req.Header.Set("X-CSRF-Token", csrfHdr)
+			}
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantAuthedStatus {
+				t.Fatalf("valid session: want %d, got %d body=%s", tc.wantAuthedStatus, rec.Code, rec.Body.String())
+			}
+			if tc.wantAuthedLoc != "" && rec.Header().Get("Location") != tc.wantAuthedLoc {
+				t.Fatalf("valid session: want Location %q, got %q", tc.wantAuthedLoc, rec.Header().Get("Location"))
+			}
+			if tc.appliesAsync {
+				awaitApply(t, applyCh)
+			}
+		})
+	})
+}
+
+// TestRouteSecurityInvariantMatrixUpdateRoutes covers task 13's five new
+// routes (/actions/update/{check,apply,dismiss} and
+// /api/actions/update/{check,apply}) with the exact same two-arm check as
+// TestRouteSecurityInvariantMatrix. It runs against its own fresh Server
+// (and therefore its own actionLimit bucket) rather than joining the main
+// table: the main table's shared session already spends ~26 of the 30
+// actionLimit tokens across its 13 rate-limited rows, and this table's own
+// 10 requests (5 rows x 2 arms) would tip it over the burst and start
+// failing with 429s instead of the responses under test.
+//
+//	Route                          | method | no session   | valid session
+//	-------------------------------|--------|--------------|----------------
+//	/actions/update/check          | POST   | 302 /login   | 302 / (Update seams unwired in this harness; Service.CheckForUpdate's nil-safe error still redirects)
+//	/actions/update/apply          | POST   | 302 /login   | 302 / (nil-safe error path; no restart scheduled — see handlers_update_test.go for the wired-seam success/failure behaviour)
+//	/actions/update/dismiss        | POST   | 302 /login   | 302 / (Service.DismissRollback's nil-safe no-op still redirects)
+//	/api/actions/update/check      | POST   | 401 JSON     | 500 JSON (nil-safe "not available" error, uniform error shape — see handlers_update_test.go for the wired-seam success path)
+//	/api/actions/update/apply      | POST   | 401 JSON     | 500 JSON (nil-safe error; no restart scheduled)
+func TestRouteSecurityInvariantMatrixUpdateRoutes(t *testing.T) {
+	srv, _, _, applyCh := newConfigTestServer(t)
+	h := srv.Handler()
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	updateRouteMatrix := []routeCase{
+		{name: "POST /actions/update/check", method: http.MethodPost, path: "/actions/update/check", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/"},
+		{name: "POST /actions/update/apply", method: http.MethodPost, path: "/actions/update/apply", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/"},
+		{name: "POST /actions/update/dismiss", method: http.MethodPost, path: "/actions/update/dismiss", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/"},
+		{name: "POST /api/actions/update/check", method: http.MethodPost, path: "/api/actions/update/check", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusInternalServerError},
+		{name: "POST /api/actions/update/apply", method: http.MethodPost, path: "/api/actions/update/apply", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusInternalServerError},
+	}
+
+	for _, tc := range updateRouteMatrix {
+		runRouteCase(t, h, tc, cookie, csrf, applyCh)
 	}
 }
 

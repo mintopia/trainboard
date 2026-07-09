@@ -19,3 +19,26 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.10.1
+  release-dryrun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: build arm64 binaries
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o trainboard ./cmd/trainboard
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o trainboard-launcher ./cmd/trainboard-launcher
+      - name: manifest, throwaway sign, verify round-trip
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          minisign -G -W -f -p dry.pub -s dry.key
+          go run ./cmd/mkmanifest \
+            -version v9.9.9 -channel stable -commit dryrun0 \
+            -asset trainboard_v9.9.9_linux_arm64.gz -binary trainboard \
+            -min-version "$(tr -d '[:space:]' < deploy/release/MIN_VERSION)" > manifest.json
+          minisign -S -s dry.key -m manifest.json -x manifest.json.minisig -t "dry run"
+          minisign -V -p dry.pub -m manifest.json -x manifest.json.minisig
+          go run ./cmd/verifymanifest -pub dry.pub -m manifest.json -x manifest.json.minisig

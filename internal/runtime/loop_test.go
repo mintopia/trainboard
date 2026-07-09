@@ -311,6 +311,52 @@ func TestStepCallsBeatOnEveryTick(t *testing.T) {
 	}
 }
 
+func TestUpdateHintOverlay(t *testing.T) {
+	l, _ := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+
+	hint := false
+	l.SetUpdateHint(func() bool { return hint })
+
+	day := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+
+	// One frame without the hint: bottom-left pixels stay 0.
+	if err := l.step(day); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.fb.At(0, l.fb.H-1); got != 0 {
+		t.Fatalf("pixel (0,H-1) = %d before hint, want 0", got)
+	}
+
+	// Enable the hint: the 2x2 bottom-left block lights at level 6.
+	hint = true
+	if err := l.step(day.Add(TickInterval)); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range [][2]int{{0, l.fb.H - 1}, {1, l.fb.H - 1}, {0, l.fb.H - 2}, {1, l.fb.H - 2}} {
+		if got := l.fb.At(p[0], p[1]); got != updateHintLevel {
+			t.Errorf("pixel (%d,%d) = %d with hint, want %d", p[0], p[1], got, updateHintLevel)
+		}
+	}
+}
+
+// TestOnFirstFrameFiresOnce verifies SetOnFirstFrame's callback fires
+// exactly once, on the first successful flush, even across further ticks.
+func TestOnFirstFrameFiresOnce(t *testing.T) {
+	l, _ := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+
+	fired := 0
+	l.SetOnFirstFrame(func() { fired++ })
+	day := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if err := l.step(day.Add(time.Duration(i) * TickInterval)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fired != 1 {
+		t.Errorf("OnFirstFrame fired %d times, want exactly 1", fired)
+	}
+}
+
 func TestLoopNilSoakUnchanged(t *testing.T) {
 	// A loop with no UseSoak call behaves exactly as before.
 	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())

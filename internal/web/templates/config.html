@@ -29,6 +29,16 @@
   <label>SSID <input name="wifi.ssid" value="{{.Cfg.Wifi.SSID}}" maxlength="32"></label>
   <label>Password <input type="password" name="wifi.psk" placeholder="unchanged" autocomplete="off"></label>
 </fieldset>
+<fieldset><legend>Software updates</legend>
+  <label>Channel
+    <select name="update.channel">
+      <option value="stable" {{if ne .Cfg.Update.Channel "prerelease"}}selected{{end}}>stable</option>
+      <option value="prerelease" {{if eq .Cfg.Update.Channel "prerelease"}}selected{{end}}>prerelease</option>
+    </select>
+  </label>
+  <label><input type="checkbox" name="update.autoApply" {{if .Cfg.Update.AutoApply}}checked{{end}}> Install updates automatically (overnight / powersave window)</label>
+  <label><input type="checkbox" name="update.checks" {{if not .Cfg.Update.DisableChecks}}checked{{end}}> Check for updates periodically</label>
+</fieldset>
 <fieldset><legend>Admin</legend>
   <label>New admin password <input type="password" name="web.password" placeholder="unchanged" autocomplete="new-password"></label>
   <label>Confirm <input type="password" name="web.password.confirm" placeholder="unchanged" autocomplete="new-password"></label>

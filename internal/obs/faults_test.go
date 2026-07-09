@@ -25,3 +25,12 @@ func TestM3FaultCodes(t *testing.T) {
 		t.Fatalf("E06 wrong: %q %q", FaultConnectivity, FaultConnectivity.Message())
 	}
 }
+
+func TestFaultUpdateRecovery(t *testing.T) {
+	if FaultUpdateRecovery != "E07" {
+		t.Errorf("FaultUpdateRecovery = %q, want E07", FaultUpdateRecovery)
+	}
+	if got := FaultUpdateRecovery.Message(); got != "Update recovery mode" {
+		t.Errorf("Message() = %q", got)
+	}
+}

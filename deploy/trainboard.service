@@ -5,12 +5,28 @@
 [Unit]
 Description=Train departure board
 # No After=network-online.target on purpose.
+# M5 self-update's rollback ladder (spec §2) needs up to 8 launcher starts
+# to converge on a crashing payload: 3 attempts on the newly-applied slot,
+# a rollback flip, 3 attempts on the known-good slot, then recovery mode
+# (E07). The launcher's own BootAttempts counter in state.json is what
+# bounds that loop, NOT systemd — systemd's default start-limit
+# (StartLimitBurst=5 within StartLimitIntervalSec=10s) would otherwise mark
+# this unit "failed" partway through the ladder for an instantly-crashing
+# payload, leaving the board dark (no E07, no web UI) until a manual power
+# cycle. Disabling the interval here hands the whole loop-bound decision to
+# the launcher, which is the only thing that understands slots/rollback.
+StartLimitIntervalSec=0
 
 [Service]
 # The embedded admin/config web UI listens on :80 by default (--http flag);
 # User=root above is what makes binding that port possible without extra
 # capability grants — see docs/deploy.md.
-ExecStart=/usr/local/bin/trainboard --production
+# M5 self-update: ExecStart runs the stable launcher, which selects the
+# active A/B slot and exec()s /opt/trainboard/slots/{a,b}/trainboard —
+# process replacement, so WatchdogSec/NotifyAccess below still govern the
+# payload. Add --manage-network here (after the wlan0 migration, see
+# docs/deploy.md) exactly as before; the launcher passes all flags through.
+ExecStart=/opt/trainboard/launcher --production
 Restart=always
 RestartSec=2
 User=root
