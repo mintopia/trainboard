@@ -250,13 +250,27 @@ func TestSetBeatIncrementsAcrossPolls(t *testing.T) {
 		t.Fatalf("beat count after one loop iteration = %d, want >= 1", b1)
 	}
 
+	// A single <-done after Poke can consume a STALE buffered signal from an
+	// iteration that completed before the b1 read (the initial immediate
+	// poll and the loop's first pass race the reads above) — observed as a
+	// b1=b2 flake on loaded CI runners (run 29033120420). The poked
+	// iteration's beat() is still guaranteed to arrive, so assert
+	// eventually-with-deadline instead of pinning it to one done signal.
 	p.Poke()
-	<-done
-	mu.Lock()
-	b2 := beats
-	mu.Unlock()
-	if b2 <= b1 {
-		t.Fatalf("beat count did not increase across iterations: b1=%d b2=%d", b1, b2)
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		b2 := beats
+		mu.Unlock()
+		if b2 > b1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("beat count did not increase across iterations: b1=%d b2=%d", b1, b2)
+		case <-done:
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
