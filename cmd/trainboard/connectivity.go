@@ -64,9 +64,15 @@ const (
 	// loop. It can run for up to bootSTAGraceWindow (90s), well past a single
 	// staAttemptBound (45s), but it calls Beat once per retry (its own
 	// bootSTARetryPause, 5s, cadence) exactly as waitAPFallback's 30s
-	// heartbeat does for AP fallback — so the worst un-beaten gap it can ever
-	// produce is one retry pause plus one bounded attempt (5 + 45 = 50s),
-	// comfortably under this deadline.
+	// heartbeat does for AP fallback. Its INTERIOR un-beaten gap is one
+	// retry pause plus one bounded attempt (5 + 45 = 50s); the TERMINAL gap
+	// on grace-window exhaustion is larger, because the deadline check
+	// returns without a Beat and runBoot proceeds straight into toAP:
+	//   5 (pause) + 45 (final attempt) + 40 (toAP w/ internal retry)
+	//   = ~90s before the next loop-top Beat.
+	// Still under this deadline, but with ~60s margin, not ~100s — anyone
+	// growing staAttemptBound, the toAP budget, or adding a leg to that
+	// chain must redo THIS sum.
 	managerBeatDeadline = 150 * time.Second
 	// httpProbeTimeout bounds the captive-portal probe request.
 	httpProbeTimeout = 10 * time.Second
