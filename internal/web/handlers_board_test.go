@@ -99,6 +99,24 @@ func TestAPIBoardNilSnapshot(t *testing.T) {
 	}
 }
 
+// StateDepartures with no board data must mirror board.BuildScene's fallback
+// (snapshot.go:82-86): the panel draws errorScene(FaultDarwinUnreachable)
+// there, so the JSON view must report state "error" too, never a bare
+// "departures" with no rows.
+func TestAPIBoardDeparturesStateWithNoData(t *testing.T) {
+	for name, snap := range map[string]*board.Snapshot{
+		"nil board":        {State: board.StateDepartures},
+		"empty departures": {State: board.StateDepartures, Board: &data.Board{LocationName: "Thatcham"}},
+	} {
+		srv, _ := newTestServerWithSources(t, Sources{Snapshot: func() *board.Snapshot { return snap }})
+		cookie, _ := loginAs(t, srv, statusTestPassword)
+		code, v := fetchBoardView(t, srv.Handler(), cookie)
+		if code != http.StatusOK || v.State != "error" || v.Message == "" {
+			t.Errorf("%s: code %d view %+v", name, code, v)
+		}
+	}
+}
+
 func TestAPIBoardErrorState(t *testing.T) {
 	snap := &board.Snapshot{State: board.StateError, FaultDetail: "darwin unreachable"}
 	srv, _ := newTestServerWithSources(t, Sources{Snapshot: func() *board.Snapshot { return snap }})

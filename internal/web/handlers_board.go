@@ -7,6 +7,7 @@ import (
 
 	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/data"
+	"github.com/mintopia/trainboard/internal/obs"
 )
 
 // serviceView is one departure row's pre-rasterised text, exactly as the
@@ -33,7 +34,7 @@ type hotspotView struct {
 type boardView struct {
 	State     string        `json:"state"`
 	Location  string        `json:"location,omitempty"`
-	FetchedAt time.Time     `json:"fetchedAt,omitempty"`
+	FetchedAt time.Time     `json:"fetchedAt,omitzero"`
 	Message   string        `json:"message,omitempty"`
 	First     *serviceView  `json:"first,omitempty"`
 	Remaining []serviceView `json:"remaining,omitempty"`
@@ -67,15 +68,21 @@ func buildBoardView(snap *board.Snapshot, times bool) boardView {
 	case board.StateClockNotSynced:
 		v.Message = "Waiting for the clock to sync"
 	case board.StateDepartures:
-		if snap.Board != nil && len(snap.Board.Departures) > 0 {
-			deps := snap.Board.Departures
-			first := toServiceView(1, deps[0])
-			first.CallingAt = board.CallingAtText(deps[0], times)
-			first.ServiceInfo = board.ServiceInfoText(deps[0])
-			v.First = &first
-			for i, d := range deps[1:] {
-				v.Remaining = append(v.Remaining, toServiceView(i+2, d))
-			}
+		if snap.Board == nil || len(snap.Board.Departures) == 0 {
+			// board.BuildScene falls back to errorScene(FaultDarwinUnreachable)
+			// here (snapshot.go:82-86) — the panel shows the error scene, so
+			// the JSON view must too, with the same operator-facing wording.
+			v.State = board.StateError.String()
+			v.Message = obs.FaultDarwinUnreachable.Message()
+			return v
+		}
+		deps := snap.Board.Departures
+		first := toServiceView(1, deps[0])
+		first.CallingAt = board.CallingAtText(deps[0], times)
+		first.ServiceInfo = board.ServiceInfoText(deps[0])
+		v.First = &first
+		for i, d := range deps[1:] {
+			v.Remaining = append(v.Remaining, toServiceView(i+2, d))
 		}
 	}
 	return v
