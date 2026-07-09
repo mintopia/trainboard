@@ -25,8 +25,10 @@ fi
 if [ ! -f "$STATE_DIR/state.json" ]; then
   # Seed state: slot a is active AND known-good. A "dev" version is fine —
   # a non-semver running version never blocks the first real update.
-  VERSION=$("$SLOTS/a/trainboard" --version | awk '{print $2}')
-  cat > "$STATE_DIR/state.json" <<EOF
+  VERSION=$("$SLOTS/a/trainboard" --version) || { echo "ERROR: $SLOTS/a/trainboard --version failed — binary may be broken or wrong-arch"; exit 1; }
+  VERSION=$(printf '%s' "$VERSION" | awk '{print $2}')
+  [ -n "$VERSION" ] || { echo "ERROR: could not parse a version from '$SLOTS/a/trainboard --version' output"; exit 1; }
+  cat > "$STATE_DIR/state.json.tmp" <<EOF
 {
   "active": "a",
   "active_version": "$VERSION",
@@ -37,6 +39,7 @@ if [ ! -f "$STATE_DIR/state.json" ]; then
   "rolled_back_from": ""
 }
 EOF
+  mv "$STATE_DIR/state.json.tmp" "$STATE_DIR/state.json"
   echo "seeded $STATE_DIR/state.json (version $VERSION)"
 fi
 

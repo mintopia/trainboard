@@ -108,7 +108,7 @@ apply-by-restart path is used by the `/actions/restart` button.
 `/actions/reboot` is different: it shells out to `systemctl reboot`, so it
 restarts the whole Pi, not just the process.
 
-## 5. Install / update the binary
+## 5. Install the binary (first-time bootstrap)
 
 > **This is the one-time bootstrap flow only.** Once a device has been
 > migrated to the A/B slot layout (§6), stop using `scp` for updates — cut a
