@@ -35,12 +35,13 @@ func newTestServerWithSources(t *testing.T, src Sources) (*Server, *Service) {
 	return NewServer(svc, testLog()), svc
 }
 
-// statusTestSources builds Sources with a fixed StateDepartures snapshot and
-// a ring pre-loaded with 3 events (oldest/middle/newest, added in that
-// order).
+// statusTestSources builds Sources with a StateDepartures snapshot fetched
+// "just now" (so the status page deterministically renders the fresh
+// "Running normally" branch, never the staleAfter one) and a ring pre-loaded
+// with 3 events (oldest/middle/newest, added in that order).
 func statusTestSources(t *testing.T) Sources {
 	t.Helper()
-	fetchedAt := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	fetchedAt := time.Now()
 	snap := &board.Snapshot{State: board.StateDepartures, FetchedAt: fetchedAt}
 
 	ring := obs.NewRing(8)
@@ -97,12 +98,15 @@ func TestStatusPageAuthedShowsDeparturesVersionAndEventOrder(t *testing.T) {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	// The fixture's LastFetch is a fixed past timestamp, so the statebar
-	// may read either "Running normally" or (once stale) "Running — data
-	// is stale" — both share "Running", which is what this test cares
-	// about: a departures-derived state rendered as running, not a fault.
-	if !strings.Contains(body, "Running") {
-		t.Fatalf("expected a running state label in body: %s", body)
+	// The fixture's LastFetch is fresh (time.Now()), so the full render
+	// path must deterministically take stateLine's non-stale departures
+	// branch: the exact "Running normally" label with an unmodified
+	// (green) dot.
+	if !strings.Contains(body, "Running normally") {
+		t.Fatalf("expected 'Running normally' state label in body: %s", body)
+	}
+	if !strings.Contains(body, `<span class="dot"></span>`) {
+		t.Fatalf("expected unmodified green dot (no amber/red class) in body: %s", body)
 	}
 	if !strings.Contains(body, "v-status-test") {
 		t.Fatalf("expected version string in body: %s", body)
@@ -133,6 +137,11 @@ func TestStatusPageEventsPartialOnlyEventRows(t *testing.T) {
 	}
 	if !strings.Contains(body, "newest-event-msg") || !strings.Contains(body, "oldest-event-msg") {
 		t.Fatalf("expected event rows in partial: %s", body)
+	}
+	// Severity must not be color-only (WCAG 1.4.1): every row carries a
+	// visually-hidden text label alongside the pip.
+	if !strings.Contains(body, `<span class="vh">INFO</span>`) {
+		t.Fatalf("expected visually-hidden level text next to the pip: %s", body)
 	}
 }
 

@@ -172,6 +172,10 @@ table.events td.lvl { padding-right: .7rem; }
 tr.warn .pip { background: var(--red); }
 tr.warn td:last-child { color: var(--red-text); }
 
+/* Visually hidden but exposed to screen readers — text alternative for
+   color-coded indicators like the event pip (WCAG 1.4.1). */
+.vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
 /* ============================================================
    LEGACY (amber-on-black) — kept so not-yet-rebuilt pages still
    function during the transition. DELETE in the cleanup task.
