@@ -52,6 +52,15 @@ type Checker struct {
 	available *Release
 	lastCheck time.Time
 	lastErr   string
+
+	// applyMu serializes ApplyNow end-to-end. It is separate from mu (which
+	// stays short-hold so Status() remains responsive) because ApplyNow's
+	// download/install pipeline can run for seconds and must not overlap:
+	// tick's unattended auto-apply and a user-triggered web-handler call
+	// both reach ApplyNow, and without this lock two near-simultaneous
+	// calls could both see a non-nil cached release and run
+	// applier.Apply concurrently against the same target slot.
+	applyMu sync.Mutex
 }
 
 // NewChecker wires the checker. enabled=false (no slot install, empty
@@ -148,7 +157,25 @@ func (c *Checker) CheckNow(ctx context.Context) error {
 // cached). It does NOT restart the process: the web handler renders its
 // response and schedules the restart itself, exactly like config apply;
 // only Run's unattended path restarts directly.
+//
+// ApplyNow is reachable concurrently from tick's unattended auto-apply and
+// from a user-triggered web-handler call; applyMu serializes the whole
+// call so only one download/install pipeline runs at a time. A second
+// caller that blocks here does NOT simply find nothing to do once it
+// wakes up: the winner clears c.available on success, but that only makes
+// this caller retake the rel == nil branch below and call CheckNow again —
+// and since c.applier.Running doesn't change until the process actually
+// restarts onto the new slot, CheckNow will typically see the same
+// release as still newer and repopulate c.available, so this caller goes
+// on to redundantly re-run applier.Apply for the same release into the
+// same target slot (Apply always targets otherSlot(KnownGood), which the
+// first apply didn't move). That re-apply is wasted work (a second
+// download) but not unsafe: it is now sequential, not concurrent, and
+// Apply's writes are atomic.
 func (c *Checker) ApplyNow(ctx context.Context) error {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
 	c.mu.Lock()
 	rel := c.available
 	c.mu.Unlock()
