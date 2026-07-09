@@ -49,8 +49,10 @@ func TestActionsGetUnauthenticatedRedirects(t *testing.T) {
 	}
 }
 
-// (b) authed GET /actions shows all three forms: restart, reboot (with its
-// confirm() guard), and the disabled update-firmware button.
+// (b) authed GET /actions shows both forms: restart and reboot (with its
+// confirm() guard). The update-firmware button that used to sit here as a
+// disabled placeholder is gone (task 13): the real update controls now live
+// on the status page's Software section (see handlers_update_test.go).
 func TestActionsGetShowsThreeForms(t *testing.T) {
 	srv, _, _, _ := newActionsTestServer(t)
 	cookie, _ := loginAs(t, srv, actionsTestPassword)
@@ -69,8 +71,8 @@ func TestActionsGetShowsThreeForms(t *testing.T) {
 	if !strings.Contains(body, `onsubmit="return confirm('Reboot the device?')"`) {
 		t.Fatalf("expected reboot confirm() guard in body: %s", body)
 	}
-	if !strings.Contains(body, "disabled") || !strings.Contains(body, "coming in a later release") {
-		t.Fatalf("expected disabled update-firmware button in body: %s", body)
+	if strings.Contains(body, "coming in a later release") {
+		t.Fatalf("update-firmware placeholder should be gone (controls moved to status page): %s", body)
 	}
 }
 

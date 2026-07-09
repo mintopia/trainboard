@@ -82,13 +82,13 @@ func (s *Server) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	update := ConfigUpdate{
+	upd := ConfigUpdate{
 		Cfg:         cfg,
 		NewToken:    r.PostFormValue("darwin.token"),
 		NewWifiPSK:  r.PostFormValue("wifi.psk"),
 		NewPassword: newPassword,
 	}
-	if err := s.svc.UpdateConfig(update); err != nil {
+	if err := s.svc.UpdateConfig(upd); err != nil {
 		s.renderConfig(w, r, cfg, err.Error())
 		return
 	}
@@ -149,6 +149,10 @@ func parseConfigForm(r *http.Request) (config.Config, error) {
 	keepFirst(err)
 
 	cfg.Wifi.SSID = strings.TrimSpace(r.PostFormValue("wifi.ssid"))
+
+	cfg.Update.Channel = r.PostFormValue("update.channel")
+	cfg.Update.AutoApply = formHasKey(r, "update.autoApply")
+	cfg.Update.DisableChecks = !formHasKey(r, "update.checks") // checkbox is "checks ON"; storage is inverted (see config.UpdateConfig)
 
 	return cfg, firstErr
 }

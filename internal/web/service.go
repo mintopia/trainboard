@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/obs"
+	"github.com/mintopia/trainboard/internal/update"
 )
 
 // Sources are the read-side seams the UI renders from.
@@ -34,6 +36,10 @@ type Sources struct {
 	// live per-interface state — per-interface add/remove detail is only in
 	// the log (YAGNI).
 	MDNSState func() string
+	// UpdateStatus reports the M5 updater's state (available release,
+	// rollback marker, last error). nil = updater not wired (dev mode);
+	// reads as the zero Status, whose Enabled=false hides the controls.
+	UpdateStatus func() update.Status
 }
 
 // Actions are the write-side callbacks main wires up. Apply is invoked after
@@ -51,6 +57,14 @@ type Actions struct {
 	// NoteProvisioning marks live provisioning activity so the manager
 	// suppresses its periodic retry. No-op when nil.
 	NoteProvisioning func()
+	// UpdateCheck / UpdateApply / UpdateDismiss drive M5 self-update.
+	// UpdateApply stages the update WITHOUT restarting — the handler
+	// renders its response then schedules the restart via Actions.Apply,
+	// the same shape as config save. All three are nil when the updater
+	// is not wired.
+	UpdateCheck   func(ctx context.Context) error
+	UpdateApply   func(ctx context.Context) error
+	UpdateDismiss func() error
 }
 
 // Service is the logic behind both the HTML pages and the JSON API.
@@ -77,6 +91,9 @@ type StatusData struct {
 	IPs           []string
 	Events        []obs.Event
 	SoakRemaining time.Duration
+	// Update is the M5 updater's render-ready state; the zero value
+	// (Enabled=false) hides the status page's Software section controls.
+	Update update.Status
 }
 
 const maxStatusEvents = 50
@@ -95,6 +112,7 @@ func (s *Service) Status() StatusData {
 		st.Events = append(st.Events, events[i])
 	}
 	st.SoakRemaining = s.SoakRemaining()
+	st.Update = s.UpdateStatus()
 	st.IPs = localIPs()
 	return st
 }
@@ -160,6 +178,7 @@ func (s *Service) UpdateConfig(u ConfigUpdate) error {
 	next.Layout = u.Cfg.Layout
 	next.Powersaving = u.Cfg.Powersaving
 	next.Wifi.SSID = u.Cfg.Wifi.SSID
+	next.Update = u.Cfg.Update
 	if u.NewToken != "" {
 		next.Darwin.Token = u.NewToken
 	}
@@ -394,4 +413,38 @@ func (s *Service) MarkProvisioning() {
 	if s.act.NoteProvisioning != nil {
 		s.act.NoteProvisioning()
 	}
+}
+
+// UpdateStatus reports the updater's render-ready state. Nil-safe: an
+// unwired seam reads as the zero Status (Enabled=false).
+func (s *Service) UpdateStatus() update.Status {
+	if s.src.UpdateStatus == nil {
+		return update.Status{}
+	}
+	return s.src.UpdateStatus()
+}
+
+// CheckForUpdate runs an on-demand release check. Nil-safe.
+func (s *Service) CheckForUpdate(ctx context.Context) error {
+	if s.act.UpdateCheck == nil {
+		return errors.New("updates are not available on this device")
+	}
+	return s.act.UpdateCheck(ctx)
+}
+
+// ApplyUpdate stages the available update into the inactive slot; the
+// caller schedules the restart. Nil-safe.
+func (s *Service) ApplyUpdate(ctx context.Context) error {
+	if s.act.UpdateApply == nil {
+		return errors.New("updates are not available on this device")
+	}
+	return s.act.UpdateApply(ctx)
+}
+
+// DismissRollback clears the rollback banner. Nil-safe.
+func (s *Service) DismissRollback() error {
+	if s.act.UpdateDismiss == nil {
+		return nil
+	}
+	return s.act.UpdateDismiss()
 }

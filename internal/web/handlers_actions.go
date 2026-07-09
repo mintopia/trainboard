@@ -108,3 +108,36 @@ func (s *Server) handleActionsWifiRetry(w http.ResponseWriter, r *http.Request) 
 	s.svc.WifiRetryNow()
 	http.Redirect(w, r, "/actions", http.StatusFound)
 }
+
+// handleUpdateCheck runs an on-demand release check and returns to the
+// status page (PRG); the outcome lands in Status.Update.LastError /
+// .Available, which the page renders.
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.CheckForUpdate(r.Context()); err != nil {
+		s.log.Warn("update check failed", "error", err.Error())
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// handleUpdateApply stages the available update, then — success only —
+// renders the applied page and schedules the same clean-exit restart as
+// config save (the launcher boots the new slot). Failure redirects to the
+// status page, whose Software section shows Status.LastError; the current
+// binary keeps running (update failures are non-fatal by design).
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.ApplyUpdate(r.Context()); err != nil {
+		s.log.Error("update apply failed", "error", err.Error())
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	s.render(w, "applied", basePage{LoggedIn: true, CSRF: csrfFrom(r)})
+	s.scheduleApply()
+}
+
+// handleUpdateDismiss clears the rollback banner (PRG).
+func (s *Server) handleUpdateDismiss(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.DismissRollback(); err != nil {
+		s.log.Warn("rollback dismiss failed", "error", err.Error())
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
+}

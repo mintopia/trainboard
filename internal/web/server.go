@@ -120,6 +120,12 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("POST /actions/wifi-retry", chain(http.HandlerFunc(s.handleActionsWifiRetry),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/update/check", chain(http.HandlerFunc(s.handleUpdateCheck),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/update/apply", chain(http.HandlerFunc(s.handleUpdateApply),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("POST /actions/update/dismiss", chain(http.HandlerFunc(s.handleUpdateDismiss),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 
 	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
 	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
@@ -142,6 +148,10 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /api/actions/soak/cancel", chain(http.HandlerFunc(s.handleAPIActionsSoakCancel),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 	s.mux.Handle("POST /api/actions/wifi-retry", chain(http.HandlerFunc(s.handleAPIActionsWifiRetry),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/update/check", chain(http.HandlerFunc(s.handleAPIUpdateCheck),
+		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
+	s.mux.Handle("POST /api/actions/update/apply", chain(http.HandlerFunc(s.handleAPIUpdateApply),
 		apiJSONErrors, rateLimit(s.actionLimit, log), requireAuth(s.sessions, true), csrfProtect(log)))
 
 	return s

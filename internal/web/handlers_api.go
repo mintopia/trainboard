@@ -9,6 +9,7 @@ import (
 
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/obs"
+	"github.com/mintopia/trainboard/internal/update"
 )
 
 // apiError is the uniform JSON error shape for every /api/* failure:
@@ -46,16 +47,17 @@ const rfc3339 = "2006-01-02T15:04:05Z07:00"
 // carries no json tags (it is the HTML template's data type, not an API
 // type), so the mapping happens here.
 type statusJSON struct {
-	Version       string      `json:"version"`
-	Uptime        string      `json:"uptime"`
-	State         string      `json:"state"`
-	Fault         string      `json:"fault"`
-	LastFetch     string      `json:"lastFetch"`
-	HasSnapshot   bool        `json:"hasSnapshot"`
-	IPs           []string    `json:"ips"`
-	Events        []eventJSON `json:"events"`
-	SoakActive    bool        `json:"soakActive"`
-	SoakRemaining string      `json:"soakRemaining"`
+	Version       string        `json:"version"`
+	Uptime        string        `json:"uptime"`
+	State         string        `json:"state"`
+	Fault         string        `json:"fault"`
+	LastFetch     string        `json:"lastFetch"`
+	HasSnapshot   bool          `json:"hasSnapshot"`
+	IPs           []string      `json:"ips"`
+	Events        []eventJSON   `json:"events"`
+	SoakActive    bool          `json:"soakActive"`
+	SoakRemaining string        `json:"soakRemaining"`
+	Update        update.Status `json:"update"`
 }
 
 func toStatusJSON(st StatusData) statusJSON {
@@ -74,6 +76,7 @@ func toStatusJSON(st StatusData) statusJSON {
 		Events:        events,
 		SoakActive:    st.SoakRemaining > 0,
 		SoakRemaining: st.SoakRemaining.String(),
+		Update:        st.Update,
 	}
 }
 
@@ -210,6 +213,33 @@ func (s *Server) handleAPIActionsSoakCancel(w http.ResponseWriter, _ *http.Reque
 func (s *Server) handleAPIActionsWifiRetry(w http.ResponseWriter, _ *http.Request) {
 	s.svc.WifiRetryNow()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "retrying"})
+}
+
+// handleAPIUpdateCheck is POST /api/actions/update/check: mirrors
+// handleUpdateCheck's on-demand release check, replying with JSON instead of
+// a redirect. A check failure follows handleAPIActionsReboot's convention
+// for a service-level failure: a 500 with the uniform error shape.
+func (s *Server) handleAPIUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.CheckForUpdate(r.Context()); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "checked"})
+}
+
+// handleAPIUpdateApply is POST /api/actions/update/apply: mirrors
+// handleUpdateApply's stage-then-schedule-restart behaviour, replying with
+// JSON instead of the applied page. Failure returns the uniform error shape
+// (500, matching handleAPIActionsReboot's convention for a service-level
+// failure) and does NOT schedule a restart — the current binary keeps
+// running, exactly like the HTML handler's failure path.
+func (s *Server) handleAPIUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.ApplyUpdate(r.Context()); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "applied"})
+	s.scheduleApply()
 }
 
 // responseBuffer is an in-memory http.ResponseWriter used by apiJSONErrors
