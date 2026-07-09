@@ -245,6 +245,24 @@ func TestApplyTruncatedDownload(t *testing.T) {
 	}
 }
 
+func TestApplySweepsStaleTempFiles(t *testing.T) {
+	f := newApplyFixture(t, nil, goodSeed())
+	targetSlotDir := filepath.Join(f.applier.SlotsDir, "b")
+	if err := os.MkdirAll(targetSlotDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(targetSlotDir, ".trainboard-stale.tmp")
+	if err := os.WriteFile(stale, []byte("leftover from interrupted download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.applier.Apply(context.Background(), f.release); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale temp file not swept: err=%v", err)
+	}
+}
+
 func TestOtherSlot(t *testing.T) {
 	if otherSlot("a") != "b" || otherSlot("b") != "a" {
 		t.Error("otherSlot broken")

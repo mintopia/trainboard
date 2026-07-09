@@ -240,7 +240,10 @@ in a GitHub Actions secret (so the release workflow can sign headlessly),
 and an offline recovery key that never leaves your password manager. Either
 key alone is enough to satisfy the device's keyring check, which is what
 makes rotating one of them later a normal signed update rather than a
-reflash.
+reflash. Builds compiled BEFORE this ceremony runs ship with an empty
+keyring and can never self-update — the first post-ceremony build must
+reach slot a via the §5 bootstrap `scp` or the migration script below
+before self-update starts working on that device.
 
 ```
 brew install minisign

@@ -199,6 +199,7 @@ func run() error {
 		StatePath:  *statePath,
 		Version:    buildinfo.Version(),
 		Log:        log,
+		SlotsDir:   *slotsDir,
 	}.Run(ctx)
 	go upd.checker.Run(ctx, func() {
 		log.Info("auto-applied update: exiting for restart into new slot")

@@ -59,6 +59,58 @@ func TestHealthGivesUpAtDeadline(t *testing.T) {
 	}
 }
 
+func TestHealthPromoteRunningSlotGuard(t *testing.T) {
+	t.Run("mismatch: running exe is not state.Active's binary", func(t *testing.T) {
+		path := healthState(t) // Active=b, KnownGood=a
+		slotsDir := t.TempDir()
+		ff := make(chan struct{})
+		close(ff)
+		h := Health{
+			FirstFrame: ff,
+			Probe:      func(_ context.Context) error { return nil },
+			Deadline:   2 * time.Second,
+			StatePath:  path, Version: "v0.2.0", Log: testLogger(),
+			SlotsDir: slotsDir,
+			exe: func() (string, error) {
+				return filepath.Join(slotsDir, "a", "trainboard"), nil
+			},
+		}
+		h.Run(context.Background())
+		st, err := LoadState(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.KnownGood != "a" || st.KnownGoodVersion != "v0.1.0" {
+			t.Errorf("promoted despite running-slot mismatch: %+v", st)
+		}
+	})
+
+	t.Run("match: running exe is state.Active's binary", func(t *testing.T) {
+		path := healthState(t) // Active=b, KnownGood=a
+		slotsDir := t.TempDir()
+		ff := make(chan struct{})
+		close(ff)
+		h := Health{
+			FirstFrame: ff,
+			Probe:      func(_ context.Context) error { return nil },
+			Deadline:   2 * time.Second,
+			StatePath:  path, Version: "v0.2.0", Log: testLogger(),
+			SlotsDir: slotsDir,
+			exe: func() (string, error) {
+				return filepath.Join(slotsDir, "b", "trainboard"), nil
+			},
+		}
+		h.Run(context.Background())
+		st, err := LoadState(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.KnownGood != "b" || st.KnownGoodVersion != "v0.2.0" {
+			t.Errorf("not promoted despite running-slot match: %+v", st)
+		}
+	})
+}
+
 func TestHealthRetriesProbe(t *testing.T) {
 	path := healthState(t)
 	ff := make(chan struct{})

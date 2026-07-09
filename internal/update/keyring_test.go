@@ -96,16 +96,16 @@ func TestVerifyManifest(t *testing.T) {
 	})
 }
 
-func TestKeyringEmptyUntilCeremony(t *testing.T) {
-	// embeddedKeys ships empty until the attended key ceremony (Task 17)
-	// pastes the real public keys in. Keyring() must error, not panic.
-	if len(embeddedKeys) == 0 {
-		if _, err := Keyring(); err == nil {
-			t.Error("Keyring() with no embedded keys must error")
-		}
-	} else {
-		if _, err := Keyring(); err != nil {
-			t.Errorf("Keyring() with embedded keys: %v", err)
-		}
+func TestKeyring(t *testing.T) {
+	// The key ceremony (Task 17) has embedded the real production keys.
+	// Keyring() must parse both without error. The empty-keyring error
+	// path is covered by VerifyManifest's "empty keyring is rejected"
+	// subtest above.
+	keys, err := Keyring()
+	if err != nil {
+		t.Fatalf("Keyring(): %v", err)
+	}
+	if len(keys) != 2 {
+		t.Errorf("got %d keys, want 2", len(keys))
 	}
 }

@@ -138,6 +138,13 @@ func (a *Applier) installBinary(ctx context.Context, url, wantSHA, slot string) 
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
 		return fmt.Errorf("update: creating slot dir: %w", err)
 	}
+	// Sweep temp files left by interrupted downloads (power pull
+	// mid-download leaves up to ~15 MB orphaned; nothing else cleans it).
+	if stale, err := filepath.Glob(filepath.Join(slotDir, ".trainboard-*.tmp")); err == nil {
+		for _, f := range stale {
+			_ = os.Remove(f)
+		}
+	}
 	tmp, err := os.CreateTemp(slotDir, ".trainboard-*.tmp")
 	if err != nil {
 		return fmt.Errorf("update: creating temp binary: %w", err)

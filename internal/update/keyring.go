@@ -14,9 +14,15 @@ import (
 // key here signed it — that overlap is what makes key rotation shippable
 // as a normal signed update.
 //
-// EMPTY until the key ceremony (deploy.md §Self-update key ceremony) runs;
-// until then Keyring() errors and the updater reports itself unavailable.
-var embeddedKeys = []string{}
+// Populated by the key ceremony (deploy.md §Self-update key ceremony) on
+// 2026-07-09. Builds compiled before that date shipped with an empty
+// keyring and cannot self-update (deploy.md §6).
+var embeddedKeys = []string{
+	// trainboard CI signing key (private half: GitHub Actions secret MINISIGN_SECRET_KEY)
+	"RWRjSZQGqGFLNoeSIFiKFhscAdPDTD/Ayuio5bjFim3pamM7P1LG4log",
+	// trainboard recovery key (private half: operator's password manager, never in CI)
+	"RWQAXSYWPdRQdEzgejlbim4ss4xZFbgXB8ba3jUGgYyGsyJDPKUvMbuX",
+}
 
 // Keyring parses the embedded trusted keys.
 func Keyring() ([]minisign.PublicKey, error) {
