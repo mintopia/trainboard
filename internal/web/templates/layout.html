@@ -3,15 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{block "title" .}}trainboard{{end}}</title>
+<title>{{block "title" .}}Trainboard{{end}}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js" defer></script>
 </head>
-<body>
+<body class="{{block "bodyclass" .}}{{end}}">
 <header>
-  <h1>trainboard</h1>
-  {{if .LoggedIn}}<nav><a href="/">Status</a> <a href="/config">Config</a> <a href="/actions">Actions</a>
-  <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form></nav>{{end}}
+  <div class="totem"><a class="brand" href="/">Trainboard</a></div>
+  <div class="yellowband"></div>
+  {{block "tabs" .}}{{if .LoggedIn}}<nav class="tabs">
+    <a href="/"{{if eq .Active "status"}} class="on"{{end}}>Status</a>
+    <a href="/config"{{if eq .Active "config"}} class="on"{{end}}>Configuration</a>
+    <a href="/actions"{{if eq .Active "actions"}} class="on"{{end}}>Actions</a>
+    <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form>
+  </nav>{{end}}{{end}}
 </header>
 <main>{{block "content" .}}{{end}}</main>
 </body>

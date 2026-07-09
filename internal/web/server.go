@@ -29,6 +29,7 @@ type Server struct {
 type basePage struct {
 	LoggedIn bool
 	CSRF     string
+	Active   string // which tab: "status" | "config" | "actions" | ""
 }
 
 type setupPageData struct {

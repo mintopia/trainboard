@@ -28,7 +28,7 @@ func (s *Server) handleActionsGet(w http.ResponseWriter, r *http.Request) {
 
 // actionsData assembles actionsPageData with the live soak state.
 func (s *Server) actionsData(r *http.Request, soakError string) actionsPageData {
-	d := actionsPageData{basePage: basePage{LoggedIn: true, CSRF: csrfFrom(r)}, SoakError: soakError}
+	d := actionsPageData{basePage: basePage{LoggedIn: true, CSRF: csrfFrom(r), Active: "actions"}, SoakError: soakError}
 	if rem := s.svc.SoakRemaining(); rem > 0 {
 		d.SoakRemaining = humanUptime(rem)
 	}

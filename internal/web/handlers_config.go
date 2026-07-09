@@ -36,7 +36,7 @@ type configPageData struct {
 // renderConfig builds configPageData from cfg and renders the config page.
 func (s *Server) renderConfig(w http.ResponseWriter, r *http.Request, cfg config.Config, errMsg string) {
 	s.render(w, "config", configPageData{
-		basePage:         basePage{LoggedIn: true, CSRF: csrfFrom(r)},
+		basePage:         basePage{LoggedIn: true, CSRF: csrfFrom(r), Active: "config"},
 		Cfg:              cfg,
 		Error:            errMsg,
 		PlatformsCSV:     joinCSV(cfg.Board.Platforms),

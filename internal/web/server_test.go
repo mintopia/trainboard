@@ -304,3 +304,26 @@ func TestServerStaticServesWithoutAuth(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 }
+
+// TestStaticFontsServed confirms the Wayfinding design system's subset
+// woff2 fonts land under static/fonts/ and are picked up automatically by
+// the //go:embed templates/* static/* directive, with no route wiring
+// needed beyond the existing GET /static/ file server.
+func TestStaticFontsServed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := srv.Handler()
+	for _, path := range []string{
+		"/static/fonts/rail-alphabet-dark.woff2",
+		"/static/fonts/rail-alphabet-light.woff2",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: want 200, got %d", path, rec.Code)
+		}
+		if rec.Body.Len() < 1000 {
+			t.Errorf("GET %s: suspiciously small body (%d bytes)", path, rec.Body.Len())
+		}
+	}
+}

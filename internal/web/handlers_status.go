@@ -36,7 +36,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	st := s.svc.Status()
 	data := statusPageData{
-		basePage:   basePage{LoggedIn: true, CSRF: csrfFrom(r)},
+		basePage:   basePage{LoggedIn: true, CSRF: csrfFrom(r), Active: "status"},
 		Status:     st,
 		UptimeText: humanUptime(st.Uptime),
 		MDNSState:  s.svc.MDNSState(),
