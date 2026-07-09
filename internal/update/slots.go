@@ -34,10 +34,7 @@ func Decide(s State) BootDecision {
 	if s.Active != s.KnownGood {
 		// Rollback: the pending slot never came healthy. Flip back to
 		// known-good and record what we abandoned for the web UI.
-		s.RolledBackFrom = s.ActiveVersion
-		s.Active = s.KnownGood
-		s.ActiveVersion = s.KnownGoodVersion
-		s.BootAttempts = 1 // this boot is known-good's first attempt
+		s = Rollback(s)
 		return BootDecision{Slot: s.Active, RolledBack: true, State: s}
 	}
 	// Double fault: known-good itself is failing. Enter recovery mode with
@@ -45,6 +42,21 @@ func Decide(s State) BootDecision {
 	// web UI retries a normal boot.
 	s.BootAttempts = 0
 	return BootDecision{Slot: s.KnownGood, Recovery: true, State: s}
+}
+
+// Rollback returns s flipped back to its known-good slot: the abandoned
+// version is recorded in RolledBackFrom, Active/ActiveVersion re-point at
+// known-good, and the attempt counter restarts at 1 (the imminent boot of
+// known-good is its first attempt). Used by Decide's three-strikes branch
+// and by the launcher's fast-fallback (exec of the selected slot failed
+// outright) — both MUST persist this state before exec'ing known-good, or
+// a later Promote would bless the abandoned slot (it trusts state.Active).
+func Rollback(s State) State {
+	s.RolledBackFrom = s.ActiveVersion
+	s.Active = s.KnownGood
+	s.ActiveVersion = s.KnownGoodVersion
+	s.BootAttempts = 1
+	return s
 }
 
 // Promote marks the running slot healthy: the payload calls this once its

@@ -133,6 +133,23 @@ func TestExecFailureFallsBackToKnownGood(t *testing.T) {
 	if len(fe.calls) != 2 || !strings.Contains(fe.calls[1], filepath.Join("a", "trainboard")) {
 		t.Fatalf("calls = %v, want [b-bin, a-bin]", fe.calls)
 	}
+	// The fast-fallback shortcut MUST flip persisted state to known-good the
+	// same way the three-strikes rollback branch in Decide does — otherwise
+	// a later Promote (health check passes on the fallback-exec'd known-good
+	// payload) does s.KnownGood = s.Active and blesses the CORRUPT slot b as
+	// known-good, bricking the device on the next apply.
+	st, err := update.LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := update.State{
+		Active: "a", ActiveVersion: "v0.1.0",
+		KnownGood: "a", KnownGoodVersion: "v0.1.0",
+		BootAttempts: 1, RolledBackFrom: "v0.2.0",
+	}
+	if st != want {
+		t.Errorf("persisted state after fast-fallback = %+v, want %+v", st, want)
+	}
 }
 
 func TestExecFailureOfKnownGoodErrors(t *testing.T) {

@@ -76,9 +76,20 @@ func launch(slots, statePath string, passthrough []string, execFn func(bin strin
 	// it now rather than waiting three boots.
 	if dec.Slot != dec.State.KnownGood {
 		fb := filepath.Join(slots, dec.State.KnownGood, "trainboard")
-		fmt.Fprintf(os.Stderr, "trainboard-launcher: exec %s: %v; falling back to %s\n", bin, err, fb)
+		// Flip and persist the rollback state BEFORE the fallback exec, the
+		// same way Decide's three-strikes branch does. Without this, state
+		// still says Active=<the slot whose exec just failed>; if the
+		// fallback-exec'd known-good payload later passes its health check,
+		// Promote does s.KnownGood = s.Active and blesses the CORRUPT slot
+		// as known-good — the next apply would overwrite the only working
+		// binary, bricking the device.
+		dec.State = update.Rollback(dec.State)
+		fmt.Fprintf(os.Stderr, "trainboard-launcher: exec %s: %v; rolling back state and falling back to %s\n", bin, err, fb)
+		if err := update.SaveState(statePath, dec.State); err != nil {
+			fmt.Fprintln(os.Stderr, "trainboard-launcher: warning: persisting rollback state:", err)
+		}
 		if err2 := execFn(fb, append([]string{fb}, passthrough...), os.Environ()); err2 != nil {
-			return fmt.Errorf("exec %s: %v; fallback exec %s: %v", bin, err, fb, err2)
+			return fmt.Errorf("exec %s: %w; fallback exec %s: %w", bin, err, fb, err2)
 		}
 		return nil
 	}
