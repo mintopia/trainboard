@@ -9,9 +9,9 @@ import (
 	"github.com/mintopia/trainboard/internal/render"
 )
 
-// callingAtText joins calling points as "A, B and C", optionally suffixing
-// each with its scheduled time (layout.times).
-func callingAtText(d data.Departure, showTimes bool) string {
+// CallingAtText is the exact calling-points string the panel scrolls:
+// "A, B and C", each name suffixed " (HH:MM)" when times is true.
+func CallingAtText(d data.Departure, showTimes bool) string {
 	if len(d.CallingPoints) == 0 {
 		return ""
 	}
@@ -28,8 +28,9 @@ func callingAtText(d data.Departure, showTimes bool) string {
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
-// serviceInfoText is the operator/coaches info line for the next service.
-func serviceInfoText(d data.Departure) string {
+// ServiceInfoText is the panel's service line: "<Operator> service formed of
+// N coaches".
+func ServiceInfoText(d data.Departure) string {
 	info := d.Operator + " service"
 	if d.Length > 0 {
 		plural := "es"
@@ -47,8 +48,8 @@ func departureBoardScene(b *data.Board, layout config.LayoutConfig, f *Fonts) *r
 	els := []render.Element{
 		newNextServiceRow(first, f),
 		&render.ScrollingText{Font: f.Regular, Text: "Calling at:", X: 0, Y: RowH, W: CallingLabelW, H: RowH, Level: 15},
-		&render.ScrollingText{Font: f.Regular, Text: callingAtText(first, layout.Times), X: CallingListX, Y: RowH, W: CallingListW, H: RowH, Level: 15},
-		&render.ScrollingText{Font: f.Regular, Text: serviceInfoText(first), X: 0, Y: ServiceInfoY, W: W, H: RowH, Level: 15},
+		&render.ScrollingText{Font: f.Regular, Text: CallingAtText(first, layout.Times), X: CallingListX, Y: RowH, W: CallingListW, H: RowH, Level: 15},
+		&render.ScrollingText{Font: f.Regular, Text: ServiceInfoText(first), X: 0, Y: ServiceInfoY, W: W, H: RowH, Level: 15},
 		newRemainingServices(b.Departures[1:], f),
 		offsetElement(&render.Clock{Large: f.BoldLarge, Tall: f.BoldTall, W: W, Level: 15}, 0, ClockY, W, ClockH),
 	}

@@ -7,8 +7,9 @@ import (
 	"github.com/mintopia/trainboard/internal/render"
 )
 
-// ordinal formats 1 → "1st", 2 → "2nd", 11 → "11th", matching the reference.
-func ordinal(n int) string {
+// Ordinal renders 1 → "1st", 2 → "2nd" etc, as shown in the board's order
+// column.
+func Ordinal(n int) string {
 	suffix := "th"
 	switch {
 	case n%100 >= 11 && n%100 <= 13:
@@ -26,7 +27,7 @@ func ordinal(n int) string {
 // Headcode is never drawn (no data source); platform only when present.
 func rowElements(d data.Departure, order, y int, f *Fonts) []render.Element {
 	els := []render.Element{
-		&render.StaticText{Font: f.Regular, Text: ordinal(order), X: ColOrderX, Y: y, W: ColSchedX, H: RowH, Align: render.AlignLeft, Level: 15},
+		&render.StaticText{Font: f.Regular, Text: Ordinal(order), X: ColOrderX, Y: y, W: ColSchedX, H: RowH, Align: render.AlignLeft, Level: 15},
 		&render.StaticText{Font: f.Regular, Text: d.ScheduledTime, X: ColSchedX, Y: y, W: ColSchedW, H: RowH, Align: render.AlignCenter, Level: 15},
 	}
 	if d.Platform != "" {
