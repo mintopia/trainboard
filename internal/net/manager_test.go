@@ -414,6 +414,8 @@ func TestManagerRunSTAAttemptTimeoutFallsBackToAPNotCancellation(t *testing.T) {
 
 	driver := &fakeDriver{attemptSTABlockUntilCtxDone: true, apActiveDefault: true}
 	dnsmasq := newTestDnsmasqRecordingInto(driver)
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
 
 	m := NewManager(ManagerDeps{
 		Driver:  driver,
@@ -421,12 +423,20 @@ func TestManagerRunSTAAttemptTimeoutFallsBackToAPNotCancellation(t *testing.T) {
 		Dnsmasq: dnsmasq,
 		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
 		AP:      APConfig{SSID: "Trainboard-T", Addr: "192.168.4.1/24"},
-		After:   (&fakeAfter{}).After,
-		Now:     time.Now,
+		After:   after.After,
+		Now:     clock.Now,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
+
+	// The bounded attempt times out (never cancellation) and, per the issue
+	// #54 grace loop, gets retried rather than conceding to AP immediately —
+	// exhaust the grace window with one retry so boot falls back to AP
+	// deterministically instead of hanging on an unfired retry pause.
+	timer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, timer)
 
 	// If the timeout were misclassified as parent-ctx cancellation, Run
 	// would return nil almost immediately instead of ever publishing
@@ -781,12 +791,13 @@ func TestManagerRunFullFallbackRetrySuccessCycle(t *testing.T) {
 	after := &fakeAfter{}
 	clock := newFakeClock(time.Unix(0, 0))
 
-	// Boot consumes TWO STA attempts now: the initial one plus the
-	// once-per-process instant-failure fast retry (issue #47), which fires
-	// because the fake clock never advances during an attempt (0s < the 2s
-	// threshold). Both must fail for boot to fall back to AP, so the check
-	// only starts passing on the third association (the real AP-fallback
-	// retry).
+	// Boot consumes TWO STA attempts now: the initial one plus one retry from
+	// the issue #54 grace loop (exhausted below by advancing the clock past
+	// bootSTAGraceWindow before firing its retry pause, rather than letting it
+	// genuinely converge — this test is about the AP-fallback retry cycle, not
+	// boot itself). Both boot attempts must fail for boot to fall back to AP,
+	// so the check only starts passing on the third association (the real
+	// AP-fallback retry).
 	var assocCalls int
 	check := NewCheckWithProbes(Probes{
 		Assoc: func(context.Context) error {
@@ -816,12 +827,20 @@ func TestManagerRunFullFallbackRetrySuccessCycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
 
+	// Exhaust boot's grace-loop retry (see the assocCalls comment above):
+	// advance the clock past bootSTAGraceWindow before firing its one retry
+	// pause, so the second boot attempt's deadline check concedes to AP
+	// immediately rather than pausing again.
+	bootTimer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, bootTimer)
+
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
 	// waitAPFallback wakes on a 30s heartbeat cadence well before the full
 	// 5-minute budget — advance the fake clock past the budget so this wake
 	// is recognised as the real retry timeout, not another heartbeat tick.
-	timer := after.nth(t, 1)
+	timer := after.nth(t, 2)
 	clock.Advance(apFallbackRetryWait)
 	fire(t, timer)
 
@@ -880,11 +899,19 @@ func TestManagerRunRetryFailureRestoresAP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
 
+	// Assoc never passes, so boot's own issue #54 grace loop retries once
+	// before conceding to AP — exhaust it exactly as
+	// TestManagerRunFullFallbackRetrySuccessCycle does, since this test cares
+	// about the AP-fallback retry cycle, not boot's grace window.
+	bootTimer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, bootTimer)
+
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
 	// See TestManagerRunFullFallbackRetrySuccessCycle: advance past the
 	// heartbeat-tracked budget so this wake is the real retry timeout.
-	timer := after.nth(t, 1)
+	timer := after.nth(t, 2)
 	clock.Advance(apFallbackRetryWait)
 	fire(t, timer)
 
@@ -964,10 +991,10 @@ func TestManagerRunRetryNowBypassesWaitAndSuppression(t *testing.T) {
 	clock := newFakeClock(time.Unix(1_700_000_000, 0))
 
 	// As in TestManagerRunFullFallbackRetrySuccessCycle, boot burns two STA
-	// attempts (initial + the once-per-process instant-failure fast retry, #47)
-	// because the frozen fake clock makes every attempt look instant; both must
-	// fail so boot falls back to AP, leaving the RetryNow-triggered attempt
-	// (association #3) to succeed.
+	// attempts: the initial one plus one retry from the issue #54 grace loop
+	// (exhausted below by advancing the clock past bootSTAGraceWindow); both
+	// must fail so boot falls back to AP, leaving the RetryNow-triggered
+	// attempt (association #3) to succeed.
 	var assocCalls int
 	check := NewCheckWithProbes(Probes{
 		Assoc: func(context.Context) error {
@@ -995,9 +1022,14 @@ func TestManagerRunRetryNowBypassesWaitAndSuppression(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
 
+	// Exhaust boot's grace-loop retry (see TestManagerRunFullFallbackRetrySuccessCycle).
+	bootTimer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, bootTimer)
+
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
-	after.nth(t, 1)                 // Run is now blocked selecting on the 5m timer / retry chan.
+	after.nth(t, 2)                 // Run is now blocked selecting on the 5m timer / retry chan.
 	m.NoteProvisioning(clock.Now()) // would suppress a scheduled wake...
 	m.RetryNow()                    // ...but RetryNow bypasses it.
 
@@ -1169,6 +1201,8 @@ func TestManagerRunCtxCancelWhileAPFallbackStillKillsDHClientAndTearsDownAP(t *t
 	dnsmasq := newTestDnsmasqRecordingInto(driver)
 	runner := NewFakeRunner()
 	runner.Script("pkill -F "+dhclientPidfile+" dhclient", "", nil)
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
 
 	m := NewManager(ManagerDeps{
 		Driver:  driver,
@@ -1177,12 +1211,21 @@ func TestManagerRunCtxCancelWhileAPFallbackStillKillsDHClientAndTearsDownAP(t *t
 		Runner:  runner,
 		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
 		AP:      APConfig{SSID: "Trainboard-K2", Addr: "192.168.4.1/24"},
-		After:   (&fakeAfter{}).After,
-		Now:     time.Now,
+		After:   after.After,
+		Now:     clock.Now,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
+
+	// attemptSTAErr is fixed (always fails), so boot's own issue #54 grace
+	// loop retries once before conceding to AP — exhaust it exactly as
+	// TestManagerRunFullFallbackRetrySuccessCycle does; this test only cares
+	// about the ctx-cancel-during-AP-fallback teardown, not boot's grace
+	// window.
+	bootTimer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, bootTimer)
 
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 	cancel()
@@ -1376,11 +1419,12 @@ func TestManagerRunHeartbeatTicksDuringAPWaitDontBypassSuppression(t *testing.T)
 	}
 }
 
-// --- issue #47: instant-first-STA-failure fast retry -----------------------
+// --- issue #54: boot STA grace loop (replaces issue #47's one-shot fast
+// retry) ---------------------------------------------------------------
 
 // capturingHandler is a minimal slog.Handler test double recording every
-// emitted message, so the fast-retry tests can assert the fast-retry log line
-// is emitted exactly once (or never).
+// emitted message, so the grace-loop tests can assert a log line is emitted
+// the expected number of times (or never).
 type capturingHandler struct {
 	mu   sync.Mutex
 	msgs []string
@@ -1420,15 +1464,24 @@ func countCalls(driver *fakeDriver, name string) int {
 	return n
 }
 
-// TestManagerFastRetryOnInstantFirstSTAFailure pins the issue #47 manager fix:
-// when the very first STA attempt of the process fails within fastRetryThreshold
-// (the fake clock never advances, so the attempt looks instant — a cold
-// wpa_supplicant control-socket race, not a genuine association failure), the
-// manager retries STA once immediately before ever paying the ~5-minute AP
-// fallback detour. Here both attempts fail, so it still ends in AP fallback —
-// but via exactly TWO AttemptSTA calls, with the fast-retry log emitted once.
-func TestManagerFastRetryOnInstantFirstSTAFailure(t *testing.T) {
-	driver := &fakeDriver{apActiveDefault: true, attemptSTAErr: errors.New("ctrl socket not ready")}
+// TestManagerBootSTAGraceLoopConvergesOnRepeatedInstantFailuresWithoutAPDetour
+// pins the issue #54 replacement for the old once-per-process fast retry
+// (issue #47): repeated INSTANT STA failures (as observed when
+// trainboard.service restarts and kills wpa_supplicant via its
+// KillMode=control-group, and the respawned daemon is still coming up) are
+// retried on a fixed cadence (bootSTARetryPause) for up to
+// bootSTAGraceWindow, converging on success WITHOUT ever falling back to
+// AP — the same protection the old fast retry gave for a single instant
+// failure, now extended to cover several.
+func TestManagerBootSTAGraceLoopConvergesOnRepeatedInstantFailuresWithoutAPDetour(t *testing.T) {
+	driver := &fakeDriver{attemptSTAErr: errors.New("ctrl socket not ready")}
+	attempts := 0
+	driver.attemptSTAHook = func() {
+		attempts++
+		if attempts >= 3 {
+			driver.attemptSTAErr = nil // the daemon has finished respawning; this attempt succeeds
+		}
+	}
 	dnsmasq := newTestDnsmasqRecordingInto(driver)
 	after := &fakeAfter{}
 	clock := newFakeClock(time.Unix(0, 0)) // frozen: every attempt looks instant
@@ -1448,115 +1501,148 @@ func TestManagerFastRetryOnInstantFirstSTAFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
 
-	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
+	// Retry pauses fire twice (attempts 1 and 2 fail); attempt 3 succeeds.
+	fire(t, after.nth(t, 1))
+	fire(t, after.nth(t, 2))
 
-	if got := countCalls(driver, "AttemptSTA"); got != 2 {
-		t.Fatalf("AttemptSTA called %d times, want 2 (boot attempt + one fast retry)", got)
-	}
-	if got := logs.count("fast retry"); got != 1 {
-		t.Fatalf("fast-retry log emitted %d times, want 1", got)
-	}
-
-	cancel()
-	if err := waitRunDone(t, done); err != nil {
-		t.Fatalf("Run() err = %v, want nil", err)
-	}
-}
-
-// TestManagerFastRetrySkippedWhenFirstSTAFailureSlow confirms the fast retry is
-// gated on speed, not merely on being the first failure: a first attempt that
-// takes 3s (past fastRetryThreshold) is a genuine association failure, not a
-// socket race, so it must NOT trigger a fast retry — exactly ONE AttemptSTA
-// then straight to AP fallback, no fast-retry log.
-func TestManagerFastRetrySkippedWhenFirstSTAFailureSlow(t *testing.T) {
-	clock := newFakeClock(time.Unix(0, 0))
-	driver := &fakeDriver{
-		apActiveDefault: true,
-		attemptSTAErr:   errors.New("association timed out"),
-		attemptSTAHook:  func() { clock.Advance(3 * time.Second) }, // the attempt is slow
-	}
-	dnsmasq := newTestDnsmasqRecordingInto(driver)
-	after := &fakeAfter{}
-	logs := &capturingHandler{}
-
-	m := NewManager(ManagerDeps{
-		Driver:  driver,
-		Check:   passingCheck(),
-		Dnsmasq: dnsmasq,
-		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
-		AP:      APConfig{SSID: "Trainboard-SL", Addr: "192.168.4.1/24"},
-		Now:     clock.Now,
-		After:   after.After,
-		Log:     slog.New(logs),
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := runManagerAsync(ctx, m)
-
-	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
-
-	if got := countCalls(driver, "AttemptSTA"); got != 1 {
-		t.Fatalf("AttemptSTA called %d times, want 1 (a slow first failure gets no fast retry)", got)
-	}
-	if got := logs.count("fast retry"); got != 0 {
-		t.Fatalf("fast-retry log emitted %d times, want 0", got)
-	}
-
-	cancel()
-	if err := waitRunDone(t, done); err != nil {
-		t.Fatalf("Run() err = %v, want nil", err)
-	}
-}
-
-// TestManagerFastRetryOncePerProcessLifetime pins the once-per-process budget:
-// boot consumes the single fast retry (2 AttemptSTA calls), and a LATER
-// AP-fallback retry cycle whose STA attempt ALSO fails instantly gets NO
-// second fast retry — total AttemptSTA is 3 (2 boot + exactly 1 retry) and the
-// fast-retry log stays at exactly one.
-func TestManagerFastRetryOncePerProcessLifetime(t *testing.T) {
-	driver := &fakeDriver{apActiveDefault: true, attemptSTAErr: errors.New("ctrl socket not ready")}
-	dnsmasq := newTestDnsmasqRecordingInto(driver)
-	after := &fakeAfter{}
-	clock := newFakeClock(time.Unix(0, 0)) // frozen: every attempt looks instant
-	logs := &capturingHandler{}
-
-	m := NewManager(ManagerDeps{
-		Driver:  driver,
-		Check:   passingCheck(),
-		Dnsmasq: dnsmasq,
-		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
-		AP:      APConfig{SSID: "Trainboard-OP", Addr: "192.168.4.1/24"},
-		Now:     clock.Now,
-		After:   after.After,
-		Log:     slog.New(logs),
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := runManagerAsync(ctx, m)
-
-	// Boot: initial attempt + the one lifetime fast retry, both fail -> AP.
-	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
-	if got := countCalls(driver, "AttemptSTA"); got != 2 {
-		t.Fatalf("boot AttemptSTA = %d, want 2 (initial + fast retry)", got)
-	}
-
-	// A later AP-fallback retry whose STA attempt also fails instantly.
-	timer := after.nth(t, 1)
-	clock.Advance(apFallbackRetryWait)
-	fire(t, timer)
-
-	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback && s.LastSTAErr != "" })
+	waitForState(t, m, func(s Status) bool { return s.State == ManagerOnline })
 
 	if got := countCalls(driver, "AttemptSTA"); got != 3 {
-		t.Fatalf("AttemptSTA = %d, want 3 (2 boot + exactly 1 retry; no second fast retry)", got)
+		t.Fatalf("AttemptSTA called %d times, want 3", got)
 	}
-	if got := logs.count("fast retry"); got != 1 {
-		t.Fatalf("fast-retry log emitted %d times, want exactly 1 (once per process lifetime)", got)
+	if got := logs.count("retrying within grace window"); got != 2 {
+		t.Fatalf("grace-window retry log emitted %d times, want 2", got)
+	}
+	for _, c := range driver.Calls() {
+		if c == "StartAP" {
+			t.Fatalf("StartAP called; want convergence to STA without ever detouring through AP: %v", driver.Calls())
+		}
 	}
 
 	cancel()
 	if err := waitRunDone(t, done); err != nil {
 		t.Fatalf("Run() err = %v, want nil", err)
+	}
+}
+
+// TestManagerBootSTANoWifiConfiguredReturnsImmediatelyWithoutGraceRetry pins
+// the issue #54 requirement that an unconfigured device keeps the fast path
+// to AP: errNoWifiConfigured must short-circuit bootSTA before it ever
+// touches the driver or waits out a grace-loop retry pause.
+func TestManagerBootSTANoWifiConfiguredReturnsImmediatelyWithoutGraceRetry(t *testing.T) {
+	driver := &fakeDriver{}
+	dnsmasq, _ := newTestDnsmasq()
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{} }, // no wifi configured
+		Now:     clock.Now,
+		After:   after.After,
+	})
+
+	err := m.bootSTA(context.Background())
+	if !errors.Is(err, errNoWifiConfigured) {
+		t.Fatalf("bootSTA() err = %v, want errNoWifiConfigured", err)
+	}
+	if got := len(driver.Calls()); got != 0 {
+		t.Fatalf("driver.Calls() = %v, want none (no wifi configured must never touch the driver)", driver.Calls())
+	}
+	after.mu.Lock()
+	n := len(after.calls)
+	after.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("After() called %d times, want 0 (no-wifi must return immediately, never entering the grace-retry pause)", n)
+	}
+}
+
+// TestManagerBootSTAGraceWindowExhaustionFallsBackToLastError pins the other
+// edge of the grace loop: repeated failures that never converge give up once
+// m.now() passes the bootSTAGraceWindow deadline, returning the LAST STA
+// error (for runBoot's AP-fallback concession) rather than retrying forever.
+func TestManagerBootSTAGraceWindowExhaustionFallsBackToLastError(t *testing.T) {
+	wantErr := errors.New("perpetually not associating")
+	driver := &fakeDriver{attemptSTAErr: wantErr}
+	dnsmasq, _ := newTestDnsmasq()
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		Now:     clock.Now,
+		After:   after.After,
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- m.bootSTA(context.Background()) }()
+
+	// Fire the first retry pause having already advanced the clock past the
+	// grace window: the NEXT attempt's deadline check (running immediately
+	// after this fire unblocks the loop) sees the exhausted window and
+	// returns without a second pause.
+	timer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, timer)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("bootSTA() err = %v, want %v", err, wantErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bootSTA did not return once the grace window was exhausted")
+	}
+
+	after.mu.Lock()
+	n := len(after.calls)
+	after.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("After() called %d times, want exactly 1 (the window is exhausted before a second pause)", n)
+	}
+}
+
+// TestManagerBootSTACtxCancelMidGraceLoopPauseReturnsCleanly pins the
+// ctx-cancellation discipline inside the grace loop's pause: a cancellation
+// arriving while bootSTA is parked in the retry pause must return promptly
+// (the LAST STA error, not a context error — runBoot's own ctx.Err() check
+// is what classifies this as clean shutdown, exactly as it does for every
+// other phase; see toSTA's doc comment on parent-vs-child ctx discipline).
+func TestManagerBootSTACtxCancelMidGraceLoopPauseReturnsCleanly(t *testing.T) {
+	wantErr := errors.New("still not associated")
+	driver := &fakeDriver{attemptSTAErr: wantErr}
+	dnsmasq, _ := newTestDnsmasq()
+	after := &fakeAfter{}
+	clock := newFakeClock(time.Unix(0, 0))
+
+	m := NewManager(ManagerDeps{
+		Driver:  driver,
+		Check:   passingCheck(),
+		Dnsmasq: dnsmasq,
+		STA:     func() STAConfig { return STAConfig{SSID: "home", PSK: "secret"} },
+		Now:     clock.Now,
+		After:   after.After,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.bootSTA(ctx) }()
+
+	after.nth(t, 1) // bootSTA is now parked in the retry pause.
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("bootSTA() err = %v, want the last STA failure (%v), not a context error", err, wantErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bootSTA did not return promptly on ctx cancellation mid-pause")
 	}
 }
 
@@ -1603,11 +1689,19 @@ func TestManagerRunAPRestoreFailureRetriesInProcessOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManagerAsync(ctx, m)
 
+	// Assoc never passes, so boot's own issue #54 grace loop retries once
+	// before conceding to AP — exhaust it exactly as
+	// TestManagerRunFullFallbackRetrySuccessCycle does; this test is about
+	// the AP-restore retry, not boot's grace window.
+	bootTimer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, bootTimer)
+
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
 	// Advance past the heartbeat-tracked budget so this wake is the real
 	// retry timeout (see TestManagerRunFullFallbackRetrySuccessCycle).
-	timer := after.nth(t, 1)
+	timer := after.nth(t, 2)
 	clock.Advance(apFallbackRetryWait)
 	fire(t, timer)
 
@@ -1679,9 +1773,17 @@ func TestManagerRunEscalatesAfterInProcessAPRestoreRetryFails(t *testing.T) {
 	defer cancel()
 	done := runManagerAsync(ctx, m)
 
+	// Assoc never passes, so boot's own issue #54 grace loop retries once
+	// before conceding to AP — exhaust it exactly as
+	// TestManagerRunFullFallbackRetrySuccessCycle does. This single boot-time
+	// retry pause also calls Beat once (see the beats.Load() assertion below).
+	bootTimer := after.nth(t, 1)
+	clock.Advance(bootSTAGraceWindow)
+	fire(t, bootTimer)
+
 	waitForState(t, m, func(s Status) bool { return s.State == ManagerAPFallback })
 
-	timer := after.nth(t, 1)
+	timer := after.nth(t, 2)
 	clock.Advance(apFallbackRetryWait)
 	fire(t, timer)
 
@@ -1700,11 +1802,14 @@ func TestManagerRunEscalatesAfterInProcessAPRestoreRetryFails(t *testing.T) {
 	if got := countCalls(driver, "StartAP"); got != 5 {
 		t.Fatalf("StartAP = %d, want 5 (boot 1 + restore 2 + single retry 2); calls: %v", got, driver.Calls())
 	}
-	// Heartbeat arithmetic (see runAPWait): Beat at the boot iteration (1) and
-	// the AP-wait iteration (2), plus exactly one extra Beat immediately before
-	// the in-process retry (3) so the retry's toAP never extends the
-	// worst-case beat gap past the watchdog deadline.
-	if got := beats.Load(); got != 3 {
-		t.Fatalf("Beat called %d times, want exactly 3 (boot + AP-wait iteration + pre-retry beat)", got)
+	// Heartbeat arithmetic (see runAPWait and bootSTA): Beat at the outer
+	// boot iteration (1), one more from bootSTA's own single grace-loop
+	// retry pause (2, issue #54 — keeps the boot phase's own worst-case gap
+	// bounded independently of managerBeatDeadline), the outer AP-wait
+	// iteration (3), plus exactly one extra Beat immediately before the
+	// in-process retry (4) so the retry's toAP never extends the worst-case
+	// beat gap past the watchdog deadline.
+	if got := beats.Load(); got != 4 {
+		t.Fatalf("Beat called %d times, want exactly 4 (boot + boot grace-loop retry + AP-wait iteration + pre-retry beat)", got)
 	}
 }

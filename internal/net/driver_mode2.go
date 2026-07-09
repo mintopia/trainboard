@@ -188,21 +188,56 @@ func (d *mode2Driver) StopAP(ctx context.Context) error {
 	return nil
 }
 
-// AttemptSTA switches to the client network using the shared staAttempt
-// flow: reconfigure the (already-running) daemon, select the STA network,
-// wait for association, then run a one-shot dhclient. The conf staAttempt
-// writes retains d.ap's (disabled) block alongside the STA block — mode2's
-// single conf file always holds both networks (see the package doc comment
-// above), so a reconfigure here must not drop the AP one out from under a
-// later StartAP. It does not evaluate connectivity beyond that — the
-// layered Check owns that.
+// staAssocPolls is AttemptSTA's association-wait budget (issue #54): larger
+// than the shared pollAttempts (10/5s) because AttemptSTA's own ensureDaemon
+// call may have just spawned a cold wpa_supplicant (trainboard.service's
+// KillMode=control-group kills the daemon on every service stop, so the STA
+// path hits this exactly as often as StartAP's cold-start case, issue #48,
+// did). 20 x pollInterval (500ms) = 10s covers a cold daemon's post-spawn
+// scan+associate AND the AP->STA network switch observed to need it on
+// hardware (the 2026-07-09 18:26 retry failure this issue fixes); hostapdDriver
+// keeps the plain pollAttempts since it has no equivalent cold-daemon race on
+// this path (see its AttemptSTA doc comment).
+const staAssocPolls = 20
+
+// AttemptSTA switches to the client network. Issue #54: unlike the
+// pre-fix version, this now ensures the daemon FIRST — writing the conf (it
+// must exist before a possible spawn) and calling ensureDaemon (identical
+// spawn + ctrl-socket-wait sequence StartAP uses) — before running the
+// shared staAttempt flow (select the STA network, wait for association via
+// the extended staAssocPolls budget, then run a one-shot dhclient).
+// staAttempt's own write+reconfigure afterwards is redundant but harmless on
+// the already-running branch (idempotent), and is what actually applies the
+// freshly-set d.sta credentials in the already-running case where
+// ensureDaemon's reconfigure ran against the OLD conf (this method sets
+// d.sta below, then calls writeConf, so ensureDaemon's own write already
+// carries the new credentials too — the duplication is belt-and-braces, not
+// a correctness dependency).
+//
+// Before this fix, AttemptSTA assumed a running daemon and staAttempt's bare
+// `wpa_cli reconfigure` failed outright against a dead one — the STA-restart
+// wedge: every trainboard.service restart killed wpa_supplicant (cgroup
+// KillMode), so the very first STA attempt after a restart failed instantly,
+// triggering a ~5-minute AP-fallback detour on every restart.
+//
+// The conf staAttempt writes retains d.ap's (disabled) block alongside the
+// STA block — mode2's single conf file always holds both networks (see the
+// package doc comment above), so a reconfigure here must not drop the AP one
+// out from under a later StartAP. It does not evaluate connectivity beyond
+// that — the layered Check owns that.
 func (d *mode2Driver) AttemptSTA(ctx context.Context, sta STAConfig) error {
 	d.sta = sta
+	if err := d.writeConf(); err != nil {
+		return fmt.Errorf("net: mode2: AttemptSTA: %w", err)
+	}
+	if _, err := d.ensureDaemon(ctx); err != nil {
+		return fmt.Errorf("net: mode2: AttemptSTA: %w", err)
+	}
 	render := func(s STAConfig) ([]byte, error) {
 		body, err := renderConf(s, d.ap, d.country)
 		return []byte(body), err
 	}
-	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, d.sleep); err != nil {
+	if err := staAttempt(ctx, d.r, d.iface, sta, render, d.writeFile, staAssocPolls, d.sleep); err != nil {
 		return fmt.Errorf("net: mode2: AttemptSTA: %w", err)
 	}
 	return nil

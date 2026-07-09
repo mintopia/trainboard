@@ -111,14 +111,6 @@ type Manager struct {
 	status atomic.Pointer[Status]
 	retry  chan struct{}
 
-	// firstAttempt and fastRetried gate the once-per-process instant-failure
-	// fast retry (issue #47). They are owned exclusively by Run's single
-	// goroutine — only ever read/written from bootSTA — so they need no mutex.
-	// firstAttempt marks the very first STA attempt of the process (cleared
-	// after it); fastRetried pins the fast retry to at most once per lifetime.
-	firstAttempt bool
-	fastRetried  bool
-
 	provMu sync.Mutex
 	provAt time.Time
 }
@@ -126,7 +118,7 @@ type Manager struct {
 // NewManager builds a Manager publishing ManagerBoot until Run (Task 9)
 // drives its first transition.
 func NewManager(d ManagerDeps) *Manager {
-	m := &Manager{d: d, retry: make(chan struct{}, 1), firstAttempt: true}
+	m := &Manager{d: d, retry: make(chan struct{}, 1)}
 	m.status.Store(&Status{State: ManagerBoot})
 	return m
 }
@@ -189,13 +181,20 @@ const (
 // of waiting out the real 45s; production wiring never touches it.
 var staAttemptBound = 45 * time.Second
 
-// fastRetryThreshold bounds "instant" for the once-per-process cold-start fast
-// retry (issue #47): a FIRST STA attempt that fails faster than this almost
-// certainly lost a race with wpa_supplicant's control socket coming up rather
-// than genuinely failing to associate, so retrying once immediately is far
-// cheaper than a full ~5-minute AP-fallback detour. The injected clock
-// (m.now()) measures the attempt.
-const fastRetryThreshold = 2 * time.Second
+// bootSTAGraceWindow and bootSTARetryPause replace issue #47's one-shot
+// instant-failure fast retry with a proper retry loop (issue #54): on
+// hardware, trainboard.service's KillMode=control-group kills wpa_supplicant
+// on every service stop, so the STA path can legitimately need several
+// retries — not just one — before the respawned daemon (or the driver's own
+// cold-start handling, see driver_mode2.go's ensureDaemon) is ready. bootSTA
+// retries every bootSTARetryPause for up to bootSTAGraceWindow before
+// conceding to AP fallback. Package variables (not consts), like
+// staAttemptBound, purely so tests can shrink them instead of waiting out
+// the real 90s/5s; production wiring never touches them.
+var (
+	bootSTAGraceWindow = 90 * time.Second
+	bootSTARetryPause  = 5 * time.Second
+)
 
 // managerPhase tracks Run's own loop position; distinct from the published
 // Status (which is what callers such as the render loop or web UI observe).
@@ -281,11 +280,13 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 
-// runBoot performs the single boot-time STA attempt, falling back to AP on
-// any failure (errNoWifiConfigured or a layered check failure). If ctx was
-// cancelled while either driver call was in flight, the resulting error is
-// treated as clean shutdown (best-effort AP teardown, cancelled=true), never
-// escalation — see Run's ctx-cancellation contract.
+// runBoot performs the boot-time STA attempt (now a grace-window retry loop,
+// issue #54 — see bootSTA), falling back to AP on any failure
+// (errNoWifiConfigured or a layered check failure that never converges
+// within the grace window). If ctx was cancelled while either driver call
+// was in flight, the resulting error is treated as clean shutdown
+// (best-effort AP teardown, cancelled=true), never escalation — see Run's
+// ctx-cancellation contract.
 func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled bool, err error) {
 	if err := m.bootSTA(ctx); err == nil {
 		return phaseOnlineWait, false, nil
@@ -300,34 +301,63 @@ func (m *Manager) runBoot(ctx context.Context) (next managerPhase, cancelled boo
 	return phaseAPWait, false, nil
 }
 
-// bootSTA runs the boot-time STA attempt with the once-per-process
-// instant-failure fast retry (issue #47). If the very first STA attempt of the
-// process fails within fastRetryThreshold — measured on the injected clock, so
-// a cold wpa_supplicant control-socket race rather than a genuine association
-// failure — it retries STA once immediately instead of paying a full
-// ~5-minute AP-fallback detour; only if that also fails does the caller fall
-// back to AP.
+// bootSTA runs the boot-time STA attempt inside a grace window (issue #54 —
+// replaces the old once-per-process instant-failure fast retry, issue #47).
+// wpa_supplicant may have just been killed by trainboard.service's own
+// restart (KillMode=control-group takes the daemon down with the service),
+// so the first STA attempt or several after a service restart can easily
+// race the daemon's respawn (or the driver's own cold-start handling, see
+// driver_mode2.go's ensureDaemon) rather than reflect a genuine association
+// failure. Instead of retrying once and only for an instant first failure,
+// bootSTA now retries on a fixed cadence (bootSTARetryPause) for up to
+// bootSTAGraceWindow (measured on the injected clock, m.now()) before
+// conceding to AP fallback — covering repeated failures, not just a single
+// race.
 //
-// The fast retry is skipped when ctx is already cancelled (a shutdown, not a
-// race — see Run's ctx-cancellation contract), so this stays a clean no-op on
-// the ctx-cancel-mid-attempt path. firstAttempt/fastRetried are Run-loop-owned
-// (this method runs only on Run's single goroutine); no mutex.
+// errNoWifiConfigured short-circuits immediately, without ever entering the
+// retry loop: an unconfigured device has nothing to retry, and must keep the
+// existing fast path straight to AP (the captive-portal setup flow depends
+// on this being quick). A parent ctx cancellation is also returned
+// immediately rather than retried — see Run's ctx-cancellation contract.
+//
+// Between retries this logs the failure (with the remaining budget) and
+// calls m.d.Beat (if set) BEFORE pausing — see connectivity.go's
+// managerBeatDeadline comment for why this per-iteration Beat keeps the
+// watchdog arithmetic safe even though the whole grace window can run well
+// past a single attempt's staAttemptBound. The pause itself selects against
+// ctx.Done(), so a shutdown arriving mid-pause returns promptly (the last
+// STA error, not a context error — runBoot's own ctx.Err() check afterwards
+// is what classifies this as clean shutdown, exactly as every other phase's
+// ctx-cancellation handling does).
 func (m *Manager) bootSTA(ctx context.Context) error {
-	start := m.now()
-	staErr := m.toSTA(ctx)
-	first := m.firstAttempt
-	m.firstAttempt = false
-	if staErr == nil {
-		return nil
-	}
-	if !m.fastRetried && first && ctx.Err() == nil && m.now().Sub(start) < fastRetryThreshold {
-		m.fastRetried = true
-		if m.d.Log != nil {
-			m.d.Log.Info("net: manager: first STA attempt failed instantly; fast retry")
+	deadline := m.now().Add(bootSTAGraceWindow)
+	for {
+		err := m.toSTA(ctx)
+		if err == nil {
+			return nil
 		}
-		return m.toSTA(ctx)
+		if errors.Is(err, errNoWifiConfigured) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		if !m.now().Before(deadline) {
+			return err
+		}
+		if m.d.Log != nil {
+			m.d.Log.Info("net: manager: STA attempt failed; retrying within grace window",
+				"err", err, "remaining", deadline.Sub(m.now()))
+		}
+		if m.d.Beat != nil {
+			m.d.Beat()
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-m.d.After(bootSTARetryPause):
+		}
 	}
-	return staErr
 }
 
 // runOnlineWait waits onlineRecheckInterval (or ctx cancellation), then
@@ -407,6 +437,9 @@ func (m *Manager) runAPWait(ctx context.Context) (managerPhase, bool, error) {
 	staErr := m.toSTA(ctx)
 	if staErr == nil {
 		return phaseOnlineWait, false, nil
+	}
+	if m.d.Log != nil {
+		m.d.Log.Info("net: manager: scheduled STA retry failed; restoring AP", "err", staErr)
 	}
 
 	if err := m.toAP(ctx); err != nil {
