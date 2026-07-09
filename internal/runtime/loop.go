@@ -48,8 +48,9 @@ type Loop struct {
 	sceneBuilt bool
 	soak       *Soak // optional soak override; nil = feature not wired
 	soaking    bool  // previous tick was a soak frame (drives exit cleanup)
-	beat       func()
-	updateHint func() bool
+	beat         func()
+	updateHint   func() bool
+	onFirstFrame func()
 }
 
 // NewLoop wires a snapshot source (Poller.Snapshot) to a Flusher.
@@ -72,6 +73,12 @@ func (l *Loop) SetBeat(f func()) { l.beat = f }
 // interact with scene caching (ADR 0002); soak frames never draw it. nil
 // (the default) disables the feature.
 func (l *Loop) SetUpdateHint(f func() bool) { l.updateHint = f }
+
+// SetOnFirstFrame installs a callback invoked exactly once, after the
+// first successful flush — the render half of M5's health check (the
+// other half is the web self-probe; update.Health joins them). nil (the
+// default) disables the hook.
+func (l *Loop) SetOnFirstFrame(f func()) { l.onFirstFrame = f }
 
 // Run ticks until ctx cancels. A flush error is returned (fatal: the panel
 // is unreachable; systemd restarts the unit).
@@ -137,6 +144,9 @@ func (l *Loop) step(now time.Time) error {
 	if !l.flushed {
 		l.flushed = true
 		l.log.Info("first frame flushed", "render_us", renderDur.Microseconds(), "flush_us", flushDur.Microseconds())
+		if l.onFirstFrame != nil {
+			l.onFirstFrame()
+		}
 	}
 	if l.tick > 0 && l.tick%timingEveryTicks == 0 {
 		l.log.Info("frame timing", "render_us", renderDur.Microseconds(), "flush_us", flushDur.Microseconds())

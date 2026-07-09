@@ -339,6 +339,24 @@ func TestUpdateHintOverlay(t *testing.T) {
 	}
 }
 
+// TestOnFirstFrameFiresOnce verifies SetOnFirstFrame's callback fires
+// exactly once, on the first successful flush, even across further ticks.
+func TestOnFirstFrameFiresOnce(t *testing.T) {
+	l, _ := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
+
+	fired := 0
+	l.SetOnFirstFrame(func() { fired++ })
+	day := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if err := l.step(day.Add(time.Duration(i) * TickInterval)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fired != 1 {
+		t.Errorf("OnFirstFrame fired %d times, want exactly 1", fired)
+	}
+}
+
 func TestLoopNilSoakUnchanged(t *testing.T) {
 	// A loop with no UseSoak call behaves exactly as before.
 	l, fl := newTestLoop(t, func() *board.Snapshot { return nil }, testCfg())
