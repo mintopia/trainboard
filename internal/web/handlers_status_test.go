@@ -18,6 +18,12 @@ import (
 // ready for loginAs.
 const statusTestPassword = "longenough1"
 
+// setStatusIPs overrides the Service's IPs source to return a fixed list (for testing).
+func setStatusIPs(t *testing.T, svc *Service, ips []string) {
+	t.Helper()
+	svc.src.IPs = func() []string { return ips }
+}
+
 // newTestServerWithSources wires a Server over a valid, saved config (admin
 // password already set) whose Sources are exactly src, for tests that need
 // to control Snapshot/Ring rather than the newTestService defaults (which
@@ -265,5 +271,25 @@ func TestStateLine(t *testing.T) {
 		if label != c.wantLabel || class != c.wantClass {
 			t.Errorf("%s: got (%q,%q), want (%q,%q)", c.name, label, class, c.wantLabel, c.wantClass)
 		}
+	}
+}
+
+// Each address renders on its own line (#65): usb0 lifeline + LAN IP is a
+// real dual-address case and dot-joined text wrapped mid-address.
+func TestStatusAddressesOnSeparateLines(t *testing.T) {
+	srv, svc := newTestServerWithSources(t, statusTestSources(t))
+	setStatusIPs(t, svc, []string{"192.168.0.102", "10.55.0.1"})
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	for _, want := range []string{
+		`<span class="addr">192.168.0.102</span>`,
+		`<span class="addr">10.55.0.1</span>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("status page missing %q", want)
+		}
+	}
+	if strings.Contains(body, `192.168.0.102 · 10.55.0.1`) {
+		t.Errorf("addresses still dot-joined on one line")
 	}
 }

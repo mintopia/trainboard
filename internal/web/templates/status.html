@@ -47,7 +47,7 @@
 <h3>This board</h3>
 <div class="rows">
   <div class="r"><span class="k">Software</span><span class="v">{{.Status.Update.Running}}{{if not .Status.Update.Running}}{{.Status.Version}}{{end}}</span></div>
-  <div class="r"><span class="k">Address</span><span class="v">{{range $i, $ip := .Status.IPs}}{{if $i}} · {{end}}{{$ip}}{{end}}{{if .MDNSState}} · trainboard.local{{end}}</span></div>
+  <div class="r"><span class="k">Address</span><span class="v addrs">{{range .Status.IPs}}<span class="addr">{{.}}</span>{{end}}{{if .MDNSState}}<span class="addr">trainboard.local</span>{{end}}</span></div>
   <div class="r"><span class="k">Last data fetch</span><span class="v">{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</span></div>
 </div>
 </section>

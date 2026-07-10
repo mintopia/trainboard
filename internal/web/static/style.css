@@ -107,6 +107,8 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 .r { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--hairline); font-size: .85rem; }
 .r .k { color: var(--muted); }
 .r .v { font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.r .v.addrs { display: flex; flex-direction: column; align-items: flex-end; gap: .15rem; }
+.r .v.addrs .addr { white-space: nowrap; }
 
 /* Buttons */
 .btn, button.btn {
