@@ -348,6 +348,32 @@ func TestDeparturesFormTOCHints(t *testing.T) {
 	}
 }
 
+// TestDeparturesTOCHintSurvivesValidationError pins the brief-flagged
+// regression for the Operators hint (#63): a POST that fails validation
+// elsewhere (bad origin CRS) must re-render with the typed TOC codes still
+// resolved to names — a validation error must not blank the hint.
+func TestDeparturesTOCHintSurvivesValidationError(t *testing.T) {
+	srv, _, _, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := baseDeparturesForm()
+	form.Set("board.origin", "XX") // fails validation: not a real station
+	form.Set("board.tocs", "GW, XR")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/departures", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `Great Western Railway, Elizabeth line`) {
+		t.Errorf("expected TOC name hints preserved in validation-error re-render: %s", body)
+	}
+	if !strings.Contains(body, `value="GW, XR"`) {
+		t.Errorf("expected typed TOC codes preserved in re-rendered form: %s", body)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
 // TestConfigDeparturesValidationError covers an unrecognised origin CRS:
 // re-render (200, not a redirect) with an error naming the station code, and
 // the user's other typed values preserved.
