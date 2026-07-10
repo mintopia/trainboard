@@ -159,8 +159,11 @@ func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 
 	form := url.Values{"password": {"longenough1"}, "confirm": {"longenough1"}, "origin": {"pad"}}
 	rec := postForm(t, h, "/setup", form)
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/restarting" {
-		t.Fatalf("want 303 /restarting, got %d %q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 setupDone render, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Departures live") {
+		t.Fatalf("expected route-line setup-done copy in body: %s", rec.Body.String())
 	}
 	if len(rec.Result().Cookies()) != 1 {
 		t.Fatalf("expected exactly one Set-Cookie, got %d", len(rec.Result().Cookies()))

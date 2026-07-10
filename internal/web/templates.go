@@ -27,6 +27,7 @@ func parseTemplates() *template.Template {
 var (
 	baseTemplate             = parseTemplates()
 	setupTemplate            = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
+	setupDoneTemplate        = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_done.html"))
 	setupWifiDoneTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_done.html"))
 	setupWifiStatusTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_status.html"))
 	loginTemplate            = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))

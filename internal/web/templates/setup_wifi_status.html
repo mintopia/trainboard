@@ -1,11 +1,14 @@
-{{define "title"}}wifi status — trainboard{{end}}
-{{define "bodyclass"}}legacy-page{{end}}
+{{define "title"}}WiFi trouble — Trainboard{{end}}
 {{define "content"}}
-<h2>Trying to join your WiFi</h2>
+{{template "routeline" .Steps}}
+<h3>Still trying to join {{if .SSID}}{{.SSID}}{{else}}your WiFi{{end}}</h3>
 {{if .LastError}}
-<p class="error">The last attempt to join {{if .SSID}}{{.SSID}}{{else}}your WiFi{{end}} failed: {{.LastError}}</p>
+<div class="notice fault"><strong>The last attempt failed:</strong> {{.LastError}}{{if .SSID}} (network: {{.SSID}}){{end}}.</div>
 {{else}}
 <p>The board is still trying to join {{if .SSID}}{{.SSID}}{{else}}your WiFi{{end}}.</p>
 {{end}}
-<p>To change the WiFi settings or retry the join now, log in at <a href="http://192.168.4.1/login">http://192.168.4.1/login</a> and use &ldquo;Retry WiFi now&rdquo; on the actions page.</p>
+<div class="rows">
+  <div class="r"><span class="k">Retry now</span><span class="v">sign in at <a href="http://192.168.4.1/login">http://192.168.4.1/login</a>, then Actions &rsaquo; Retry WiFi</span></div>
+  <div class="r"><span class="k">Wrong details</span><span class="v">revisit <a href="/setup">/setup</a> once signed in to correct them</span></div>
+</div>
 {{end}}

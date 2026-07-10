@@ -74,15 +74,19 @@ func TestE2EFullJourney(t *testing.T) {
 	}
 
 	// 2. POST /setup (password+origin, blank token keeps the stored one) ->
-	// 303 /restarting (the shared wait interstitial) with a session issued
-	// and Actions.Apply scheduled, exactly like a config sub-page save's
-	// apply-by-restart — this Service's Apply is a channel send rather than a
-	// real os.Exit, so the session created here stays valid for step 3
-	// instead of the process actually restarting; /setup then 404s.
+	// 200 "setupDone" (the route-line-aware wait page, not the generic
+	// /restarting interstitial) with a session issued and Actions.Apply
+	// scheduled, exactly like a config sub-page save's apply-by-restart —
+	// this Service's Apply is a channel send rather than a real os.Exit, so
+	// the session created here stays valid for step 3 instead of the
+	// process actually restarting; /setup then 404s.
 	setupForm := url.Values{"password": {e2ePassword}, "confirm": {e2ePassword}, "origin": {"PAD"}, "token": {""}}
 	recSetup := postForm(t, h, "/setup", setupForm)
-	if recSetup.Code != http.StatusSeeOther || recSetup.Header().Get("Location") != "/restarting" {
-		t.Fatalf("step2 POST /setup: want 303 /restarting, got %d %q body=%s", recSetup.Code, recSetup.Header().Get("Location"), recSetup.Body.String())
+	if recSetup.Code != http.StatusOK {
+		t.Fatalf("step2 POST /setup: want 200 setupDone, got %d body=%s", recSetup.Code, recSetup.Body.String())
+	}
+	if !strings.Contains(recSetup.Body.String(), "Departures live") {
+		t.Fatalf("step2: expected route-line setup-done copy in body: %s", recSetup.Body.String())
 	}
 	awaitApply(t, applyCh)
 	cookies := recSetup.Result().Cookies()

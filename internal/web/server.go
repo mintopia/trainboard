@@ -52,6 +52,10 @@ type setupPageData struct {
 	// to a phone reconnecting to the hotspot after a bad attempt. Only
 	// rendered in the AP-mode block; always "" in LAN mode.
 	LastError string
+	// Steps drives the "routeline" partial: where this render sits on the
+	// setup journey (apSetupSteps for the AP-mode form, lanSetupSteps for
+	// the LAN-mode form).
+	Steps []setupStep
 }
 
 // setupWifiStatusPageData is setup_wifi_status.html's render data: the
@@ -67,6 +71,9 @@ type setupWifiStatusPageData struct {
 	// SSID is the configured WiFi network name (Wifi.SSID), read via the
 	// existing ConfigRedacted path; it is not a secret. "" when unavailable.
 	SSID string
+	// Steps drives the "routeline" partial: this fallback view sits back at
+	// the "WiFi + password" stop (apSetupSteps(0)).
+	Steps []setupStep
 }
 
 // setupWifiDonePageData is setup_wifi_done.html's render data: the
@@ -76,6 +83,59 @@ type setupWifiDonePageData struct {
 	// SSID is the network the board is about to attempt, named in the
 	// handoff copy so the user knows what to reconnect to if it fails.
 	SSID string
+	// Steps drives the "routeline" partial: joining sits between the
+	// "WiFi + password" and "Configure station" stops (apSetupSteps(1)).
+	Steps []setupStep
+}
+
+// setupDonePageData is setup_done.html's render data: the LAN-mode setup
+// success page. Unlike handleActionsRestart's generic /restarting redirect,
+// this keeps the setup journey's route-line context — "Departures live" is
+// the current stop — while reusing the same reconnect-and-poll behaviour
+// (Task 8's reconnect.js) once the board actually restarts.
+type setupDonePageData struct {
+	basePage
+	Steps []setupStep
+}
+
+// setupStep is one stop on the setup route-line. State is "done", "now" or
+// "" (upcoming). The line reads left→right like a line-of-route diagram.
+type setupStep struct {
+	Label string
+	State string
+}
+
+// apSetupSteps builds the AP-mode route-line: current 0 is the WiFi+password
+// form, current 1 is the post-submit "joining" wait (setup_wifi_done.html).
+// Every stop at or before current is "done", the stop after current is
+// "now", everything later stays "" (upcoming).
+func apSetupSteps(current int) []setupStep {
+	steps := []setupStep{{Label: "Hotspot joined"}, {Label: "WiFi + password"}, {Label: "Configure station"}, {Label: "Departures live"}}
+	for i := range steps {
+		switch {
+		case i <= current:
+			steps[i].State = "done"
+		case i == current+1:
+			steps[i].State = "now"
+		}
+	}
+	return steps
+}
+
+// lanSetupSteps builds the LAN-mode route-line: current 0 is the
+// password+station form, current 1 is the post-submit success
+// (setup_done.html, "Departures live" now).
+func lanSetupSteps(current int) []setupStep {
+	steps := []setupStep{{Label: "Connected"}, {Label: "Password + station"}, {Label: "Departures live"}}
+	for i := range steps {
+		switch {
+		case i <= current:
+			steps[i].State = "done"
+		case i == current+1:
+			steps[i].State = "now"
+		}
+	}
+	return steps
 }
 
 type loginPageData struct {
@@ -304,6 +364,8 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = setupTemplate
 	case "setupWifiDone":
 		t = setupWifiDoneTemplate
+	case "setupDone":
+		t = setupDoneTemplate
 	case "setupWifiStatus":
 		t = setupWifiStatusTemplate
 	case "login":
@@ -379,12 +441,19 @@ func (s *Server) handleSetupGet(w http.ResponseWriter, _ *http.Request) {
 		s.render(w, "setupWifiStatus", setupWifiStatusPageData{
 			LastError: s.svc.LastSTAError(),
 			SSID:      s.configuredSSID(),
+			Steps:     apSetupSteps(0),
 		})
 		return
 	}
+	apMode := s.svc.Hotspot() != nil
+	steps := lanSetupSteps(0)
+	if apMode {
+		steps = apSetupSteps(0)
+	}
 	s.render(w, "setup", setupPageData{
-		APMode:    s.svc.Hotspot() != nil,
+		APMode:    apMode,
 		LastError: s.svc.LastSTAError(),
+		Steps:     steps,
 	})
 }
 
@@ -412,9 +481,12 @@ func (s *Server) configuredSSID() string {
 //     the newly-valid config to take effect and E04 to clear. That is exactly
 //     what a restart-triggering config save's scheduleApply() does (e.g.
 //     handleConfigNetworkPost), so setup schedules the same apply-by-restart
-//     here and 303s to /restarting instead of redirecting to "/" — the same
-//     shape every other restart-triggering save uses (handleActionsRestart,
-//     handleUpdateApply, the config sub-page posts). The session cookie is
+//     here. Unlike every other restart-triggering save (which 303s to the
+//     generic /restarting interstitial), this renders "setupDone" directly
+//     (200): the setup journey keeps its route-line context ("Departures
+//     live" as the current stop) through the restart wait, using the same
+//     Task 8 reconnect-and-poll behaviour (data-reconnect-delay +
+//     reconnect.js) once the board actually restarts. The session cookie is
 //     still issued (harmless: it is an in-memory session that dies with the
 //     process either way), so a browser that reloads before the restart
 //     completes is still authed, and one that reloads after it lands on
@@ -441,18 +513,21 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	token := r.PostFormValue("token")
 
 	if pw != confirm {
-		s.render(w, "setup", setupPageData{Error: "passwords do not match"})
+		s.render(w, "setup", setupPageData{Error: "passwords do not match", Steps: lanSetupSteps(0)})
 		return
 	}
 	if err := s.svc.SetInitialPassword(pw, origin, token); err != nil {
-		s.render(w, "setup", setupPageData{Error: err.Error()})
+		s.render(w, "setup", setupPageData{Error: err.Error(), Steps: lanSetupSteps(0)})
 		return
 	}
 
 	tok, _ := s.sessions.Create()
 	setSessionCookie(w, tok)
 	s.scheduleApply()
-	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
+	s.render(w, "setupDone", setupDonePageData{
+		basePage: basePage{CSRF: csrfFrom(r)},
+		Steps:    lanSetupSteps(1),
+	})
 }
 
 // handleSetupPostAPMode handles the AP-mode partial setup: admin password +
@@ -473,15 +548,15 @@ func (s *Server) handleSetupPostAPMode(w http.ResponseWriter, r *http.Request) {
 	psk := r.PostFormValue("psk")
 
 	if pw != confirm {
-		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: "passwords do not match"})
+		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: "passwords do not match", Steps: apSetupSteps(0)})
 		return
 	}
 	if err := s.svc.SetupConnectivity(pw, ssid, psk); err != nil {
-		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: err.Error()})
+		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: err.Error(), Steps: apSetupSteps(0)})
 		return
 	}
 
-	s.render(w, "setupWifiDone", setupWifiDonePageData{basePage: basePage{CSRF: csrfFrom(r)}, SSID: ssid})
+	s.render(w, "setupWifiDone", setupWifiDonePageData{basePage: basePage{CSRF: csrfFrom(r)}, SSID: ssid, Steps: apSetupSteps(1)})
 	s.scheduleWifiRetry()
 }
 

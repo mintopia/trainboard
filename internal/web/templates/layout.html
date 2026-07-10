@@ -1,3 +1,4 @@
+{{define "routeline"}}{{if .}}<div class="route">{{range .}}<div class="stop{{if .State}} {{.State}}{{end}}">{{.Label}}</div>{{end}}</div>{{end}}{{end}}
 {{define "layout"}}<!DOCTYPE html>
 <html lang="en">
 <head>
