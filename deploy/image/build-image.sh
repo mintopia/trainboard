@@ -13,9 +13,9 @@ WORK=""
 STAGE=all
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tag) TAG=$2; shift 2;;
-    --work) WORK=$2; shift 2;;
-    --stage) STAGE=$2; shift 2;;
+    --tag) [ $# -ge 2 ] || usage; TAG=$2; shift 2;;
+    --work) [ $# -ge 2 ] || usage; WORK=$2; shift 2;;
+    --stage) [ $# -ge 2 ] || usage; STAGE=$2; shift 2;;
     *) usage;;
   esac
 done
@@ -62,14 +62,19 @@ mount_boot() {
 }
 
 umount_all() {
+  # Registered as an unconditional EXIT trap, so this must never abort
+  # partway through under set -e: every cleanup step below is made
+  # failure-tolerant (falls back to a lazy unmount, then just warns) so
+  # `losetup -d` always runs. A `losetup -d` that never happens leaks the
+  # loop device for the life of the CI runner and breaks every build after it.
   if mountpoint -q "$WORK/root" 2>/dev/null; then
-    umount "$WORK/root"
+    umount "$WORK/root" 2>/dev/null || umount -l "$WORK/root" 2>/dev/null || echo "WARN: unmount $WORK/root failed" >&2
   fi
   if mountpoint -q "$WORK/boot" 2>/dev/null; then
-    umount "$WORK/boot"
+    umount "$WORK/boot" 2>/dev/null || umount -l "$WORK/boot" 2>/dev/null || echo "WARN: unmount $WORK/boot failed" >&2
   fi
   if [ -n "$LOOP" ]; then
-    losetup -d "$LOOP" 2>/dev/null || true
+    losetup -d "$LOOP" 2>/dev/null || echo "WARN: loop detach failed: $LOOP" >&2
     LOOP=""
   fi
 }
@@ -99,10 +104,17 @@ stage_inject() {
   #     option. We pin it to "0" (already the default) and stage the
   #     install hook at the fixed filename DietPi actually looks for,
   #     below — not at a custom name referenced by this variable.
+  #   - AUTO_SETUP_KEYBOARD_LAYOUT is pinned to "gb" per the design spec
+  #     (already the upstream default — explicit/defensive, same rationale
+  #     as AUTO_SETUP_DESKTOP above). AUTO_SETUP_LOCALE is deliberately left
+  #     un-sed'd at its shipped "C.UTF-8" default: flash-sd.sh's manual flow
+  #     never sets locale either, so there's no en_GB.UTF-8 precedent to
+  #     match here.
   sed -i \
     -e 's/^AUTO_SETUP_AUTOMATED=.*/AUTO_SETUP_AUTOMATED=1/' \
     -e 's/^AUTO_SETUP_NET_WIFI_ENABLED=.*/AUTO_SETUP_NET_WIFI_ENABLED=0/' \
     -e 's/^AUTO_SETUP_NET_WIFI_COUNTRY_CODE=.*/AUTO_SETUP_NET_WIFI_COUNTRY_CODE=GB/' \
+    -e 's/^AUTO_SETUP_KEYBOARD_LAYOUT=.*/AUTO_SETUP_KEYBOARD_LAYOUT=gb/' \
     -e 's/^AUTO_SETUP_NET_HOSTNAME=.*/AUTO_SETUP_NET_HOSTNAME=trainboard/' \
     -e 's/^AUTO_SETUP_DESKTOP=.*/AUTO_SETUP_DESKTOP=none/' \
     -e 's/^CONFIG_NTP_MODE=.*/CONFIG_NTP_MODE=4/' \
@@ -128,6 +140,10 @@ stage_inject() {
   install -m 0755 "$WORK/assets/trainboard_${TAG}_linux_arm64" "$WORK/boot/trainboard.bin"
   install -m 0755 "$WORK/assets/trainboard-launcher_${TAG}_linux_arm64" "$WORK/boot/trainboard-launcher.bin"
   install -m 0644 "$HERE/../trainboard.service" "$WORK/boot/trainboard.service"
+  # Re-runs must overwrite, not nest: `cp -r` onto an existing target dir
+  # copies gadget/ *into* it (trainboard-gadget/gadget/...) instead of
+  # replacing it, so clear any prior copy first.
+  rm -rf "$WORK/boot/trainboard-gadget"
   cp -r "$HERE/../gadget" "$WORK/boot/trainboard-gadget"
   echo "$TAG" > "$WORK/boot/trainboard-version"
   umount_all
