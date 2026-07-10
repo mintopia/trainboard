@@ -699,6 +699,49 @@ func TestConfigDisplayValidationError(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
+// TestConfigDisplayPostSavesHeadcodes covers layout.headcodes' checkbox
+// semantics (Task 6): a POST with the key present saves true, and a second
+// POST without the key (absent = unchecked) saves it back to false — mirrors
+// TestConfigDisplay's layout.times coverage above, for the new field.
+func TestConfigDisplayPostSavesHeadcodes(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := baseDisplayForm()
+	form.Set("layout.headcodes", "on")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/display", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cur.Layout.Headcodes {
+		t.Fatalf("Layout.Headcodes = false, want true")
+	}
+
+	form = baseDisplayForm()
+	form.Del("layout.headcodes")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/display", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("second POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Layout.Headcodes {
+		t.Fatalf("Layout.Headcodes = true, want false (checkbox key absent)")
+	}
+}
+
 // baseNetworkForm returns a fresh, fully-populated, valid form matching the
 // baseline config written by newConfigTestServer's network fields (no wifi
 // configured, secrets left blank i.e. "keep the stored value").
@@ -883,6 +926,52 @@ func TestConfigNetworkSecretsNeverRoundTrip(t *testing.T) {
 		if strings.Contains(errBody, `name="`+secretField+`" value=`) {
 			t.Fatalf("secret field %s must never render a value attribute on error re-render: %s", secretField, errBody)
 		}
+	}
+}
+
+// TestConfigNetworkPostSavesRTTCreds covers the RTT credential fields (Task
+// 6): rtt.username is not a secret and saves plainly, while rtt.password is
+// write-only like darwin.token/wifi.psk — a second POST with a blank
+// password must keep the previously stored one, mirroring
+// TestConfigNetworkSavesSecretsWriteOnly's darwin.token coverage above.
+func TestConfigNetworkPostSavesRTTCreds(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := baseNetworkForm()
+	form.Set("rtt.username", "jess")
+	form.Set("rtt.password", "hunter22")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.RTT.Username != "jess" || cur.RTT.Password != "hunter22" {
+		t.Fatalf("RTT = %+v, want username=jess password=hunter22", cur.RTT)
+	}
+
+	form = baseNetworkForm()
+	form.Set("rtt.username", "jess")
+	form.Set("rtt.password", "")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("second POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.RTT.Password != "hunter22" {
+		t.Fatalf("RTT.Password = %q, want unchanged %q (blank rtt.password means keep)", cur.RTT.Password, "hunter22")
 	}
 }
 

@@ -22,6 +22,8 @@
   <div class="hint">0-255</div>
 </label>
 <label class="check"><input type="checkbox" name="layout.times" {{if .Cfg.Layout.Times}}checked{{end}}> Show calling-point times on the panel</label>
+<label class="check"><input type="checkbox" name="layout.headcodes" {{if .Cfg.Layout.Headcodes}}checked{{end}}> Show train headcodes</label>
+{{if not .RTTSet}}<div class="hint">Headcodes need RealTime Trains credentials &mdash; set them on the Network page.</div>{{end}}
 <div class="savebar">
   <span class="consequence">Restarts the board &mdash; departures pause ~15 seconds.</span>
   <button class="btn" type="submit">Save</button>

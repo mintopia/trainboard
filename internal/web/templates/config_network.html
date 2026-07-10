@@ -24,6 +24,13 @@
   <input type="password" name="darwin.token" placeholder="unchanged" autocomplete="off">
   <div class="hint"><a href="https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/" target="_blank" rel="noopener noreferrer">Register for a free Darwin token</a></div>
 </label>
+<label class="f">RealTime Trains username
+  <input type="text" name="rtt.username" value="{{.Cfg.RTT.Username}}" autocomplete="off">
+  <div class="hint">Optional &mdash; needed for train headcodes. <a href="https://api.rtt.io/" target="_blank" rel="noopener noreferrer">Register for a free RTT API account</a></div>
+</label>
+<label class="f">RealTime Trains password
+  <input type="password" name="rtt.password" placeholder="unchanged" autocomplete="off">
+</label>
 <div class="savebar">
   <span class="consequence">Restarts the board. If the WiFi details are wrong it falls back to its setup hotspot.</span>
   <button class="btn" type="submit">Save</button>

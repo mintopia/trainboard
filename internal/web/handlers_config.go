@@ -31,10 +31,11 @@ const applyDelay = 500 * time.Millisecond
 // current config via Service.ConfigRedacted, mutates just its own fields,
 // and passes the WHOLE cfg back to Service.UpdateConfig — which is safe
 // because UpdateConfig only ever re-persists Board, Layout, Powersaving,
-// Wifi.SSID, and Update from ConfigUpdate.Cfg (never Darwin.Token or
-// Wifi.PSK, which stay write-only via NewToken/NewWifiPSK), so a redacted
-// round-trip through any of these handlers can't corrupt or leak a secret
-// even though ConfigRedacted's Darwin.Token/Wifi.PSK values are
+// Wifi.SSID, Update, and RTT.Username from ConfigUpdate.Cfg (never
+// Darwin.Token, Wifi.PSK, or RTT.Password, which stay write-only via
+// NewToken/NewWifiPSK/NewRTTPassword), so a redacted round-trip through any
+// of these handlers can't corrupt or leak a secret even though
+// ConfigRedacted's Darwin.Token/Wifi.PSK/RTT.Password values are
 // "***REDACTED***" placeholders rather than the real secrets.
 
 // configListPageData is GET /config's render data: just the section
@@ -279,11 +280,17 @@ func (s *Server) handleConfigDeparturesPost(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
 }
 
-// configDisplayPageData is GET/POST /config/display's render data.
+// configDisplayPageData is GET/POST /config/display's render data. RTTSet
+// gates the headcodes checkbox's hint: the column has nothing to show
+// without RTT credentials, so an unset username (never the redacted
+// password — see this section's top-of-file doc comment) points the user at
+// the Network page instead of letting them enable a column that stays
+// empty.
 type configDisplayPageData struct {
 	basePage
-	Cfg   config.Config
-	Error string
+	Cfg    config.Config
+	RTTSet bool
+	Error  string
 }
 
 // handleConfigDisplayGet renders the display form pre-filled from the stored
@@ -304,14 +311,15 @@ func (s *Server) renderConfigDisplay(w http.ResponseWriter, r *http.Request, cfg
 	s.render(w, "configDisplay", configDisplayPageData{
 		basePage: s.pageBase(r, "config"),
 		Cfg:      cfg,
+		RTTSet:   cfg.RTT.Username != "",
 		Error:    errMsg,
 	})
 }
 
-// handleConfigDisplayPost parses ONLY the powersaving.* and layout.times
-// fields onto a freshly loaded copy of the stored config and saves it — see
-// this section's top-of-file doc comment for why that's safe for the fields
-// it doesn't touch.
+// handleConfigDisplayPost parses ONLY the powersaving.*, layout.times, and
+// layout.headcodes fields onto a freshly loaded copy of the stored config
+// and saves it — see this section's top-of-file doc comment for why that's
+// safe for the fields it doesn't touch.
 func (s *Server) handleConfigDisplayPost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
@@ -327,6 +335,7 @@ func (s *Server) handleConfigDisplayPost(w http.ResponseWriter, r *http.Request)
 	cfg.Powersaving.Start = strings.TrimSpace(r.PostFormValue("powersaving.start"))
 	cfg.Powersaving.End = strings.TrimSpace(r.PostFormValue("powersaving.end"))
 	cfg.Layout.Times = formHasKey(r, "layout.times")
+	cfg.Layout.Headcodes = formHasKey(r, "layout.headcodes")
 
 	brightness, perr := parseIntField(r, "powersaving.brightness")
 	cfg.Powersaving.Brightness = brightness
@@ -359,11 +368,12 @@ func (s *Server) handleConfigDisplayPost(w http.ResponseWriter, r *http.Request)
 // restart needed. This is the one place scheduleApply() is deliberately NOT
 // called after a successful save.
 
-// configNetworkPageData is GET/POST /config/network's render data. Wifi.PSK
-// and Darwin.Token are deliberately never referenced by config_network.html
-// (see renderConfigNetwork's doc comment) — only Cfg.Wifi.SSID (not a
-// secret) pre-fills. NeedsOrigin controls the page's one exception to being
-// a pure "network" page — see handleConfigNetworkPost's doc comment for why.
+// configNetworkPageData is GET/POST /config/network's render data. Wifi.PSK,
+// Darwin.Token, and RTT.Password are deliberately never referenced by
+// config_network.html (see renderConfigNetwork's doc comment) — only
+// Cfg.Wifi.SSID and Cfg.RTT.Username (neither a secret) pre-fill.
+// NeedsOrigin controls the page's one exception to being a pure "network"
+// page — see handleConfigNetworkPost's doc comment for why.
 type configNetworkPageData struct {
 	basePage
 	Cfg         config.Config
@@ -383,11 +393,12 @@ func (s *Server) handleConfigNetworkGet(w http.ResponseWriter, r *http.Request) 
 }
 
 // renderConfigNetwork builds configNetworkPageData and renders the network
-// page. cfg's Wifi.PSK/Darwin.Token are whatever ConfigRedacted or the
-// caller's own mutation left them as (a redacted placeholder or blank) — the
-// template must NEVER put either in a value attribute, since a redacted
-// placeholder is not a secret worth protecting but IS confusing to submit
-// back verbatim, and the real secret must never round-trip at all. See
+// page. cfg's Wifi.PSK/Darwin.Token/RTT.Password are whatever ConfigRedacted
+// or the caller's own mutation left them as (a redacted placeholder or
+// blank) — the template must NEVER put any of the three in a value
+// attribute, since a redacted placeholder is not a secret worth protecting
+// but IS confusing to submit back verbatim, and the real secret must never
+// round-trip at all. See
 // renderConfigDepartures's doc comment for why cfg carries the user's
 // submitted (not stored) values on a validation failure.
 //
@@ -408,12 +419,13 @@ func (s *Server) renderConfigNetwork(w http.ResponseWriter, r *http.Request, cfg
 	})
 }
 
-// handleConfigNetworkPost parses wifi.ssid onto a freshly loaded copy of the
-// stored config and threads wifi.psk/darwin.token through as
-// ConfigUpdate's write-only NewWifiPSK/NewToken (blank means "keep the
-// stored secret" — see ConfigUpdate's doc comment), then saves it and
-// restarts: the connectivity manager and Darwin client both need a restart
-// to pick up new credentials.
+// handleConfigNetworkPost parses wifi.ssid and rtt.username (not a secret)
+// onto a freshly loaded copy of the stored config and threads
+// wifi.psk/darwin.token/rtt.password through as ConfigUpdate's write-only
+// NewWifiPSK/NewToken/NewRTTPassword (blank means "keep the stored secret" —
+// see ConfigUpdate's doc comment), then saves it and restarts: the
+// connectivity manager and Darwin client both need a restart to pick up new
+// credentials.
 //
 // It also accepts board.origin, but ONLY while nothing is stored yet. A
 // device that only completed AP-mode partial setup has no Board.Origin yet
@@ -438,6 +450,7 @@ func (s *Server) handleConfigNetworkPost(w http.ResponseWriter, r *http.Request)
 	}
 	needsOrigin := cfg.Board.Origin == ""
 	cfg.Wifi.SSID = strings.TrimSpace(r.PostFormValue("wifi.ssid"))
+	cfg.RTT.Username = strings.TrimSpace(r.PostFormValue("rtt.username"))
 	if needsOrigin {
 		if origin := strings.ToUpper(strings.TrimSpace(r.PostFormValue("board.origin"))); origin != "" {
 			cfg.Board.Origin = origin
@@ -455,9 +468,10 @@ func (s *Server) handleConfigNetworkPost(w http.ResponseWriter, r *http.Request)
 	}
 
 	upd := ConfigUpdate{
-		Cfg:        cfg,
-		NewWifiPSK: r.PostFormValue("wifi.psk"),
-		NewToken:   r.PostFormValue("darwin.token"),
+		Cfg:            cfg,
+		NewWifiPSK:     r.PostFormValue("wifi.psk"),
+		NewToken:       r.PostFormValue("darwin.token"),
+		NewRTTPassword: r.PostFormValue("rtt.password"),
 	}
 	if err := s.svc.UpdateConfig(upd); err != nil {
 		s.renderConfigNetwork(w, r, cfg, needsOrigin, err.Error())
