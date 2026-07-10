@@ -13,11 +13,12 @@ import (
 	"github.com/mintopia/trainboard/internal/stations"
 )
 
-// applyDelay is how long after rendering the applied page the server waits
+// applyDelay is how long after redirecting to /restarting the server waits
 // before firing Actions.Apply. It lives here (not in the Actions.Apply
 // implementation itself) because it is a UI concern: giving the browser time
-// to receive and render the "Saved" response before the process restarts.
-// Production's Actions.Apply is an immediate os.Exit, wired up by main.
+// to receive the redirect and start rendering the /restarting wait page
+// before the process restarts. Production's Actions.Apply is an immediate
+// os.Exit, wired up by main.
 const applyDelay = 500 * time.Millisecond
 
 // --- Settings list + per-section pages --------------------------------------

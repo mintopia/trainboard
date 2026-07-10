@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -337,6 +338,47 @@ func TestServerLoginRateLimited(t *testing.T) {
 	}
 	if lastCode != http.StatusTooManyRequests {
 		t.Fatalf("want 429 on the 6th rapid attempt, got %d", lastCode)
+	}
+}
+
+// (g2) tripping the login rate limiter renders the styled Wayfinding login
+// page (design brief §6's "rate-limited state"), not the generic middleware
+// text/plain 429 — while other rate-limited routes (e.g. POST
+// /actions/restart, sharing the separate actionLimit bucket) are unaffected
+// and keep the bare 429.
+func TestLoginRateLimitedRendersStyledPage(t *testing.T) {
+	srv, _ := newTestServerWithPassword(t, "longenough1")
+	h := srv.Handler()
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 6; i++ {
+		last = postForm(t, h, "/login", url.Values{"password": {fmt.Sprintf("wrongpassword-%d", i)}})
+	}
+	if last.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 on the 6th rapid attempt, got %d", last.Code)
+	}
+	if ct := last.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("want text/html rate-limited login page, got Content-Type %q", ct)
+	}
+	if !strings.Contains(last.Body.String(), "Too many attempts") {
+		t.Fatalf("expected rate-limited notice copy in body, got: %s", last.Body.String())
+	}
+
+	// Regression: a non-login rate-limited route (separate actionLimit
+	// bucket, burst 30) must still get the generic plain-text 429 —
+	// rateLimitHTML's styled fallback is login-only.
+	var lastAction *httptest.ResponseRecorder
+	for i := 0; i < 31; i++ {
+		lastAction = postForm(t, h, "/actions/restart", url.Values{})
+	}
+	if lastAction.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 on the 31st rapid /actions/restart attempt, got %d", lastAction.Code)
+	}
+	if ct := lastAction.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("want bare text/plain 429 on non-login route, got Content-Type %q", ct)
+	}
+	if strings.Contains(lastAction.Body.String(), "Too many attempts") {
+		t.Fatal("non-login rate-limited route must not render the login page")
 	}
 }
 

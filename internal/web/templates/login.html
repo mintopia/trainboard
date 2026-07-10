@@ -1,7 +1,11 @@
 {{define "title"}}Sign in — Trainboard{{end}}
 {{define "content"}}
 <h2>Sign in</h2>
-{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{if .RateLimited}}
+<div class="notice fault"><strong>Too many attempts.</strong> Sign-in is paused for a minute — try again shortly.</div>
+{{else if .Error}}
+<p class="error">{{.Error}}</p>
+{{end}}
 <form method="post" action="/login">
   <label class="f">Admin password
     <input type="password" name="password" required autocomplete="current-password" autofocus>

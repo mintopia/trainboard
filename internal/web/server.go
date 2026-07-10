@@ -140,7 +140,8 @@ func lanSetupSteps(current int) []setupStep {
 
 type loginPageData struct {
 	basePage
-	Error string
+	Error       string
+	RateLimited bool
 }
 
 // NewServer builds the full route table: /setup, /login, /logout, /static/,
@@ -163,7 +164,7 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.HandleFunc("GET /setup", s.handleSetupGet)
 	s.mux.Handle("POST /setup", chain(http.HandlerFunc(s.handleSetupPost), rateLimit(s.authLimit, log)))
 	s.mux.HandleFunc("GET /login", s.handleLoginGet)
-	s.mux.Handle("POST /login", chain(http.HandlerFunc(s.handleLoginPost), rateLimit(s.authLimit, log)))
+	s.mux.Handle("POST /login", chain(http.HandlerFunc(s.handleLoginPost), rateLimitHTML(s.authLimit, log, s.handleLoginRateLimited)))
 	s.mux.Handle("POST /logout", chain(http.HandlerFunc(s.handleLogout),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
@@ -562,6 +563,20 @@ func (s *Server) handleSetupPostAPMode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, "login", loginPageData{})
+}
+
+// handleLoginRateLimited is rateLimitHTML's onLimited callback for POST
+// /login: it renders the same login template as a normal GET, but with
+// RateLimited set and the response written as 429 instead of render()'s
+// implicit 200. It runs from the middleware chain, before handleLoginPost —
+// the limiter itself decides whether the bucket has room, so there's no
+// handler-level branch to hook into (see rateLimitHTML in middleware.go).
+func (s *Server) handleLoginRateLimited(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusTooManyRequests)
+	if err := loginTemplate.ExecuteTemplate(w, "layout", loginPageData{RateLimited: true}); err != nil {
+		s.log.Error("template render failed", "page", "login", "error", err.Error())
+	}
 }
 
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
