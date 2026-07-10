@@ -29,6 +29,11 @@ these definitions, fix one or the other.
 - **Error Scene** — shown when the network is up but fresh data cannot be obtained
   (Darwin failing / data stale) and the last-known board has been held for its grace
   period (5 minutes). States that live data is unavailable.
+- **Headcode** — the train reporting number (e.g. `1A23`); sourced from the RealTime
+  Trains API's `trainIdentity` field (Darwin's public LDBWS does not carry it). Shown
+  as an optional column between scheduled time and platform when `layout.headcodes` is
+  enabled; display geometry defined in `internal/board/board.go` (ColHeadcodeX=45,
+  W=27). Default off.
 - **Hotspot Info Scene** — shown while the device is in AP Mode: displays the hotspot
   SSID, its password, and the AP IP address so a user can connect and reconfigure.
 - **Provisioning** — first-run configuration of a device over AP mode + web UI:
@@ -47,3 +52,9 @@ these definitions, fix one or the other.
   SOAP/XML API at `lite.realtime.nationalrail.co.uk/OpenLDBWS/`. The sole source of
   live train data. Authenticated with a GUID access token in the SOAP header. See
   ADR 0001.
+- **RTT enrichment** — optional decoration of Departures with Headcodes. Implemented
+  as `data.HeadcodeEnricher`, a decorator around the Darwin fetcher that matches
+  departures by booked departure time (ties broken by destination name); ambiguous
+  matches render with blank headcode. Non-fatal: RTT fetch/auth failures log a warning
+  and leave the board unaffected. Credentials stored in config as `rtt.username`
+  (plaintext) and `rtt.password` (write-only secret).

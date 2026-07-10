@@ -23,6 +23,11 @@ const configTestPassword = "longenough1"
 // in a rendered page is unambiguous.
 const configTestToken = "tok-super-secret-xyz"
 
+// configTestRTTPassword is the RealTime Trains password stored by
+// newConfigTestServer's baseline config — a value distinctive enough that its
+// accidental presence anywhere in a rendered page is unambiguous.
+const configTestRTTPassword = "rtt-password-secret123"
+
 // connFakes tracks connectivity seam state for testing, backed by plain vars.
 type connFakes struct {
 	hs        *board.Hotspot
@@ -60,6 +65,7 @@ func newConfigTestServerCore(t *testing.T, conn *connFakes) (srv *Server, svc *S
 	cfg := config.Default()
 	cfg.Board.Origin = "PAD"
 	cfg.Darwin.Token = configTestToken
+	cfg.RTT.Password = configTestRTTPassword
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -901,12 +907,12 @@ func TestConfigNetworkSecretsNeverRoundTrip(t *testing.T) {
 	if strings.Contains(body, configTestToken) {
 		t.Fatalf("stored Darwin token leaked into network page body: %s", body)
 	}
-	for _, want := range []string{`name="wifi.psk" placeholder="unchanged"`, `name="darwin.token" placeholder="unchanged"`} {
+	for _, want := range []string{`name="wifi.psk" placeholder="unchanged"`, `name="darwin.token" placeholder="unchanged"`, `name="rtt.password" placeholder="unchanged"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected %s in network page: %s", want, body)
 		}
 	}
-	for _, secretField := range []string{"wifi.psk", "darwin.token"} {
+	for _, secretField := range []string{"wifi.psk", "darwin.token", "rtt.password"} {
 		if strings.Contains(body, `name="`+secretField+`" value=`) {
 			t.Fatalf("secret field %s must never render a value attribute: %s", secretField, body)
 		}
@@ -922,7 +928,7 @@ func TestConfigNetworkSecretsNeverRoundTrip(t *testing.T) {
 		t.Fatalf("POST validation error: want 200, got %d", recErr.Code)
 	}
 	errBody := recErr.Body.String()
-	for _, secretField := range []string{"wifi.psk", "darwin.token"} {
+	for _, secretField := range []string{"wifi.psk", "darwin.token", "rtt.password"} {
 		if strings.Contains(errBody, `name="`+secretField+`" value=`) {
 			t.Fatalf("secret field %s must never render a value attribute on error re-render: %s", secretField, errBody)
 		}
