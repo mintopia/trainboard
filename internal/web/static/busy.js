@@ -2,7 +2,9 @@
 // attribute disables every update button on submit and shows the message
 // with a spinner until the server responds (PRG navigation replaces the
 // page, so there is nothing to undo on success; a failed network submit
-// re-enables via pageshow when the user navigates back).
+// re-enables via pageshow when the user navigates back). The notice is
+// inserted before the form's enclosing .btnrow (if any) so it renders as a
+// full-width banner instead of being squeezed into the flex button row.
 (function () {
   "use strict";
   document.addEventListener("submit", function (e) {
@@ -18,7 +20,8 @@
     spin.className = "spinner";
     n.appendChild(spin);
     n.appendChild(document.createTextNode(" " + msg));
-    form.parentNode.insertBefore(n, form);
+    var anchor = form.closest(".btnrow") || form;
+    anchor.parentNode.insertBefore(n, anchor);
   });
   // bfcache restore (user pressed Back mid-update): reset the buttons.
   window.addEventListener("pageshow", function (e) {

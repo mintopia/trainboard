@@ -88,6 +88,7 @@ func TestStatusPageShowsSoftwareSection(t *testing.T) {
 		`action="/actions/update/apply"`,
 		`action="/actions/update/dismiss"`,
 		`data-busy="Installing update`,
+		`data-busy="Checking for updates`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected %q in body: %s", want, body)
