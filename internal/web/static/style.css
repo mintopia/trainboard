@@ -200,6 +200,7 @@ table.events td.lvl { padding-right: .7rem; }
 .pip { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; background: #8b99a5; }
 tr.warn .pip { background: var(--red); }
 tr.warn td:last-child { color: var(--red-text); }
+.events .attr { color: var(--muted); font-size: .72rem; margin-left: .45rem; white-space: nowrap; }
 
 /* Visually hidden but exposed to screen readers — text alternative for
    color-coded indicators like the event pip (WCAG 1.4.1). */
@@ -208,14 +209,24 @@ tr.warn td:last-child { color: var(--red-text); }
 /* Error paragraph (new pages) */
 p.error { color: var(--red-text); background: #fbe9e5; border-radius: 4px; padding: .6rem .8rem; font-size: .85rem; }
 
-/* Desktop adaptation (#64) — phone-first unchanged; wide screens let the
-   existing hierarchy breathe instead of stretching a phone column. */
+/* Desktop adaptation (#64, #69) — phone-first unchanged; wide screens let the
+   existing hierarchy breathe instead of stretching a phone column, and use
+   the full browser width rather than centering in a fixed column. */
 .cols { display: block; }
 @media (min-width: 64rem) {
-  body { max-width: 64rem; }
+  /* Full viewport width: the totem/yellowband/tabs (direct children of body
+     via header) and the .cols grid span the whole browser window. */
+  body { max-width: none; }
+  main { padding: 0 2.5rem; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 3rem; align-items: start; }
-  /* Forms keep a readable measure rather than stretching to the grid. */
+  /* Cap the hero elements (state line, board preview, notices, update
+     buttons) so the 4:1 board doesn't become comically tall on a wide
+     monitor — only the .cols grid below them is meant to fill the width. */
+  .statebar, .statebar + .caption, .boardwrap, .boardwrap + .caption, .notice, .btnrow { max-width: 64rem; }
+  /* Forms and settings/action lists keep a readable measure rather than
+     stretching across the full width. */
   main form { max-width: 42rem; }
+  .setlist, .act, .act-confirm { max-width: 46rem; }
   /* Full-bleed save bar is a phone affordance; inline it on desktop. */
   .savebar { margin: 0; padding-left: 0; padding-right: 0; }
 }

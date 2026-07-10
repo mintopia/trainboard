@@ -62,6 +62,6 @@
 {{end}}
 {{define "eventlist"}}
 <table class="events"><tbody>
-{{range .}}<tr{{if or (eq .Level.String "WARN") (eq .Level.String "ERROR")}} class="warn"{{end}}><td class="t">{{.Time.Format "15:04:05"}}</td><td class="lvl"><span class="pip"></span><span class="vh">{{.Level.String}}</span></td><td>{{.Msg}}</td></tr>{{end}}
+{{range .}}<tr{{if or (eq .Level.String "WARN") (eq .Level.String "ERROR")}} class="warn"{{end}}><td class="t">{{.Time.Format "15:04:05"}}</td><td class="lvl"><span class="pip"></span><span class="vh">{{.Level.String}}</span></td><td>{{.Msg}}{{range $k, $v := .Attrs}} <span class="attr">{{$k}}={{$v}}</span>{{end}}</td></tr>{{end}}
 </tbody></table>
 {{end}}

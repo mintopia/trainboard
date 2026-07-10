@@ -218,6 +218,22 @@ func TestStatusPageHasBoardContainer(t *testing.T) {
 	}
 }
 
+// The status page's Address row dedupes IPs, preserving first-seen order
+// (#70): Sources.IPs can report the same address twice (observed on-device:
+// 10.55.0.1 via both the usb0 lifeline route and a general interface scan).
+func TestStatusAddressesDeduped(t *testing.T) {
+	srv, svc := newTestServerWithSources(t, statusTestSources(t))
+	setStatusIPs(t, svc, []string{"192.168.0.102", "10.55.0.1", "10.55.0.1"})
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	if n := strings.Count(body, `<span class="addr">10.55.0.1</span>`); n != 1 {
+		t.Errorf("want exactly 1 occurrence of the duplicated address, got %d: %s", n, body)
+	}
+	if !strings.Contains(body, `<span class="addr">192.168.0.102</span>`) {
+		t.Errorf("status page missing non-duplicate address: %s", body)
+	}
+}
+
 // The board preview is a fixed 256×64 stage scaled to its wrapper (#61).
 // The wrapper keeps the role/aria of the old .board element.
 func TestStatusBoardStageMarkup(t *testing.T) {
@@ -270,6 +286,39 @@ func TestStateLine(t *testing.T) {
 		label, class, _ := stateLine(c.st, time.Now())
 		if label != c.wantLabel || class != c.wantClass {
 			t.Errorf("%s: got (%q,%q), want (%q,%q)", c.name, label, class, c.wantLabel, c.wantClass)
+		}
+	}
+}
+
+// An event with Attrs renders each key=value inline after the message,
+// muted (#68) — e.g. a probe-404 event carrying path/status detail. The
+// /events htmx partial renders the same eventlist template, so one
+// assertion of each covers both surfaces.
+func TestStatusPageEventAttrsRenderInline(t *testing.T) {
+	fetchedAt := time.Now()
+	snap := &board.Snapshot{State: board.StateDepartures, FetchedAt: fetchedAt}
+	ring := obs.NewRing(8)
+	ring.Add(obs.Event{Time: fetchedAt, Level: slog.LevelWarn, Msg: "http", Attrs: map[string]string{"path": "/preview.png", "status": "404"}})
+	src := Sources{
+		Snapshot:  func() *board.Snapshot { return snap },
+		Ring:      ring,
+		Version:   "v-attr-test",
+		StartedAt: time.Now().Add(-time.Hour),
+	}
+	srv, _ := newTestServerWithSources(t, src)
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	for _, want := range []string{`<span class="attr">path=/preview.png</span>`, `<span class="attr">status=404</span>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("status page missing %q: %s", want, body)
+		}
+	}
+
+	partial := getPath(t, srv.Handler(), "/events", cookie).Body.String()
+	for _, want := range []string{`<span class="attr">path=/preview.png</span>`, `<span class="attr">status=404</span>`} {
+		if !strings.Contains(partial, want) {
+			t.Errorf("events partial missing %q: %s", want, partial)
 		}
 	}
 }

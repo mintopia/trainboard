@@ -120,7 +120,29 @@ func (s *Service) Status() StatusData {
 	} else {
 		st.IPs = localIPs()
 	}
+	st.IPs = dedupeStrings(st.IPs)
 	return st
+}
+
+// dedupeStrings removes duplicate entries from in, preserving the order of
+// first appearance. Used on the Address row's IP list: both Sources.IPs and
+// localIPs() can report the same address twice (observed on-device:
+// 10.55.0.1 via both the usb0 lifeline route and a general interface scan)
+// (#70).
+func dedupeStrings(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 func localIPs() []string {

@@ -341,6 +341,36 @@ func TestNoteProvisioningCountsAPSubnetRequests(t *testing.T) {
 	}
 }
 
+// TestLogRequestsDemotesBrowserProbe404s pins #68: a 404 for a browser-probe
+// path (favicon.ico, apple-touch-icon*) logs at DEBUG like routine traffic —
+// browsers request these unprompted, so their 404s are noise, not operator
+// signal. A 404 for any other path is unaffected and still logs at WARN.
+func TestLogRequestsDemotesBrowserProbe404s(t *testing.T) {
+	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+
+	ring := obs.NewRing(256)
+	log := obs.NewLogger(io.Discard, ring, slog.LevelInfo)
+	h := chain(notFound, logRequests(log))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/favicon.ico", nil))
+	if n := ring.Len(); n != 0 {
+		t.Fatalf("favicon.ico 404: want 0 ring events (DEBUG), got %d: %+v", n, ring.Events())
+	}
+
+	ring2 := obs.NewRing(256)
+	log2 := obs.NewLogger(io.Discard, ring2, slog.LevelInfo)
+	h2 := chain(notFound, logRequests(log2))
+	h2.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/nope", nil))
+	events := ring2.Events()
+	if len(events) != 1 {
+		t.Fatalf("/nope 404: want exactly 1 ring event (WARN), got %d: %+v", len(events), events)
+	}
+	if events[0].Level != slog.LevelWarn {
+		t.Fatalf("want WARN, got %+v", events[0])
+	}
+}
+
 func TestLogRequestsKeepsRoutineTrafficOutOfRing(t *testing.T) {
 	ring := obs.NewRing(256)
 	log := obs.NewLogger(io.Discard, ring, slog.LevelInfo)
