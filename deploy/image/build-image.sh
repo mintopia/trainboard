@@ -67,6 +67,12 @@ umount_all() {
   # failure-tolerant (falls back to a lazy unmount, then just warns) so
   # `losetup -d` always runs. A `losetup -d` that never happens leaks the
   # loop device for the life of the CI runner and breaks every build after it.
+  # stage_bake nests the FAT boot partition at $WORK/root/boot (so /boot
+  # inside the nspawn container is the real firmware partition and the hook
+  # paths line up); unmount it before its parent rootfs.
+  if mountpoint -q "$WORK/root/boot" 2>/dev/null; then
+    umount "$WORK/root/boot" 2>/dev/null || umount -l "$WORK/root/boot" 2>/dev/null || echo "WARN: unmount $WORK/root/boot failed" >&2
+  fi
   if mountpoint -q "$WORK/root" 2>/dev/null; then
     umount "$WORK/root" 2>/dev/null || umount -l "$WORK/root" 2>/dev/null || echo "WARN: unmount $WORK/root failed" >&2
   fi
@@ -149,7 +155,131 @@ stage_inject() {
   umount_all
 }
 
-stage_bake() { echo "not implemented" >&2; exit 3; }
+# ── bake ──────────────────────────────────────────────────────────────
+# Boot the injected image under systemd-nspawn so DietPi's unattended
+# first-run install AND our Automation_Custom_Script.sh hook run to
+# completion, exactly as they would on real hardware. The hook touches
+# /boot/trainboard-baked on success; that marker (and only that marker) is
+# the GO signal. Everything here is deliberately verbose — this is the
+# pipeline's riskiest stage and its logs are the whole point.
+BAKE_LOG=""
+bake_log() { echo "[bake $(date -u +%H:%M:%S)] $*" | tee -a "$BAKE_LOG" >&2; }
+
+# Grow base.img so DietPi's apt/dietpi-software work has headroom (the
+# base rootfs ships near-full). Idempotent via a sentinel so re-running
+# bake on an already-grown image doesn't stack +1G every time. The
+# snapshot stage (Task 5) shrinks the filesystem back down before export.
+grow_image() {
+  if [ -f "$WORK/.grown" ]; then
+    bake_log "image already grown (sentinel present) — skipping"
+    return 0
+  fi
+  bake_log "growing base.img by 1GiB for apt headroom"
+  truncate -s +1G "$WORK/base.img"
+  local loop
+  loop=$(losetup -Pf --show "$WORK/base.img")
+  # Extend the rootfs partition (p2) into the new space, re-read the table,
+  # fsck (resize2fs refuses a dirty fs), then grow the ext4 filesystem.
+  parted -s "$loop" resizepart 2 100% || { losetup -d "$loop"; echo "parted resizepart failed" >&2; exit 1; }
+  partprobe "$loop" 2>/dev/null || true
+  udevadm settle 2>/dev/null || true
+  e2fsck -fy "${loop}p2" || true   # -y: auto-answer; nonzero on fixups is fine
+  resize2fs "${loop}p2" || { losetup -d "$loop"; echo "resize2fs failed" >&2; exit 1; }
+  losetup -d "$loop"
+  touch "$WORK/.grown"
+  bake_log "grow complete"
+}
+
+mount_bake() {
+  [ "$(id -u)" -eq 0 ] || { echo "stage bake requires root (loop devices + nspawn)" >&2; exit 1; }
+  LOOP=$(losetup -Pf --show "$WORK/base.img")
+  mkdir -p "$WORK/root"
+  mount "${LOOP}p2" "$WORK/root"
+  mkdir -p "$WORK/root/boot"
+  mount "${LOOP}p1" "$WORK/root/boot"
+}
+
+# Best-effort capture of what happened inside the container, whatever the
+# outcome. The live nspawn console (captured per-boot below) is the richest
+# source; these are the persisted extras.
+dump_diagnostics() {
+  local dst="$WORK/logs"
+  bake_log "collecting diagnostics into $dst"
+  if [ -d "$WORK/root/var/log/journal" ]; then
+    journalctl --directory="$WORK/root/var/log/journal" --no-pager \
+      > "$dst/container-journal.log" 2>/dev/null || true
+  fi
+  # DietPi writes its own install log; grab it plus the general logs.
+  for f in "$WORK/root/var/tmp/dietpi/logs/dietpi-firstrun-setup.log" \
+           "$WORK/root/var/tmp/dietpi/logs/dietpi-firstboot.log" \
+           "$WORK/root/DietPi-Automation.log" \
+           "$WORK/root/boot/dietpi/.installed"; do
+    [ -f "$f" ] && cp "$f" "$dst/" 2>/dev/null || true
+  done
+  ls -la "$WORK/root/boot" > "$dst/boot-listing.txt" 2>/dev/null || true
+}
+
+stage_bake() {
+  mkdir -p "$WORK/logs"
+  BAKE_LOG="$WORK/logs/bake.log"
+  : > "$BAKE_LOG"
+  bake_log "stage bake starting (tag $TAG)"
+
+  command -v systemd-nspawn >/dev/null 2>&1 || { echo "systemd-nspawn not found (install systemd-container)" >&2; exit 1; }
+
+  grow_image
+  mount_bake
+  bake_log "mounted: rootfs=${LOOP}p2 -> $WORK/root, boot=${LOOP}p1 -> $WORK/root/boot"
+  bake_log "boot dir contents: $(find "$WORK/root/boot" -maxdepth 1 -printf '%f ' 2>/dev/null)"
+
+  local max_boots=5
+  local deadline=$(( $(date +%s) + 30 * 60 ))
+  local boot=0 baked=0
+  while [ "$boot" -lt "$max_boots" ]; do
+    boot=$((boot + 1))
+    if [ -f "$WORK/root/boot/trainboard-baked" ]; then baked=1; break; fi
+    local console="$WORK/logs/nspawn-boot-$boot.log"
+    bake_log "boot attempt $boot/$max_boots -> $console"
+    # No -n/--network-veth: the container shares the host network namespace,
+    # so apt + dietpi-update get the runner's outbound HTTPS directly.
+    # --resolv-conf=replace-host gives it working DNS. --timezone=off avoids
+    # nspawn bind-mounting a host /etc/localtime the RPi image doesn't want.
+    systemd-nspawn --directory="$WORK/root" --boot --machine=tbbake \
+      --resolv-conf=replace-host --timezone=off \
+      > "$console" 2>&1 &
+    local npid=$!
+
+    while kill -0 "$npid" 2>/dev/null; do
+      if [ -f "$WORK/root/boot/trainboard-baked" ]; then
+        bake_log "marker appeared during boot $boot — powering off container"
+        machinectl poweroff tbbake 2>/dev/null || kill -TERM "$npid" 2>/dev/null || true
+        break
+      fi
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        bake_log "HARD TIMEOUT (30 min) — terminating container"
+        machinectl terminate tbbake 2>/dev/null || kill -KILL "$npid" 2>/dev/null || true
+        wait "$npid" 2>/dev/null || true
+        dump_diagnostics
+        echo "stage bake: timed out before trainboard-baked marker appeared" >&2
+        exit 1
+      fi
+      sleep 5
+    done
+    wait "$npid" 2>/dev/null || true
+    bake_log "boot $boot ended (nspawn exited)"
+    if [ -f "$WORK/root/boot/trainboard-baked" ]; then baked=1; break; fi
+    bake_log "no marker yet after boot $boot (DietPi likely rebooted mid-first-run) — relaunching"
+  done
+
+  dump_diagnostics
+  if [ "$baked" -eq 1 ]; then
+    bake_log "GO: /boot/trainboard-baked present after $boot boot(s)"
+    umount_all
+    return 0
+  fi
+  echo "stage bake: exhausted $max_boots boots without trainboard-baked marker" >&2
+  exit 1
+}
 stage_snapshot() { echo "not implemented" >&2; exit 3; }
 stage_smoke() { echo "not implemented" >&2; exit 3; }
 

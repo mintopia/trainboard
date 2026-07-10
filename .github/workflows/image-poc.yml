@@ -1,0 +1,31 @@
+# TEMPORARY pre-bake proof-of-concept (Task 4, GO/NO-GO gate).
+# Push-triggered on the feature branch only — workflow_dispatch cannot reach
+# a workflow that isn't on the default branch, so every push of an iteration
+# runs it. Deleted in Task 7 once the real image pipeline lands.
+name: image-poc
+on:
+  push:
+    branches: [feat/distribution-image]
+    paths:
+      - deploy/image/**
+      - .github/workflows/image-poc.yml
+jobs:
+  bake:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: install host tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs
+      - name: fetch
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage fetch
+      - name: inject
+        run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage inject
+      - name: bake
+        run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage bake
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bake-logs
+          path: /tmp/tbimg/logs
