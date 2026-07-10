@@ -1,0 +1,40 @@
+{
+  "location": {"name": "Twyford", "crs": "TWY", "tiploc": "TWYFORD"},
+  "filter": null,
+  "services": [
+    {
+      "locationDetail": {
+        "realtimeActivated": true,
+        "tiploc": "TWYFORD",
+        "crs": "TWY",
+        "description": "Twyford",
+        "gbttBookedDeparture": "1913",
+        "origin": [{"tiploc": "RDNGSTN", "description": "Reading", "workingTime": "190500", "publicTime": "1905"}],
+        "destination": [{"tiploc": "PADTON", "description": "London Paddington", "workingTime": "203700", "publicTime": "2037"}],
+        "isCall": true,
+        "isPublicCall": true,
+        "platform": "10"
+      },
+      "serviceUid": "P70091",
+      "runDate": "2026-07-10",
+      "trainIdentity": "1A23",
+      "runningIdentity": "1A23",
+      "atocCode": "GW",
+      "atocName": "Great Western Railway",
+      "serviceType": "train",
+      "isPassenger": true
+    },
+    {
+      "locationDetail": {
+        "gbttBookedDeparture": "1919",
+        "destination": [{"tiploc": "PADTON", "description": "London Paddington", "publicTime": "2009"}]
+      },
+      "serviceUid": "P70113",
+      "runDate": "2026-07-10",
+      "trainIdentity": "2C31",
+      "atocCode": "GW",
+      "serviceType": "train",
+      "isPassenger": true
+    }
+  ]
+}
