@@ -126,3 +126,26 @@ func TestAPIBoardErrorState(t *testing.T) {
 		t.Errorf("error state: code %d view %+v", code, v)
 	}
 }
+
+// The board clock on the web preview must show the BOARD's time, not the
+// browser's — drift between them is diagnostic signal (#65). /api/board
+// therefore carries the server's wall clock.
+func TestAPIBoardIncludesServerTime(t *testing.T) {
+	snap := &board.Snapshot{State: board.StateInitialising}
+	srv, _ := newTestServerWithSources(t, Sources{Snapshot: func() *board.Snapshot { return snap }})
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+	code, v := fetchBoardView(t, srv.Handler(), cookie)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if v.Time == "" {
+		t.Fatalf("time field empty")
+	}
+	got, err := time.Parse(time.RFC3339, v.Time)
+	if err != nil {
+		t.Fatalf("time %q not RFC3339: %v", v.Time, err)
+	}
+	if d := time.Since(got); d < -5*time.Second || d > 5*time.Second {
+		t.Fatalf("time %v not near now (delta %v)", got, d)
+	}
+}
