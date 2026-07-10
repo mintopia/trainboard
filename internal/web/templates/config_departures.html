@@ -7,14 +7,12 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <label class="f">Station
   <input class="crs" type="text" name="board.origin" value="{{.Cfg.Board.Origin}}" required maxlength="3" pattern="[A-Za-z]{3}"
-         hx-get="/api/station" hx-trigger="keyup changed delay:400ms" hx-target="#origin-name" hx-swap="none"
-         hx-on::after-request="document.getElementById('origin-name').textContent = event.detail.successful ? JSON.parse(event.detail.xhr.responseText).name : 'unknown station code'">
-  <div class="hint">3-letter station code{{if .OriginName}} &middot; {{end}}<span id="origin-name">{{.OriginName}}</span></div>
+         data-suggest="/api/stations" data-hint="origin-name">
+  <div class="hint">Type a station name or 3-letter code &middot; <span id="origin-name">{{.OriginName}}</span></div>
 </label>
 <label class="f">Only trains towards <span style="color:#8b99a5">(optional)</span>
   <input class="crs" type="text" name="board.destination" value="{{.Cfg.Board.Destination}}" maxlength="3"
-         hx-get="/api/station" hx-trigger="keyup changed delay:400ms" hx-target="#dest-name" hx-swap="none"
-         hx-on::after-request="document.getElementById('dest-name').textContent = event.detail.successful ? JSON.parse(event.detail.xhr.responseText).name : ''">
+         data-suggest="/api/stations" data-hint="dest-name">
   <div class="hint"><span id="dest-name">{{.DestinationName}}</span></div>
 </label>
 <label class="f">Platforms
@@ -49,4 +47,5 @@
   <button class="btn" type="submit">Save</button>
 </div>
 </form>
+<script src="/static/suggest.js" defer></script>
 {{end}}

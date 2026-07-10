@@ -290,6 +290,29 @@ func TestConfigDepartures(t *testing.T) {
 	}
 }
 
+// TestDeparturesFormHasStationSuggest pins the CRS fields as suggest.js
+// combobox enhancements (#62): data-suggest carries the search endpoint, and
+// the legacy htmx per-keystroke lookup attributes are gone.
+func TestDeparturesFormHasStationSuggest(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	body := getPath(t, srv.Handler(), "/config/departures", cookie).Body.String()
+	for _, want := range []string{
+		`data-suggest="/api/stations"`,
+		`data-hint="origin-name"`,
+		`data-hint="dest-name"`,
+		`src="/static/suggest.js"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("departures form missing %q", want)
+		}
+	}
+	if strings.Contains(body, `hx-get="/api/station"`) {
+		t.Errorf("legacy htmx station lookup still present")
+	}
+}
+
 // TestConfigDeparturesValidationError covers an unrecognised origin CRS:
 // re-render (200, not a redirect) with an error naming the station code, and
 // the user's other typed values preserved.

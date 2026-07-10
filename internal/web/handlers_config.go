@@ -133,9 +133,9 @@ func summarizeUpdates(cfg config.Config) string {
 
 // configDeparturesPageData is GET/POST /config/departures's render data.
 // OriginName/DestinationName are resolved once at render time so the page
-// shows a station name next to the CRS code without a round trip through
-// htmx on first load; the htmx-driven /api/station lookup takes over from
-// there as the user edits either field.
+// shows a station name next to the CRS code without a round trip on first
+// load; suggest.js's combobox (#62) takes over from there as the user edits
+// either field, resolving the hint client-side against GET /api/stations.
 type configDeparturesPageData struct {
 	basePage
 	Cfg              config.Config

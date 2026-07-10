@@ -133,6 +133,21 @@ label.check { display: flex; align-items: center; gap: .6rem; min-height: 44px; 
 label.check input { width: 1.35rem; height: 1.35rem; accent-color: var(--navy); }
 .field-error { color: var(--red-text); font-size: .78rem; margin-top: .2rem; }
 
+/* Autosuggest combobox (#62, #63) */
+.suggestwrap { position: relative; }
+input.crs.searching {
+  text-transform: none; letter-spacing: normal; max-width: 100%;
+  font-family: var(--body); font-size: .95rem;
+}
+ul.suggest {
+  position: absolute; z-index: 10; left: 0; right: 0; top: 100%;
+  margin: 2px 0 0; padding: 0; list-style: none;
+  background: #fff; border: 1.5px solid var(--navy); border-radius: 4px;
+  box-shadow: 0 4px 10px rgba(0, 47, 99, .15); max-height: 14rem; overflow-y: auto;
+}
+ul.suggest li { padding: .55rem .7rem; min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: .9rem; }
+ul.suggest li[aria-selected="true"], ul.suggest li:hover { background: var(--yellow); }
+
 /* Route-line progress */
 .route { display: flex; margin: 1.1rem 0 1.3rem; }
 .route .stop { flex: 1; position: relative; text-align: center; font-size: .72rem; color: var(--muted); padding-top: 1.3rem; }

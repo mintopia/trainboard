@@ -35,9 +35,8 @@
   </label>
   <label class="f">Station
     <input class="crs" type="text" name="origin" required maxlength="3" pattern="[A-Za-z]{3}"
-           hx-get="/api/station" hx-trigger="keyup changed delay:400ms" hx-target="#origin-name" hx-swap="none"
-           hx-on::after-request="document.getElementById('origin-name').textContent = event.detail.successful ? JSON.parse(event.detail.xhr.responseText).name : 'unknown station code'">
-    <div class="hint">3-letter station code, e.g. PAD &middot; <span id="origin-name"></span></div>
+           data-suggest="/api/stations" data-hint="origin-name">
+    <div class="hint">Type a station name or 3-letter code &middot; <span id="origin-name"></span></div>
   </label>
   <label class="f">Darwin API token
     <input type="password" name="token" required autocomplete="off">
@@ -47,4 +46,5 @@
   <button class="btn" type="submit" style="width:100%">Save and start the board</button>
 </form>
 {{end}}
+<script src="/static/suggest.js" defer></script>
 {{end}}
