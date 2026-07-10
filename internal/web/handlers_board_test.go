@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mintopia/trainboard/internal/board"
+	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/data"
 )
 
@@ -147,5 +148,43 @@ func TestAPIBoardIncludesServerTime(t *testing.T) {
 	}
 	if d := time.Since(got); d < -5*time.Second || d > 5*time.Second {
 		t.Fatalf("time %v not near now (delta %v)", got, d)
+	}
+}
+
+// departuresSnapshot builds a StateDepartures snapshot with a single service,
+// following the same inline-construction pattern as TestAPIBoardDepartures.
+func departuresSnapshot(t *testing.T) *board.Snapshot {
+	t.Helper()
+	dep := data.Departure{
+		ScheduledTime: "19:13",
+		Platform:      "10",
+		Status:        data.Status("Exp 20:08"),
+		Destination:   data.Location{Name: "London Paddington", CRS: "PAD"},
+	}
+	return &board.Snapshot{
+		State: board.StateDepartures,
+		Board: &data.Board{
+			LocationName: "Thatcham",
+			Departures:   []data.Departure{dep},
+		},
+	}
+}
+
+// buildBoardView must carry layout.headcodes and per-service headcode
+// through to the JSON view, mirroring board.rowElements' headcodes flag
+// (internal/board/row.go) so the web preview never drifts from the panel.
+func TestBoardViewCarriesHeadcodes(t *testing.T) {
+	snap := departuresSnapshot(t)
+	snap.Board.Departures[0].Headcode = "1A23"
+	v := buildBoardView(snap, config.LayoutConfig{Times: true, Headcodes: true})
+	if !v.Headcodes {
+		t.Fatal("view must carry the layout flag")
+	}
+	if v.First.Headcode != "1A23" {
+		t.Fatalf("first.headcode = %q", v.First.Headcode)
+	}
+	off := buildBoardView(snap, config.LayoutConfig{Times: true})
+	if off.Headcodes {
+		t.Fatal("flag off must not set headcodes")
 	}
 }

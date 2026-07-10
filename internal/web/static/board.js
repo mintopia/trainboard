@@ -18,6 +18,7 @@
   var W = 256, ROW_H = 12;
   var COL_ORDER_X = 0, COL_SCHED_X = 17, COL_SCHED_W = 28;
   var COL_PLAT_X = 45, COL_PLAT_W = 19, COL_DEST_X = 64;
+  var COL_HC_X = 45, COL_HC_W = 27;    // board.go ColHeadcodeX/W (layout.headcodes)
   var COL_STATUS_X = 216, COL_STATUS_W = 40;
   var CALLING_LABEL_W = 42, CALLING_X = 42, CALLING_W = 214;
   var SERVICE_Y = 24, REMAINING_Y = 36, CLOCK_Y = 50;
@@ -115,12 +116,15 @@
     });
   }
 
-  // rowInto mirrors board.rowElements: six-column departure row.
+  // rowInto mirrors board.rowElements: departure row, with the optional
+  // headcode column (layout.headcodes) between sched and platform.
   function rowInto(parent, s, y) {
     staticText(parent, s.order + ordSuffix(s.order), COL_ORDER_X, y, COL_SCHED_X, "left");
     staticText(parent, s.scheduled, COL_SCHED_X, y, COL_SCHED_W, "center");
-    if (s.platform) staticText(parent, s.platform, COL_PLAT_X, y, COL_PLAT_W, "center");
-    staticText(parent, s.destination, COL_DEST_X, y, COL_STATUS_X - COL_DEST_X, "left");
+    var shift = hcOn ? COL_HC_W : 0;
+    if (hcOn && s.headcode) staticText(parent, s.headcode, COL_HC_X, y, COL_HC_W, "center");
+    if (s.platform) staticText(parent, s.platform, COL_PLAT_X + shift, y, COL_PLAT_W, "center");
+    staticText(parent, s.destination, COL_DEST_X + shift, y, COL_STATUS_X - COL_DEST_X - shift, "left");
     staticText(parent, s.status, COL_STATUS_X, y, COL_STATUS_W, "right");
   }
   // Server sends order as an int; suffix mirrors board.Ordinal.
@@ -142,7 +146,7 @@
     parent.appendChild(clip);
     if (reduced.matches) return;
     var key = "first";
-    var text = JSON.stringify([s.order, s.scheduled, s.destination, s.platform, s.status]);
+    var text = JSON.stringify([s.order, s.scheduled, s.destination, s.platform, s.headcode, s.status]);
     var t0 = epoch(key, text, now);
     animated.push(function (nowMs) {
       var tick = Math.floor((nowMs - t0) / TICK_MS);
@@ -224,6 +228,7 @@
   }
 
   var last = "";
+  var hcOn = false; // layout.headcodes, from the last /api/board payload
   function render(v) {
     var key = JSON.stringify(v, function (k, val) { return k === "time" ? undefined : val; });
     if (key === last) return; // identical scene: leave animations untouched
@@ -231,6 +236,7 @@
     animated = [];
     stage.textContent = "";
     var now = performance.now();
+    hcOn = !!v.headcodes;
 
     if (v.state === "departures" && v.first) {
       nextServiceRow(stage, v.first, now);

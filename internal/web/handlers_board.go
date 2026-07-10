@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mintopia/trainboard/internal/board"
+	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/data"
 	"github.com/mintopia/trainboard/internal/obs"
 )
@@ -16,6 +17,7 @@ type serviceView struct {
 	Order       int    `json:"order"`
 	Scheduled   string `json:"scheduled"`
 	Platform    string `json:"platform,omitempty"`
+	Headcode    string `json:"headcode,omitempty"`
 	Destination string `json:"destination"`
 	Status      string `json:"status"`
 	CallingAt   string `json:"callingAt,omitempty"`
@@ -40,6 +42,7 @@ type boardView struct {
 	Remaining []serviceView `json:"remaining,omitempty"`
 	Messages  []string      `json:"messages,omitempty"`
 	Hotspot   *hotspotView  `json:"hotspot,omitempty"`
+	Headcodes bool          `json:"headcodes,omitempty"`
 	// Time is the server's wall clock when the view was built. The web
 	// preview drives its clock from this (not the browser's clock) and
 	// flags drift — clock disagreement is diagnostic signal (#65).
@@ -49,7 +52,7 @@ type boardView struct {
 // buildBoardView mirrors board.BuildScene's priority order
 // (Hotspot > Error > ClockNotSynced > NoServices > Departures > Initialising)
 // so the web preview always matches what the panel shows.
-func buildBoardView(snap *board.Snapshot, times bool) boardView {
+func buildBoardView(snap *board.Snapshot, layout config.LayoutConfig) boardView {
 	if snap == nil {
 		return boardView{State: board.StateInitialising.String(), Message: "Starting up…"}
 	}
@@ -80,9 +83,10 @@ func buildBoardView(snap *board.Snapshot, times bool) boardView {
 			v.Message = obs.FaultDarwinUnreachable.Message()
 			return v
 		}
+		v.Headcodes = layout.Headcodes
 		deps := snap.Board.Departures
 		first := toServiceView(1, deps[0])
-		first.CallingAt = board.CallingAtText(deps[0], times)
+		first.CallingAt = board.CallingAtText(deps[0], layout.Times)
 		first.ServiceInfo = board.ServiceInfoText(deps[0])
 		v.First = &first
 		for i, d := range deps[1:] {
@@ -97,6 +101,7 @@ func toServiceView(order int, d data.Departure) serviceView {
 		Order:       order,
 		Scheduled:   d.ScheduledTime,
 		Platform:    d.Platform,
+		Headcode:    d.Headcode,
 		Destination: d.Destination.Name,
 		Status:      string(d.Status),
 	}
@@ -106,15 +111,15 @@ func toServiceView(order int, d data.Departure) serviceView {
 // the exact text the OLED shows (board.CallingAtText/ServiceInfoText) so the
 // web preview never drifts from the panel.
 func (s *Server) handleAPIBoard(w http.ResponseWriter, _ *http.Request) {
-	times := false
+	var layout config.LayoutConfig
 	if cfg, err := s.svc.ConfigRedacted(); err == nil {
-		times = cfg.Layout.Times
+		layout = cfg.Layout
 	}
 	var snap *board.Snapshot
 	if s.svc.src.Snapshot != nil {
 		snap = s.svc.src.Snapshot()
 	}
-	view := buildBoardView(snap, times)
+	view := buildBoardView(snap, layout)
 	view.Time = time.Now().Format(rfc3339)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
