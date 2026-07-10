@@ -50,8 +50,9 @@ mv "$STATE_DIR/state.json.tmp" "$STATE_DIR/state.json"
 # devices you currently reach OVER wlan0).
 sed 's|^ExecStart=/opt/trainboard/launcher --production$|ExecStart=/opt/trainboard/launcher --production --manage-network|' \
   "$SRCDIR/trainboard.service" > "$DESTDIR/etc/systemd/system/trainboard.service"
-grep -q -- '--manage-network' "$DESTDIR/etc/systemd/system/trainboard.service" \
-  || { echo "ERROR: ExecStart rewrite failed (unit format changed?)"; exit 1; }
+grep -q '^ExecStart=/opt/trainboard/launcher --production --manage-network$' \
+  "$DESTDIR/etc/systemd/system/trainboard.service" \
+  || { echo "ERROR: ExecStart rewrite failed — trainboard.service format drifted from the sed pattern"; exit 1; }
 
 # M4 USB gadget lifeline (deploy.md §10 "Install"): script + conf under
 # /usr/local/lib/trainboard/, both units under /etc/systemd/system/.
