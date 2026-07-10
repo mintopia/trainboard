@@ -241,6 +241,13 @@ func (sw *statusWriter) WriteHeader(code int) {
 	sw.ResponseWriter.WriteHeader(code)
 }
 
+// isBrowserProbePath reports paths browsers request on their own
+// (favicons, touch icons). Their 404s are noise, not operator signal —
+// they log at DEBUG, never WARN (#68).
+func isBrowserProbePath(p string) bool {
+	return p == "/favicon.ico" || strings.HasPrefix(p, "/apple-touch-icon")
+}
+
 // logRequests emits one line per request. The query string is deliberately
 // omitted: it could carry secrets.
 //
@@ -250,7 +257,9 @@ func (sw *statusWriter) WriteHeader(code int) {
 // /events every five seconds) floods the ring's fixed capacity within
 // minutes, evicting the rare events an operator actually needs. Failures
 // (status >= 400) log at WARN, so they stay visible in both places alongside
-// the csrf/origin/rate-limit middleware's own Warns.
+// the csrf/origin/rate-limit middleware's own Warns — except browser probe
+// paths (see isBrowserProbePath), whose 404s stay at DEBUG since browsers
+// request them unprompted and they carry no operator signal.
 func logRequests(log *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +267,7 @@ func logRequests(log *slog.Logger) middleware {
 			start := time.Now()
 			next.ServeHTTP(sw, r)
 			level := slog.LevelDebug
-			if sw.status >= 400 {
+			if sw.status >= 400 && !isBrowserProbePath(r.URL.Path) {
 				level = slog.LevelWarn
 			}
 			log.Log(r.Context(), level, "http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "ms", time.Since(start).Milliseconds())

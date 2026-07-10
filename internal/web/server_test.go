@@ -419,6 +419,29 @@ func TestStaticFontsServed(t *testing.T) {
 	}
 }
 
+// TestStaticFaviconServed confirms favicon.svg is served without auth, the
+// same way as style.css and the fonts, and that the layout's <head> links to
+// it so browsers stop probing /favicon.ico (#68).
+func TestStaticFaviconServed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := srv.Handler()
+
+	rec := getPath(t, h, "/static/favicon.svg")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() < 100 {
+		t.Errorf("suspiciously small favicon body (%d bytes)", rec.Body.Len())
+	}
+
+	srvWithPw, _ := newTestServerWithPassword(t, "longenough1")
+	cookie, _ := loginAs(t, srvWithPw, "longenough1")
+	body := getPath(t, srvWithPw.Handler(), "/", cookie).Body.String()
+	if !strings.Contains(body, `<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">`) {
+		t.Errorf("layout head missing favicon link: %s", body)
+	}
+}
+
 // TestStaticBoardJSServed confirms board.js (Task 4's client-side board
 // renderer) is served, without auth, the same way as style.css and the
 // fonts — picked up automatically by //go:embed templates/* static/*, no

@@ -200,6 +200,7 @@ table.events td.lvl { padding-right: .7rem; }
 .pip { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; background: #8b99a5; }
 tr.warn .pip { background: var(--red); }
 tr.warn td:last-child { color: var(--red-text); }
+.events .attr { color: var(--muted); font-size: .72rem; margin-left: .45rem; white-space: nowrap; }
 
 /* Visually hidden but exposed to screen readers — text alternative for
    color-coded indicators like the event pip (WCAG 1.4.1). */

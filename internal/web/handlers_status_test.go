@@ -274,6 +274,39 @@ func TestStateLine(t *testing.T) {
 	}
 }
 
+// An event with Attrs renders each key=value inline after the message,
+// muted (#68) — e.g. a probe-404 event carrying path/status detail. The
+// /events htmx partial renders the same eventlist template, so one
+// assertion of each covers both surfaces.
+func TestStatusPageEventAttrsRenderInline(t *testing.T) {
+	fetchedAt := time.Now()
+	snap := &board.Snapshot{State: board.StateDepartures, FetchedAt: fetchedAt}
+	ring := obs.NewRing(8)
+	ring.Add(obs.Event{Time: fetchedAt, Level: slog.LevelWarn, Msg: "http", Attrs: map[string]string{"path": "/preview.png", "status": "404"}})
+	src := Sources{
+		Snapshot:  func() *board.Snapshot { return snap },
+		Ring:      ring,
+		Version:   "v-attr-test",
+		StartedAt: time.Now().Add(-time.Hour),
+	}
+	srv, _ := newTestServerWithSources(t, src)
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	for _, want := range []string{`<span class="attr">path=/preview.png</span>`, `<span class="attr">status=404</span>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("status page missing %q: %s", want, body)
+		}
+	}
+
+	partial := getPath(t, srv.Handler(), "/events", cookie).Body.String()
+	for _, want := range []string{`<span class="attr">path=/preview.png</span>`, `<span class="attr">status=404</span>`} {
+		if !strings.Contains(partial, want) {
+			t.Errorf("events partial missing %q: %s", want, partial)
+		}
+	}
+}
+
 // Each address renders on its own line (#65): usb0 lifeline + LAN IP is a
 // real dual-address case and dot-joined text wrapped mid-address.
 func TestStatusAddressesOnSeparateLines(t *testing.T) {
