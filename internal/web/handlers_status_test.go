@@ -212,6 +212,26 @@ func TestStatusPageHasBoardContainer(t *testing.T) {
 	}
 }
 
+// The board preview is a fixed 256×64 stage scaled to its wrapper (#61).
+// The wrapper keeps the role/aria of the old .board element.
+func TestStatusBoardStageMarkup(t *testing.T) {
+	srv, _ := newTestServerWithSources(t, statusTestSources(t))
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	for _, want := range []string{
+		`class="boardwrap" id="board"`,
+		`data-endpoint="/api/board"`,
+		`role="img"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("status page missing %q", want)
+		}
+	}
+	if strings.Contains(body, `class="board"`) {
+		t.Errorf("old .board container still present")
+	}
+}
+
 // TestStateLine locks down the runtime-state-to-headline mapping the status
 // page's statebar reads: label text, css class ("ok"|"warn"|"bad"), for the
 // states an operator actually sees plus the stale-fetch override.

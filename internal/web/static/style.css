@@ -79,26 +79,22 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 .dot.amber { background: #b25e00; }
 .dot.red { background: var(--red); }
 
-/* Live board */
-.board {
-  border-radius: 4px; background: #000; aspect-ratio: 4 / 1; padding: 2.5% 3.5%;
-  display: flex; flex-direction: column; justify-content: space-between;
-  font-family: var(--mono); color: var(--amber);
-  font-size: clamp(8px, 2.7cqw, 13px); line-height: 1.5;
-  white-space: nowrap; overflow: hidden; container-type: inline-size;
+/* Live board — 256×64 panel emulation, scaled to fit (#61).
+   Geometry mirrors internal/board/board.go; board.js owns all layout. */
+.boardwrap {
+  aspect-ratio: 4 / 1; background: #000; border-radius: 4px;
+  position: relative; overflow: hidden;
 }
-.board .row { display: flex; gap: 1.1em; }
-.board .dest { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.board .center { justify-content: center; }
-.board .marquee-clip { overflow: hidden; color: var(--amber-dim); }
-.board .marquee { display: inline-block; padding-left: 100%; animation: marquee 16s linear infinite; }
-@keyframes marquee { to { transform: translateX(-100%); } }
-.board .clockline { display: flex; justify-content: center; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
-.board.stale { filter: grayscale(1) brightness(.8); }
+.boardwrap.stale { filter: grayscale(1) brightness(.8); }
+.board-stage {
+  position: absolute; top: 0; left: 0; width: 256px; height: 64px;
+  transform-origin: 0 0;
+  font-family: "Dot Matrix", var(--mono); color: var(--amber);
+  font-size: 10px; line-height: 12px;
+}
+.board-stage .clip { position: absolute; overflow: hidden; }
+.board-stage .t { position: absolute; white-space: pre; will-change: transform; }
 .caption { margin: .4rem 0 1.1rem; font-size: .74rem; color: var(--muted); }
-@media (prefers-reduced-motion: reduce) {
-  .board .marquee { animation: none; padding-left: 0; }
-}
 
 /* Notices */
 .notice { background: var(--yellow); color: var(--ink); margin: 0 0 .8rem; padding: .7rem .85rem; border-radius: 4px; font-size: .85rem; }
