@@ -232,6 +232,17 @@ func TestStatusBoardStageMarkup(t *testing.T) {
 	}
 }
 
+// Desktop layout (#64): facts and events sit in a two-column grid that
+// collapses to one column on phones (CSS-only collapse; markup is shared).
+func TestStatusTwoColumnWrapper(t *testing.T) {
+	srv, _ := newTestServerWithSources(t, statusTestSources(t))
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	if !strings.Contains(body, `class="cols"`) {
+		t.Fatalf("status page missing .cols wrapper")
+	}
+}
+
 // TestStateLine locks down the runtime-state-to-headline mapping the status
 // page's statebar reads: label text, css class ("ok"|"warn"|"bad"), for the
 // states an operator actually sees plus the stale-fetch override.
