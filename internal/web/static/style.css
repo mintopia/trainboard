@@ -125,7 +125,7 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 
 /* Forms */
 label.f { display: block; margin: 0 0 .95rem; font-size: .82rem; color: #405264; }
-label.f .hint { font-size: .74rem; color: var(--muted); margin-top: .15rem; }
+label.f .hint, form > .hint { font-size: .74rem; color: var(--muted); margin-top: .15rem; }
 input[type="text"], input[type="password"], input[type="number"], select, textarea {
   display: block; width: 100%; min-height: 44px; margin-top: .3rem;
   font: inherit; font-size: .95rem; color: var(--ink);
