@@ -114,6 +114,25 @@ func (s *Server) handleAPIStation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"crs": strings.ToUpper(crs), "name": name})
 }
 
+// stationJSON is stations.Station's lowerCamel JSON projection.
+type stationJSON struct {
+	CRS  string `json:"crs"`
+	Name string `json:"name"`
+}
+
+// handleAPIStations is GET /api/stations?q=<text>: offline station search by
+// name or code (internal/stations.Search), best match first, at most 8.
+// Public like /api/station — the pre-auth setup pages use it (see
+// setupGate's exemption list).
+func (s *Server) handleAPIStations(w http.ResponseWriter, r *http.Request) {
+	res := stations.Search(r.URL.Query().Get("q"), 8)
+	out := make([]stationJSON, 0, len(res))
+	for _, st := range res {
+		out = append(out, stationJSON{CRS: st.CRS, Name: st.Name})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleAPIConfigGet is GET /api/config: the redacted config, as JSON.
 // config.Config already carries lowerCamel json tags for its own on-disk
 // shape, so it is written directly rather than through a dedicated DTO.

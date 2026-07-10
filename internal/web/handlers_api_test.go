@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -525,5 +526,33 @@ func TestAPIStationLookupBypassesSetupGate(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/station?crs=PAD", nil))
 	if rec.Code != http.StatusOK {
 		t.Errorf("setup gate must not redirect /api/station: want 200, got %d", rec.Code)
+	}
+}
+
+// GET /api/stations?q= is the search companion to /api/station: public
+// (pre-auth setup pages use it), JSON array, ≤8 ranked results, [] not null.
+func TestAPIStationsSearch(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rec := getPath(t, srv.Handler(), "/api/stations?q=sheff")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got []struct {
+		CRS  string `json:"crs"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) == 0 || got[0].CRS != "SHF" {
+		t.Fatalf("got %+v, want Sheffield (SHF) first", got)
+	}
+}
+
+func TestAPIStationsSearchEmptyIsArray(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rec := getPath(t, srv.Handler(), "/api/stations?q=zzzzzz")
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Fatalf("empty search body = %q, want []", body)
 	}
 }
