@@ -234,9 +234,13 @@
 
     if (v.state === "departures" && v.first) {
       nextServiceRow(stage, v.first, now);
-      // "Calling at:" label is itself a ScrollingText in a 42px box on the
-      // panel (scene_departures.go:50) — mirrored verbatim, quirks and all.
-      scrollingText(stage, "calling-label", "Calling at:", 0, ROW_H, CALLING_LABEL_W, now);
+      // The panel's "Calling at:" label is a ScrollingText (scene_departures.go:50),
+      // but it is static in practice: the Dot Matrix bitmap text fits its 42px
+      // box exactly. Browser canvas measureText overestimates the webfont's
+      // width, so mirroring it as a ScrollingText here made it scroll on the
+      // web when the glass never does (#67) — rendered explicitly static
+      // instead, to match what's actually on the panel.
+      staticText(stage, "Calling at:", 0, ROW_H, CALLING_LABEL_W, "left");
       scrollingText(stage, "calling-list", v.first.callingAt || "", CALLING_X, ROW_H, CALLING_W, now);
       scrollingText(stage, "service-info", v.first.serviceInfo || "", 0, SERVICE_Y, W, now);
       remainingBand(stage, v.remaining || [], now);
