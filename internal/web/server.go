@@ -227,9 +227,11 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	// setup pages) — deliberately outside the requireAuth/apiJSONErrors chain
 	// below, and exempted from setupGate alongside /static/ and the portal
 	// probes. GET /api/stations is the search companion — also public, also
-	// exempted.
+	// exempted. GET /api/tocs is the operator search companion — also public,
+	// also exempted.
 	s.mux.Handle("GET /api/station", http.HandlerFunc(s.handleAPIStation))
 	s.mux.Handle("GET /api/stations", http.HandlerFunc(s.handleAPIStations))
+	s.mux.Handle("GET /api/tocs", http.HandlerFunc(s.handleAPITOCs))
 
 	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
 	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
@@ -264,19 +266,19 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 }
 
 // setupGate redirects every request but /setup, /static/, /api/station,
-// /api/stations, /restarting, and the captive-portal probe endpoints to
+// /api/stations, /api/tocs, /restarting, and the captive-portal probe endpoints to
 // /setup while no admin password is stored; once one exists, /setup itself
 // 404s. The probe endpoints are exempted like /static/ so they always reach
 // their own AP-mode-aware handlers instead of setupGate's generic redirect,
 // which cannot answer the OS-specific bodies those probes expect (see
-// handlers_portal.go). /api/station and /api/stations are exempted because
-// the pre-auth setup pages use them (CRS→name lookup and search as the user
-// types) and they carry no secrets — see handleAPIStation and handleAPIStations.
-// /restarting is exempted because first-boot setup (handleSetupPost) itself
-// now redirects there: the moment that redirect is issued, SetInitialPassword
-// has just written the password hash, so s.needsSetup() should already read
-// false on this same process — but the exemption is added anyway as a
-// defensive belt-and-braces, so a session-lost or slow-reloading browser can
+// handlers_portal.go). /api/station, /api/stations, and /api/tocs are exempted because
+// the pre-auth setup pages use them (CRS→name lookup, station search, and operator
+// search as the user types) and they carry no secrets — see handleAPIStation,
+// handleAPIStations, and handleAPITOCs. /restarting is exempted because first-boot
+// setup (handleSetupPost) itself now redirects there: the moment that redirect is
+// issued, SetInitialPassword has just written the password hash, so s.needsSetup()
+// should already read false on this same process — but the exemption is added anyway
+// as a defensive belt-and-braces, so a session-lost or slow-reloading browser can
 // never get bounced to /setup while waiting for the restart it just triggered.
 //
 // While a password is still needed, the redirect target is normally the
@@ -288,7 +290,7 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 // displays.
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/api/station" || r.URL.Path == "/api/stations" || r.URL.Path == "/restarting" || isPortalProbePath(r.URL.Path) {
+		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/api/station" || r.URL.Path == "/api/stations" || r.URL.Path == "/api/tocs" || r.URL.Path == "/restarting" || isPortalProbePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

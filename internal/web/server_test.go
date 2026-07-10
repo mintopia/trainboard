@@ -136,13 +136,13 @@ func TestServerSetupGateRedirectsWhenNoPassword(t *testing.T) {
 	}
 }
 
-// (a2) GET /restarting, /api/station, and /api/stations are exempt from the
+// (a2) GET /restarting, /api/station, /api/stations, and /api/tocs are exempt from the
 // setup gate — they must render even on a genuinely unprovisioned device
 // (no password stored yet), not bounce to /setup.
 func TestServerRestartingExemptFromSetupGate(t *testing.T) {
 	srv, _ := newTestServer(t)
 	h := srv.Handler()
-	for _, path := range []string{"/restarting", "/api/station?crs=PAD", "/api/stations?q=sheff"} {
+	for _, path := range []string{"/restarting", "/api/station?crs=PAD", "/api/stations?q=sheff", "/api/tocs?q=eliza"} {
 		rec := getPath(t, h, path)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: want 200, got %d %q body=%s", path, rec.Code, rec.Header().Get("Location"), rec.Body.String())

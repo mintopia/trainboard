@@ -556,3 +556,27 @@ func TestAPIStationsSearchEmptyIsArray(t *testing.T) {
 		t.Fatalf("empty search body = %q, want []", body)
 	}
 }
+
+// GET /api/tocs?q= mirrors /api/stations for operators; empty q returns the
+// full ~31-row table (the client caches it for name hints).
+func TestAPITOCs(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rec := getPath(t, srv.Handler(), "/api/tocs?q=eliza")
+	var got []struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 1 || got[0].Code != "XR" {
+		t.Fatalf("got %+v, want XR", got)
+	}
+	rec = getPath(t, srv.Handler(), "/api/tocs")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal full list: %v", err)
+	}
+	if len(got) < 30 {
+		t.Fatalf("full list = %d rows, want ≥30", len(got))
+	}
+}
