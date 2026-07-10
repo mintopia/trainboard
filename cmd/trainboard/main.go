@@ -152,6 +152,10 @@ func run() error {
 		log.Info("fixture mode", "path", *fixture)
 	} else {
 		fetcher = data.NewClient(cfg.Darwin.Token)
+		if cfg.Layout.Headcodes && cfg.RTT.Username != "" {
+			fetcher = &data.HeadcodeEnricher{Base: fetcher, RTT: data.NewRTTClient(cfg.RTT.Username, cfg.RTT.Password), Log: log}
+			log.Info("headcode enrichment enabled", "source", "rtt")
+		}
 	}
 
 	poller := runtime.NewPoller(fetcher, cfg, log)
