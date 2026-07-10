@@ -40,6 +40,10 @@ type boardView struct {
 	Remaining []serviceView `json:"remaining,omitempty"`
 	Messages  []string      `json:"messages,omitempty"`
 	Hotspot   *hotspotView  `json:"hotspot,omitempty"`
+	// Time is the server's wall clock when the view was built. The web
+	// preview drives its clock from this (not the browser's clock) and
+	// flags drift — clock disagreement is diagnostic signal (#65).
+	Time string `json:"time"`
 }
 
 // buildBoardView mirrors board.BuildScene's priority order
@@ -110,7 +114,9 @@ func (s *Server) handleAPIBoard(w http.ResponseWriter, _ *http.Request) {
 	if s.svc.src.Snapshot != nil {
 		snap = s.svc.src.Snapshot()
 	}
+	view := buildBoardView(snap, times)
+	view.Time = time.Now().Format(rfc3339)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(buildBoardView(snap, times))
+	_ = json.NewEncoder(w).Encode(view)
 }

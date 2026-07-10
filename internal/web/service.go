@@ -39,6 +39,9 @@ type Sources struct {
 	// rollback marker, last error). nil = updater not wired (dev mode);
 	// reads as the zero Status, whose Enabled=false hides the controls.
 	UpdateStatus func() update.Status
+	// IPs reports local unicast IP addresses. Optional: nil falls back to
+	// localIPs() (used in tests to override actual network state).
+	IPs func() []string
 }
 
 // Actions are the write-side callbacks main wires up. Apply is invoked after
@@ -112,7 +115,11 @@ func (s *Service) Status() StatusData {
 	}
 	st.SoakRemaining = s.SoakRemaining()
 	st.Update = s.UpdateStatus()
-	st.IPs = localIPs()
+	if s.src.IPs != nil {
+		st.IPs = s.src.IPs()
+	} else {
+		st.IPs = localIPs()
+	}
 	return st
 }
 

@@ -11,6 +11,21 @@
   src: url(/static/fonts/rail-alphabet-light.woff2) format("woff2");
   font-weight: 400; font-style: normal; font-display: swap;
 }
+@font-face {
+  font-family: "Dot Matrix";
+  src: url(/static/fonts/dotmatrix-regular.woff2) format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Dot Matrix Bold";
+  src: url(/static/fonts/dotmatrix-bold.woff2) format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Dot Matrix Bold Tall";
+  src: url(/static/fonts/dotmatrix-bold-tall.woff2) format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
 
 :root {
   --navy: #002f63;
@@ -23,7 +38,6 @@
   --hairline: #e3e7eb;
   --input-border: #b7c0c9;
   --amber: #ffb000;
-  --amber-dim: #c98a00;
   --ra: "Rail Alphabet", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
   --ra-light: "Rail Alphabet Light", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
   --body: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
@@ -64,26 +78,22 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 .dot.amber { background: #b25e00; }
 .dot.red { background: var(--red); }
 
-/* Live board */
-.board {
-  border-radius: 4px; background: #000; aspect-ratio: 4 / 1; padding: 2.5% 3.5%;
-  display: flex; flex-direction: column; justify-content: space-between;
-  font-family: var(--mono); color: var(--amber);
-  font-size: clamp(8px, 2.7cqw, 13px); line-height: 1.5;
-  white-space: nowrap; overflow: hidden; container-type: inline-size;
+/* Live board — 256×64 panel emulation, scaled to fit (#61).
+   Geometry mirrors internal/board/board.go; board.js owns all layout. */
+.boardwrap {
+  aspect-ratio: 4 / 1; background: #000; border-radius: 4px;
+  position: relative; overflow: hidden;
 }
-.board .row { display: flex; gap: 1.1em; }
-.board .dest { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.board .center { justify-content: center; }
-.board .marquee-clip { overflow: hidden; color: var(--amber-dim); }
-.board .marquee { display: inline-block; padding-left: 100%; animation: marquee 16s linear infinite; }
-@keyframes marquee { to { transform: translateX(-100%); } }
-.board .clockline { display: flex; justify-content: center; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
-.board.stale { filter: grayscale(1) brightness(.8); }
+.boardwrap.stale { filter: grayscale(1) brightness(.8); }
+.board-stage {
+  position: absolute; top: 0; left: 0; width: 256px; height: 64px;
+  transform-origin: 0 0;
+  font-family: "Dot Matrix", var(--mono); color: var(--amber);
+  font-size: 10px; line-height: 12px;
+}
+.board-stage .clip { position: absolute; overflow: hidden; }
+.board-stage .t { position: absolute; white-space: pre; will-change: transform; }
 .caption { margin: .4rem 0 1.1rem; font-size: .74rem; color: var(--muted); }
-@media (prefers-reduced-motion: reduce) {
-  .board .marquee { animation: none; padding-left: 0; }
-}
 
 /* Notices */
 .notice { background: var(--yellow); color: var(--ink); margin: 0 0 .8rem; padding: .7rem .85rem; border-radius: 4px; font-size: .85rem; }
@@ -96,6 +106,8 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 .r { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--hairline); font-size: .85rem; }
 .r .k { color: var(--muted); }
 .r .v { font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.r .v.addrs { display: flex; flex-direction: column; align-items: flex-end; gap: .15rem; }
+.r .v.addrs .addr { white-space: nowrap; }
 
 /* Buttons */
 .btn, button.btn {
@@ -121,6 +133,21 @@ input.crs { font-family: var(--ra); text-transform: uppercase; letter-spacing: .
 label.check { display: flex; align-items: center; gap: .6rem; min-height: 44px; font-size: .85rem; color: var(--ink); margin: 0; }
 label.check input { width: 1.35rem; height: 1.35rem; accent-color: var(--navy); }
 .field-error { color: var(--red-text); font-size: .78rem; margin-top: .2rem; }
+
+/* Autosuggest combobox (#62, #63) */
+.suggestwrap { position: relative; }
+input.crs.searching {
+  text-transform: none; letter-spacing: normal; max-width: 100%;
+  font-family: var(--body); font-size: .95rem;
+}
+ul.suggest {
+  position: absolute; z-index: 10; left: 0; right: 0; top: 100%;
+  margin: 2px 0 0; padding: 0; list-style: none;
+  background: #fff; border: 1.5px solid var(--navy); border-radius: 4px;
+  box-shadow: 0 4px 10px rgba(0, 47, 99, .15); max-height: 14rem; overflow-y: auto;
+}
+ul.suggest li { padding: .55rem .7rem; min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: .9rem; }
+ul.suggest li[aria-selected="true"], ul.suggest li:hover { background: var(--yellow); }
 
 /* Route-line progress */
 .route { display: flex; margin: 1.1rem 0 1.3rem; }
@@ -180,3 +207,15 @@ tr.warn td:last-child { color: var(--red-text); }
 
 /* Error paragraph (new pages) */
 p.error { color: var(--red-text); background: #fbe9e5; border-radius: 4px; padding: .6rem .8rem; font-size: .85rem; }
+
+/* Desktop adaptation (#64) — phone-first unchanged; wide screens let the
+   existing hierarchy breathe instead of stretching a phone column. */
+.cols { display: block; }
+@media (min-width: 64rem) {
+  body { max-width: 64rem; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 3rem; align-items: start; }
+  /* Forms keep a readable measure rather than stretching to the grid. */
+  main form { max-width: 42rem; }
+  /* Full-bleed save bar is a phone affordance; inline it on desktop. */
+  .savebar { margin: 0; padding-left: 0; padding-right: 0; }
+}

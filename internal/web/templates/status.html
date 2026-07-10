@@ -8,7 +8,7 @@
 {{if .StateDetail}}<p class="caption" style="margin-top:-.4rem">{{.StateDetail}}</p>{{end}}
 
 <section>
-  <div class="board" id="board" data-endpoint="/api/board" role="img" aria-label="live departure board preview"></div>
+  <div class="boardwrap" id="board" data-endpoint="/api/board" role="img" aria-label="live departure board preview"></div>
   <p class="caption" id="board-caption">Live panel · rendered in your browser</p>
 </section>
 
@@ -42,16 +42,21 @@
 <div class="notice calm">Burn-in soak running — {{.SoakRemainingText}} remaining. The panel cycles white/black; departures resume when it ends. <a href="/actions">Cancel from Actions</a>.</div>
 {{end}}
 
+<div class="cols">
+<section>
 <h3>This board</h3>
 <div class="rows">
   <div class="r"><span class="k">Software</span><span class="v">{{.Status.Update.Running}}{{if not .Status.Update.Running}}{{.Status.Version}}{{end}}</span></div>
-  <div class="r"><span class="k">Address</span><span class="v">{{range $i, $ip := .Status.IPs}}{{if $i}} · {{end}}{{$ip}}{{end}}{{if .MDNSState}} · trainboard.local{{end}}</span></div>
+  <div class="r"><span class="k">Address</span><span class="v addrs">{{range .Status.IPs}}<span class="addr">{{.}}</span>{{end}}{{if .MDNSState}}<span class="addr">trainboard.local</span>{{end}}</span></div>
   <div class="r"><span class="k">Last data fetch</span><span class="v">{{if .Status.LastFetch.IsZero}}never{{else}}{{.Status.LastFetch.Format "15:04:05"}}{{end}}</span></div>
 </div>
-
+</section>
+<section>
 <h3>Recent events</h3>
 <div id="events" hx-get="/events" hx-trigger="every 5s" hx-swap="innerHTML">
   {{template "eventlist" .Status.Events}}
+</div>
+</section>
 </div>
 <script src="/static/board.js" defer></script>
 {{end}}

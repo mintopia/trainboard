@@ -116,7 +116,9 @@ func TestSetupGetAPModeRendersWifiFieldsAndLastError(t *testing.T) {
 
 // (b) LAN-mode GET /setup (no hotspot fake wired) renders the original
 // three-field form with no wifi fields at all — the AP-mode branch must not
-// leak into the non-AP path.
+// leak into the non-AP path. Its origin field is also a suggest.js combobox
+// enhancement (#62): data-suggest carries the search endpoint, and the
+// legacy htmx per-keystroke lookup attributes are gone.
 func TestSetupGetLANModeHasNoWifiFields(t *testing.T) {
 	srv, _ := newTestServer(t)
 	rec := getPath(t, srv.Handler(), "/setup")
@@ -126,6 +128,18 @@ func TestSetupGetLANModeHasNoWifiFields(t *testing.T) {
 	body := rec.Body.String()
 	if strings.Contains(body, `name="ssid"`) || strings.Contains(body, `name="psk"`) {
 		t.Fatalf("LAN-mode setup must not render wifi fields: %s", body)
+	}
+	for _, want := range []string{
+		`data-suggest="/api/stations"`,
+		`data-hint="origin-name"`,
+		`src="/static/suggest.js"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("setup origin field missing %q", want)
+		}
+	}
+	if strings.Contains(body, `hx-get="/api/station"`) {
+		t.Errorf("legacy htmx station lookup still present")
 	}
 }
 

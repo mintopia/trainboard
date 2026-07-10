@@ -114,6 +114,43 @@ func (s *Server) handleAPIStation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"crs": strings.ToUpper(crs), "name": name})
 }
 
+// stationJSON is stations.Station's lowerCamel JSON projection.
+type stationJSON struct {
+	CRS  string `json:"crs"`
+	Name string `json:"name"`
+}
+
+// handleAPIStations is GET /api/stations?q=<text>: offline station search by
+// name or code (internal/stations.Search), best match first, at most 8.
+// Public like /api/station — the pre-auth setup pages use it (see
+// setupGate's exemption list).
+func (s *Server) handleAPIStations(w http.ResponseWriter, r *http.Request) {
+	res := stations.Search(r.URL.Query().Get("q"), 8)
+	out := make([]stationJSON, 0, len(res))
+	for _, st := range res {
+		out = append(out, stationJSON{CRS: st.CRS, Name: st.Name})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// tocJSON is stations.TOC's lowerCamel JSON projection.
+type tocJSON struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// handleAPITOCs is GET /api/tocs?q=: offline operator search; empty q
+// returns the full table (~31 rows) which the web UI caches for name hints.
+// Public + setupGate-exempt like /api/station(s).
+func (s *Server) handleAPITOCs(w http.ResponseWriter, r *http.Request) {
+	res := stations.TOCSearch(r.URL.Query().Get("q"), 40)
+	out := make([]tocJSON, 0, len(res))
+	for _, tc := range res {
+		out = append(out, tocJSON{Code: tc.Code, Name: tc.Name})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleAPIConfigGet is GET /api/config: the redacted config, as JSON.
 // config.Config already carries lowerCamel json tags for its own on-disk
 // shape, so it is written directly rather than through a dedicated DTO.

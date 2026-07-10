@@ -112,9 +112,16 @@ restarts the whole Pi, not just the process.
 page's live board preview now renders client-side from `GET /api/board` (a
 JSON row-model of the current scene, polled every 5s) via `static/board.js` —
 if you had a personal bookmark or script pointed at `/preview.png`, point it
-at `/api/board` instead. The admin UI's fonts (Rail Alphabet, subsetted
-`.woff2`) and JS (htmx) are bundled and served from `/static/` — the page
-works fully with no internet access from the browser, same as before.
+at `/api/board` instead. The preview is a faithful emulation of the panel:
+it uses the panel's own Dot Matrix fonts (subsetted `.woff2`) and mirrors the
+OLED's scene geometry and animation timing, and its clock runs on board time
+(from `/api/board`'s `time` field), flagging drift against the browser clock.
+Station and operator search in the config forms is served offline from
+bundled tables (`GET /api/stations?q=`, `GET /api/tocs?q=`) — like
+`/api/station`, both are public and work pre-setup. The admin UI's fonts
+(Rail Alphabet + Dot Matrix, subsetted `.woff2`) and JS (htmx) are bundled
+and served from `/static/` — the page works fully with no internet access
+from the browser, same as before.
 
 ## 5. Install the binary (first-time bootstrap)
 

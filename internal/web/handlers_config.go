@@ -133,9 +133,10 @@ func summarizeUpdates(cfg config.Config) string {
 
 // configDeparturesPageData is GET/POST /config/departures's render data.
 // OriginName/DestinationName are resolved once at render time so the page
-// shows a station name next to the CRS code without a round trip through
-// htmx on first load; the htmx-driven /api/station lookup takes over from
-// there as the user edits either field.
+// shows a station name next to the CRS code without a round trip on first
+// load; suggest.js's combobox (#62) takes over from there as the user edits
+// either field, resolving the hint client-side against GET /api/stations.
+// TOCNames carries resolved operator names for the Operators field's hint (#63).
 type configDeparturesPageData struct {
 	basePage
 	Cfg              config.Config
@@ -145,6 +146,7 @@ type configDeparturesPageData struct {
 	ReplacementsText string
 	OriginName       string
 	DestinationName  string
+	TOCNames         string
 }
 
 // handleConfigDeparturesGet renders the departures form pre-filled from the
@@ -178,6 +180,19 @@ func (s *Server) renderConfigDepartures(w http.ResponseWriter, r *http.Request, 
 	}
 	d.OriginName, _ = stations.Name(cfg.Board.Origin)
 	d.DestinationName, _ = stations.Name(cfg.Board.Destination)
+
+	// TOC name hints (#63): "GW, XR" → "Great Western Railway, Elizabeth
+	// line"; unknown codes render as "XX?" so typos are visible, not silent.
+	var tocNames []string
+	for _, code := range cfg.Board.TOCs {
+		if name, ok := stations.TOCName(code); ok {
+			tocNames = append(tocNames, name)
+		} else {
+			tocNames = append(tocNames, code+"?")
+		}
+	}
+	d.TOCNames = strings.Join(tocNames, ", ")
+
 	s.render(w, "configDepartures", d)
 }
 
