@@ -218,6 +218,22 @@ func TestStatusPageHasBoardContainer(t *testing.T) {
 	}
 }
 
+// The status page's Address row dedupes IPs, preserving first-seen order
+// (#70): Sources.IPs can report the same address twice (observed on-device:
+// 10.55.0.1 via both the usb0 lifeline route and a general interface scan).
+func TestStatusAddressesDeduped(t *testing.T) {
+	srv, svc := newTestServerWithSources(t, statusTestSources(t))
+	setStatusIPs(t, svc, []string{"192.168.0.102", "10.55.0.1", "10.55.0.1"})
+	cookie, _ := loginAs(t, srv, statusTestPassword)
+	body := getPath(t, srv.Handler(), "/", cookie).Body.String()
+	if n := strings.Count(body, `<span class="addr">10.55.0.1</span>`); n != 1 {
+		t.Errorf("want exactly 1 occurrence of the duplicated address, got %d: %s", n, body)
+	}
+	if !strings.Contains(body, `<span class="addr">192.168.0.102</span>`) {
+		t.Errorf("status page missing non-duplicate address: %s", body)
+	}
+}
+
 // The board preview is a fixed 256×64 stage scaled to its wrapper (#61).
 // The wrapper keeps the role/aria of the old .board element.
 func TestStatusBoardStageMarkup(t *testing.T) {
