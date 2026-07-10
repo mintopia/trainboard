@@ -367,6 +367,124 @@ func TestConfigDeparturesValidationPreservesTypedReplacements(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
+// newPartialSetupTestServer wires a Server over a config in the AP-mode
+// partial-setup state: admin password + WiFi creds stored (via
+// SaveConnectivity), but NO Board.Origin and NO Darwin.Token yet — the
+// connectivity-valid-but-board-invalid document a device has after
+// handleSetupPostAPMode but before finish-provisioning.
+func newPartialSetupTestServer(t *testing.T) (srv *Server, path string, applyCh chan struct{}) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "config.json")
+	hash, err := HashPassword(configTestPassword)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	partial := config.Default() // empty origin/token: fails full Validate
+	partial.Web.PasswordHash = hash
+	partial.Wifi.SSID = "HomeNet"
+	partial.Wifi.PSK = "supersecret"
+	if err := config.SaveConnectivity(path, partial); err != nil {
+		t.Fatalf("seed partial-setup config: %v", err)
+	}
+	applyCh = make(chan struct{}, 1)
+	src := Sources{
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now(),
+	}
+	act := Actions{
+		Apply:  func() { applyCh <- struct{}{} },
+		Reboot: func() error { return nil },
+	}
+	svc := NewService(path, src, act, testLog())
+	return NewServer(svc, testLog()), path, applyCh
+}
+
+// TestConfigDeparturesFirstOnPartialSetupDirectsToNetwork covers the
+// departures-first path on an AP-provisioned device (origin AND token both
+// still empty): saving a perfectly valid origin still fails UpdateConfig's
+// full Validate on the missing Darwin token — a field this page doesn't
+// have. The re-render must direct the user to the Network page (where the
+// token AND the origin can be set together in one save — see
+// handleConfigNetworkPost's doc comment) instead of echoing config.Validate's
+// bare "config: darwin.token is required", which names a field with no home
+// here and no hint where its home is. Nothing is saved.
+func TestConfigDeparturesFirstOnPartialSetupDirectsToNetwork(t *testing.T) {
+	srv, path, applyCh := newPartialSetupTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.LoadRaw(path) // board-invalid on purpose; LoadRaw, not Load
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseDeparturesForm() // valid origin (PAD), valid everything else
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/departures", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Network page") {
+		t.Errorf("expected the error to direct the user to the Network page: %s", body)
+	}
+	if strings.Contains(body, "config: darwin.token is required") {
+		t.Errorf("the raw validate error must be replaced, not echoed: %s", body)
+	}
+
+	after, err := config.LoadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged (nothing was saved):\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigNetworkConditionalOriginUnrecognised covers the Network page's
+// conditional board.origin field (rendered only while no origin is stored —
+// see handleConfigNetworkPost) being submitted with a code that isn't in the
+// offline stations table: the same friendly, code-naming rejection the
+// Departures page gives, with the typed value preserved, nothing saved, and
+// no restart.
+func TestConfigNetworkConditionalOriginUnrecognised(t *testing.T) {
+	srv, path, applyCh := newPartialSetupTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.LoadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseNetworkForm()
+	form.Set("board.origin", "ZZZ") // valid CRS shape, not a real station
+	form.Set("darwin.token", "tok-finish")
+	form.Set("wifi.ssid", "HomeNet") // mirrors the pre-filled, non-secret SSID input
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "not a station code we recognise") {
+		t.Errorf("expected the friendly station-code rejection: %s", body)
+	}
+	if !strings.Contains(body, `value="ZZZ"`) {
+		t.Errorf("expected the typed origin preserved in the re-rendered form: %s", body)
+	}
+
+	after, err := config.LoadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
 // TestConfigDeparturesReplacementsRoundTrip covers the replacements textarea
 // specifically (migrated from the old monolith's GET /config assertion, now
 // that GET /config no longer renders it — see TestConfigGetRendersFormWithoutLeakingSecrets's

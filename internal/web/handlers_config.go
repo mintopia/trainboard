@@ -235,7 +235,22 @@ func (s *Server) handleConfigDeparturesPost(w http.ResponseWriter, r *http.Reque
 	}
 
 	if firstErr == nil {
-		firstErr = s.svc.UpdateConfig(ConfigUpdate{Cfg: cfg})
+		if err := s.svc.UpdateConfig(ConfigUpdate{Cfg: cfg}); err != nil {
+			// An AP-provisioned device saving Departures FIRST (before ever
+			// visiting Network) has no Darwin token yet, so UpdateConfig's
+			// full Validate rejects even a perfectly valid origin on a field
+			// this page doesn't carry. Echoing the bare "config: darwin.token
+			// is required" would name a field with no home here and no hint
+			// where its home is — replace it with a page-directing message.
+			// Detected narrowly (token empty pre-save AND the error names
+			// darwin.token) so every other validation error passes through
+			// verbatim. cfg is redacted, but Redacted keeps an empty token
+			// empty, so the emptiness check is faithful to what's stored.
+			if cfg.Darwin.Token == "" && strings.Contains(err.Error(), "darwin.token") {
+				err = fmt.Errorf("a Darwin API token is required before the board can run — nothing was saved; set the token on the Network page, where you can also set your station in one go")
+			}
+			firstErr = err
+		}
 	}
 	if firstErr != nil {
 		// rawReps, not formatReplacements(cfg.Board.Replacements): on a
@@ -412,6 +427,16 @@ func (s *Server) handleConfigNetworkPost(w http.ResponseWriter, r *http.Request)
 	if needsOrigin {
 		if origin := strings.ToUpper(strings.TrimSpace(r.PostFormValue("board.origin"))); origin != "" {
 			cfg.Board.Origin = origin
+			// Mirror handleConfigDeparturesPost's check against the offline
+			// stations table: config.Validate's isCRS only checks the
+			// 3-letter shape, so without this a typo like "ZZZ" would save
+			// (and restart the board into a fetch error) instead of getting
+			// the friendly, code-naming rejection the Departures page gives.
+			if _, ok := stations.Name(origin); !ok {
+				s.renderConfigNetwork(w, r, cfg, needsOrigin,
+					fmt.Sprintf("%q is not a station code we recognise — 3 letters, e.g. PAD", origin))
+				return
+			}
 		}
 	}
 
