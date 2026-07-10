@@ -54,7 +54,7 @@ func newTestServerWithPassword(t *testing.T, pw string) (*Server, *Service) {
 // newTestServerWithApply is newTestServer plus a channel that receives a
 // value whenever this Server's wired Actions.Apply fires — used by the
 // setup-flow tests that must assert POST /setup's success path actually
-// schedules the same apply-by-restart handleConfigPost uses (newTestServer's
+// schedules the same apply-by-restart a config sub-page save uses (newTestServer's
 // underlying newTestServiceAt wires a no-op Apply, which cannot prove that).
 func newTestServerWithApply(t *testing.T) (*Server, *Service, chan struct{}) {
 	t.Helper()
@@ -137,7 +137,7 @@ func TestServerSetupGateRedirectsWhenNoPassword(t *testing.T) {
 
 // (b) POST /setup with password+confirm+origin creates the password (usable
 // via VerifyLogin), issues a session cookie, schedules Actions.Apply (the
-// same apply-by-restart handleConfigPost uses — this is what actually clears
+// same apply-by-restart a config sub-page save uses — this is what actually clears
 // a virgin device's E04 fault screen, since runConfigErrorLoop has no
 // poller), renders the restart page instead of redirecting to /, and /setup
 // then 404s.

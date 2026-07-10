@@ -38,9 +38,9 @@ func (s *Server) actionsData(r *http.Request, soakError string) actionsPageData 
 
 // scheduleApply fires Actions.Apply after applyDelay, once the caller's
 // response has been written — the shared timing mechanism behind every
-// route that ends in an Apply-triggered restart: config save
-// (handleConfigPost), the actions page's restart button, and the JSON API's
-// PUT /api/config and POST /api/actions/restart.
+// route that ends in an Apply-triggered restart: the config sub-page saves
+// (e.g. handleConfigNetworkPost), the actions page's restart button, and the
+// JSON API's PUT /api/config and POST /api/actions/restart.
 func (s *Server) scheduleApply() {
 	time.AfterFunc(applyDelay, s.svc.act.Apply)
 }
@@ -54,9 +54,10 @@ func (s *Server) scheduleWifiRetry() {
 	time.AfterFunc(applyDelay, s.svc.WifiRetryNow)
 }
 
-// handleActionsRestart renders the same applied page config save uses (its
-// "saved, restarting" copy is accurate here too — a software restart, not a
-// config change) and schedules Actions.Apply, exactly like handleConfigPost.
+// handleActionsRestart renders the same applied page a restart-triggering
+// config save uses (its "saved, restarting" copy is accurate here too — a
+// software restart, not a config change) and schedules Actions.Apply,
+// exactly like e.g. handleConfigNetworkPost.
 func (s *Server) handleActionsRestart(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "applied", basePage{LoggedIn: true, CSRF: csrfFrom(r)})
 	s.scheduleApply()

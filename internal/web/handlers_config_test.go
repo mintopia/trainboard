@@ -128,41 +128,6 @@ func newConfigTestServer(t *testing.T) (srv *Server, svc *Service, path string, 
 	return newConfigTestServerCore(t, nil)
 }
 
-// baseConfigForm returns a fresh, fully-populated, valid form matching the
-// baseline config written by newConfigTestServer (secrets left blank, i.e.
-// "keep the stored value"). Callers mutate the returned map per-test; a
-// fresh map is built on every call so tests never share state.
-func baseConfigForm() url.Values {
-	return url.Values{
-		"board.origin":            {"PAD"},
-		"board.destination":       {""},
-		"board.platforms":         {""},
-		"board.tocs":              {""},
-		"board.services":          {"3"},
-		"board.cutoffHours":       {"8"},
-		"board.refreshSeconds":    {"60"},
-		"board.timeWindowMinutes": {"120"},
-		"board.replacements":      {""},
-		"layout.times":            {"on"},
-		// powersaving.enabled deliberately absent: config.Default() has it
-		// false, and checkbox semantics say an absent key means false.
-		"powersaving.start":      {"23:00"},
-		"powersaving.end":        {"07:00"},
-		"powersaving.brightness": {"32"},
-		"wifi.ssid":              {""},
-		"wifi.psk":               {""},
-		"update.channel":         {"stable"},
-		// update.checks deliberately present ("on"): its checkbox defaults to
-		// checked (DisableChecks false), same reasoning as layout.times above.
-		// update.autoApply deliberately absent, same reasoning as
-		// powersaving.enabled above (its default is unchecked/off).
-		"update.checks":        {"on"},
-		"darwin.token":         {""},
-		"web.password":         {""},
-		"web.password.confirm": {""},
-	}
-}
-
 // awaitApply waits up to 1s for a value on ch, failing the test if it never
 // arrives.
 func awaitApply(t *testing.T, ch chan struct{}) {
@@ -532,6 +497,430 @@ func TestConfigDisplayValidationError(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
+// baseNetworkForm returns a fresh, fully-populated, valid form matching the
+// baseline config written by newConfigTestServer's network fields (no wifi
+// configured, secrets left blank i.e. "keep the stored value").
+func baseNetworkForm() url.Values {
+	return url.Values{
+		"wifi.ssid":    {""},
+		"wifi.psk":     {""},
+		"darwin.token": {""},
+	}
+}
+
+// baseUpdatesForm returns a fresh, fully-populated, valid form matching the
+// baseline config written by newConfigTestServer's update fields
+// (config.Default()'s Update defaults: channel stable, checks on, autoApply
+// off).
+func baseUpdatesForm() url.Values {
+	return url.Values{
+		"update.channel": {"stable"},
+		// update.checks deliberately present ("on"): its checkbox defaults to
+		// checked (DisableChecks false). update.autoApply deliberately absent
+		// (its default is unchecked/off).
+		"update.checks": {"on"},
+	}
+}
+
+// TestConfigNetwork covers GET pre-filling the network form (SSID only —
+// secrets never pre-fill) and a valid POST saving a changed SSID, scheduling
+// Actions.Apply because a network change can strand the board on the wrong
+// WiFi.
+func TestConfigNetwork(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/network", cookie)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="wifi.ssid"`) {
+		t.Fatalf("GET form: code %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// The baseline config has no WiFi configured at all (SSID and PSK both
+	// blank): config.validateWifi requires the two together (or both
+	// blank), so a first-time SSID needs a PSK supplied alongside it.
+	form := baseNetworkForm()
+	form.Set("wifi.ssid", "HomeNet")
+	form.Set("wifi.psk", "somepassword1")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Wifi.SSID != "HomeNet" {
+		t.Fatalf("Wifi.SSID = %q, want HomeNet", cur.Wifi.SSID)
+	}
+	// Darwin token (a different secret) must pass through untouched.
+	if cur.Darwin.Token != configTestToken {
+		t.Fatalf("Darwin.Token = %q, want unchanged %q (network POST must not touch it when blank)", cur.Darwin.Token, configTestToken)
+	}
+
+	recGet := getPath(t, srv.Handler(), "/config/network", cookie)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("GET after save: want 200, got %d", recGet.Code)
+	}
+	if !strings.Contains(recGet.Body.String(), `value="HomeNet"`) {
+		t.Errorf("expected wifi.ssid=HomeNet preserved in re-rendered form: %s", recGet.Body.String())
+	}
+}
+
+// TestConfigNetworkSavesSecretsWriteOnly is task 7's pinned RED test: a new
+// wifi.psk replaces the stored PSK, while a blank darwin.token keeps the
+// stored token unchanged — secrets are write-only, and either one changing
+// still restarts the board (Wifi.PSK and Darwin.Token both live in the same
+// connectivity/data seams a restart is needed to re-read).
+func TestConfigNetworkSavesSecretsWriteOnly(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := url.Values{"csrf": {csrf}, "wifi.ssid": {"NewNet"}, "wifi.psk": {"newpassword1"}, "darwin.token": {""}}
+	rec := postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh) // network changes restart
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Wifi.SSID != "NewNet" || cur.Wifi.PSK != "newpassword1" {
+		t.Fatalf("Wifi = %+v, want ssid=NewNet psk=newpassword1", cur.Wifi)
+	}
+	if cur.Darwin.Token != configTestToken {
+		t.Fatalf("Darwin.Token = %q, want unchanged %q (empty darwin.token means keep)", cur.Darwin.Token, configTestToken)
+	}
+}
+
+// TestConfigNetworkValidationErrorPreservesTypedSSID covers an invalid PSK
+// (too short) while a new SSID is also typed: re-render (200) with the
+// error, the typed SSID preserved, the file unchanged, and Actions.Apply NOT
+// called. It also confirms the invalid PSK itself is never echoed back.
+func TestConfigNetworkValidationErrorPreservesTypedSSID(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseNetworkForm()
+	form.Set("wifi.ssid", "TypedNet")
+	form.Set("wifi.psk", "short")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "wifi.psk") {
+		t.Errorf("expected a wifi.psk validation message: %s", body)
+	}
+	if !strings.Contains(body, `value="TypedNet"`) {
+		t.Errorf("expected the typed SSID preserved in re-rendered form: %s", body)
+	}
+	if strings.Contains(body, "short") {
+		t.Errorf("the invalid PSK itself must never be echoed back: %s", body)
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigNetworkSecretsNeverRoundTrip is the reinstated equivalent of the
+// old monolith GET-page invariant this task's brief calls out: the network
+// page's secret inputs (wifi.psk, darwin.token) must render with
+// placeholder="unchanged" and NEVER a value attribute, even though a real
+// token is stored — regardless of GET (pre-fill) or a POST error re-render.
+func TestConfigNetworkSecretsNeverRoundTrip(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/network", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET: want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, configTestToken) {
+		t.Fatalf("stored Darwin token leaked into network page body: %s", body)
+	}
+	for _, want := range []string{`name="wifi.psk" placeholder="unchanged"`, `name="darwin.token" placeholder="unchanged"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s in network page: %s", want, body)
+		}
+	}
+	for _, secretField := range []string{"wifi.psk", "darwin.token"} {
+		if strings.Contains(body, `name="`+secretField+`" value=`) {
+			t.Fatalf("secret field %s must never render a value attribute: %s", secretField, body)
+		}
+	}
+
+	// Trigger a validation-error re-render too — the same invariant must
+	// hold there, since that path also has a live cfg to render from.
+	form := baseNetworkForm()
+	form.Set("wifi.psk", "short")
+	form.Set("csrf", csrf)
+	recErr := postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if recErr.Code != http.StatusOK {
+		t.Fatalf("POST validation error: want 200, got %d", recErr.Code)
+	}
+	errBody := recErr.Body.String()
+	for _, secretField := range []string{"wifi.psk", "darwin.token"} {
+		if strings.Contains(errBody, `name="`+secretField+`" value=`) {
+			t.Fatalf("secret field %s must never render a value attribute on error re-render: %s", secretField, errBody)
+		}
+	}
+}
+
+// TestConfigUpdates covers GET pre-filling the updates form and a valid POST
+// saving changed update fields, scheduling Actions.Apply — the update
+// Checker snapshots config at construction, so a change needs a restart to
+// take effect.
+func TestConfigUpdates(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/updates", cookie)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="update.channel"`) {
+		t.Fatalf("GET form: code %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	form := baseUpdatesForm()
+	form.Set("update.channel", "prerelease")
+	form.Set("update.autoApply", "on")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/updates", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Update.Channel != "prerelease" || !cur.Update.AutoApply || cur.Update.DisableChecks {
+		t.Fatalf("Update = %+v, want channel=prerelease autoApply=true checks-on (DisableChecks=false)", cur.Update)
+	}
+
+	recGet := getPath(t, srv.Handler(), "/config/updates", cookie)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("GET after save: want 200, got %d", recGet.Code)
+	}
+	body := recGet.Body.String()
+	if !strings.Contains(body, `value="prerelease" selected`) {
+		t.Errorf(`expected prerelease option selected in re-rendered form: %s`, body)
+	}
+	if !strings.Contains(body, `name="update.autoApply" checked`) {
+		t.Errorf("expected update.autoApply checked in re-rendered form: %s", body)
+	}
+}
+
+// TestConfigUpdatesRestarts is task 7's pinned RED test.
+func TestConfigUpdatesRestarts(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := url.Values{"csrf": {csrf}, "update.channel": {"prerelease"}, "update.checks": {"on"}}
+	rec := postForm(t, srv.Handler(), "/config/updates", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("want 303, got %d", rec.Code)
+	}
+	awaitApply(t, applyCh) // checker snapshots config at construction: restart required
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Update.Channel != "prerelease" {
+		t.Fatalf("update.channel = %q, want prerelease", cur.Update.Channel)
+	}
+	if cur.Update.DisableChecks {
+		t.Fatal("update.checks=on must leave DisableChecks false")
+	}
+}
+
+// TestConfigUpdatesValidationError covers an out-of-range channel value
+// (something a browser's <select> would never submit, but a raw form POST
+// can): re-render (200) with the error, file unchanged, Actions.Apply NOT
+// called.
+func TestConfigUpdatesValidationError(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := baseUpdatesForm()
+	form.Set("update.channel", "nightly-canary")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/updates", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "update.channel") {
+		t.Errorf("expected an update.channel validation message: %s", rec.Body.String())
+	}
+
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigAdmin covers GET rendering the admin form and a valid password
+// change: 303, the new password verifies, and — unlike every other section —
+// Actions.Apply is NOT scheduled (VerifyLogin reads the hash from disk on
+// every attempt, so the new password is live immediately without a
+// restart). The old session must still be valid afterwards too.
+func TestConfigAdmin(t *testing.T) {
+	srv, svc, _, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/admin", cookie)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="web.password"`) {
+		t.Fatalf("GET form: code %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	form := url.Values{"csrf": {csrf}, "web.password": {"newpassword1"}, "web.password.confirm": {"newpassword1"}}
+	rec = postForm(t, srv.Handler(), "/config/admin", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case <-applyCh:
+		t.Fatal("admin save must NOT restart the board (VerifyLogin reads from disk)")
+	case <-time.After(2 * applyDelay):
+	}
+
+	if !svc.VerifyLogin("newpassword1") {
+		t.Fatal("new password was not stored")
+	}
+	if svc.VerifyLogin(configTestPassword) {
+		t.Fatal("old password must no longer verify")
+	}
+
+	// The old session (created before the password change) must still be
+	// valid — sessions are independent of the stored password hash.
+	recStillIn := getPath(t, srv.Handler(), "/config", cookie)
+	if recStillIn.Code != http.StatusOK {
+		t.Fatalf("old session should still be valid after an admin password change, got %d", recStillIn.Code)
+	}
+}
+
+// TestConfigAdminNoRestart is task 7's pinned RED test.
+func TestConfigAdminNoRestart(t *testing.T) {
+	srv, _, _, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := url.Values{"csrf": {csrf}, "web.password": {"newpassword1"}, "web.password.confirm": {"newpassword1"}}
+	rec := postForm(t, srv.Handler(), "/config/admin", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("want 303, got %d", rec.Code)
+	}
+	select {
+	case <-applyCh:
+		t.Fatal("admin save must NOT restart the board (VerifyLogin reads from disk)")
+	case <-time.After(2 * applyDelay):
+	}
+}
+
+// TestConfigAdminPasswordMismatch covers mismatched web.password/confirm:
+// re-render (200) with an error, the stored password unchanged.
+func TestConfigAdminPasswordMismatch(t *testing.T) {
+	srv, svc, _, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := url.Values{"csrf": {csrf}, "web.password": {"newpassword1"}, "web.password.confirm": {"different1"}}
+	rec := postForm(t, srv.Handler(), "/config/admin", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "class=\"error\"") {
+		t.Fatalf("expected error markup in body: %s", rec.Body.String())
+	}
+	if !svc.VerifyLogin(configTestPassword) {
+		t.Fatal("stored password must be unchanged on mismatch")
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigAdminShortPassword covers a too-short new password (below
+// SetInitialPassword's 8-character floor): re-render (200) with an error,
+// the stored password unchanged.
+func TestConfigAdminShortPassword(t *testing.T) {
+	srv, svc, _, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := url.Values{"csrf": {csrf}, "web.password": {"short"}, "web.password.confirm": {"short"}}
+	rec := postForm(t, srv.Handler(), "/config/admin", form, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 re-render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "at least 8 characters") {
+		t.Fatalf("expected password-length validation error in body: %s", rec.Body.String())
+	}
+	if !svc.VerifyLogin(configTestPassword) {
+		t.Fatal("stored password must be unchanged on a too-short password")
+	}
+	assertApplyNotCalled(t, applyCh)
+}
+
+// TestConfigAdminSecretsNeverRoundTrip is the reinstated equivalent of the
+// old monolith GET-page invariant for the admin page's password inputs:
+// placeholder="unchanged", never a value attribute.
+func TestConfigAdminSecretsNeverRoundTrip(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config/admin", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET: want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`name="web.password" placeholder="unchanged"`, `name="web.password.confirm" placeholder="unchanged"`, `autocomplete="new-password"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s in admin page: %s", want, body)
+		}
+	}
+	for _, secretField := range []string{"web.password", "web.password.confirm"} {
+		if strings.Contains(body, `name="`+secretField+`" value=`) {
+			t.Fatalf("secret field %s must never render a value attribute: %s", secretField, body)
+		}
+	}
+}
+
+// TestOldMonolithConfigPostGone is task 7's pinned RED test: the HTML
+// monolith form's save route is retired this task.
+func TestOldMonolithConfigPostGone(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	rec := postForm(t, srv.Handler(), "/config", url.Values{"csrf": {csrf}}, cookie)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("POST /config (HTML monolith) should be gone; got 200")
+	}
+}
+
 // (b) unauthenticated GET /config redirects to /login.
 func TestConfigGetUnauthenticatedRedirects(t *testing.T) {
 	srv, _, _, _ := newConfigTestServer(t)
@@ -541,272 +930,12 @@ func TestConfigGetUnauthenticatedRedirects(t *testing.T) {
 	}
 }
 
-// (c) POST /config with a valid change (refreshSeconds 90) renders the
-// applied page, persists the change to the config file, and fires the fake
-// Actions.Apply within ~1s.
-func TestConfigPostValidChangeAppliesAndPersists(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	form := baseConfigForm()
-	form.Set("board.refreshSeconds", "90")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 applied page, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "Saved") && !strings.Contains(rec.Body.String(), "restarting") {
-		t.Fatalf("expected applied-page content, got: %s", rec.Body.String())
-	}
-
-	cur, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("reload config: %v", err)
-	}
-	if cur.Board.RefreshSeconds != 90 {
-		t.Fatalf("board.refreshSeconds = %d, want 90", cur.Board.RefreshSeconds)
-	}
-
-	awaitApply(t, applyCh)
-}
-
-// (c2) POST /config round-trips the Update fieldset, including the inverted
-// update.checks checkbox (checked = DisableChecks false, unchecked =
-// DisableChecks true — see config.UpdateConfig's doc comment) and confirms
-// GET /config pre-fills the select/checkboxes from what was just saved.
-func TestConfigPostRoundTripsUpdateFields(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	// Submit prerelease + autoApply on + checks unchecked (key absent).
-	form := baseConfigForm()
-	form.Set("update.channel", "prerelease")
-	form.Set("update.autoApply", "on")
-	form.Del("update.checks")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 applied page, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	awaitApply(t, applyCh)
-
-	cur, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("reload config: %v", err)
-	}
-	if cur.Update.Channel != "prerelease" {
-		t.Fatalf("update.channel = %q, want prerelease", cur.Update.Channel)
-	}
-	if !cur.Update.AutoApply {
-		t.Fatal("update.autoApply = false, want true")
-	}
-	if !cur.Update.DisableChecks {
-		t.Fatal("update.checks unchecked must set DisableChecks = true")
-	}
-	// The disk-based checks above already confirm the round trip; there is
-	// no GET-based re-render check here any more because GET /config now
-	// serves the settings list (this task), not the old monolith form —
-	// there is no dedicated updates sub-page to pre-fill from until Task 7.
-}
-
-// (d) POST /config with blank secret fields keeps the stored Darwin token
-// unchanged (write-only: blank means keep).
-func TestConfigPostBlankSecretsKeepsStoredToken(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	form := baseConfigForm()
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	awaitApply(t, applyCh)
-
-	cur, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("reload config: %v", err)
-	}
-	if cur.Darwin.Token != configTestToken {
-		t.Fatalf("Darwin.Token = %q, want unchanged %q", cur.Darwin.Token, configTestToken)
-	}
-}
-
-// (e) POST /config with a new darwin.token replaces the stored token.
-func TestConfigPostNewTokenReplaces(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	form := baseConfigForm()
-	form.Set("darwin.token", "brand-new-token")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	awaitApply(t, applyCh)
-
-	cur, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("reload config: %v", err)
-	}
-	if cur.Darwin.Token != "brand-new-token" {
-		t.Fatalf("Darwin.Token = %q, want replaced value", cur.Darwin.Token)
-	}
-}
-
-// (f) POST /config with an invalid value (refreshSeconds 5, below the
-// minimum of 15) re-renders the form (200) with the validation error text
-// visible, the file unchanged, and Actions.Apply NOT called.
-func TestConfigPostInvalidRefreshRerendersWithError(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	before, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	form := baseConfigForm()
-	form.Set("board.refreshSeconds", "5")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "refreshSeconds") {
-		t.Fatalf("expected refreshSeconds validation error in body: %s", rec.Body.String())
-	}
-
-	after, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
-	}
-	assertApplyNotCalled(t, applyCh)
-}
-
-// (g) mismatched web.password/confirm re-renders the form with an error and
-// leaves the file unchanged.
-func TestConfigPostPasswordConfirmMismatch(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	before, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	form := baseConfigForm()
-	form.Set("web.password", "newpassword1")
-	form.Set("web.password.confirm", "different1")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "class=\"error\"") {
-		t.Fatalf("expected error markup in body: %s", rec.Body.String())
-	}
-
-	after, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("config file must be unchanged on password mismatch:\nbefore=%+v\nafter=%+v", before, after)
-	}
-	assertApplyNotCalled(t, applyCh)
-}
-
-// TestConfigPostPartialFailurePreservesOtherFields covers the finding this
-// task resolves: parseConfigForm used to bail out on the FIRST unparsable
-// field, so every field parsed after it silently reverted to its zero value
-// in the re-rendered form. A user who fat-fingers board.services while also
-// legitimately changing board.refreshSeconds and powersaving.start must see
-// both of those changes preserved in the re-render alongside the services
-// error, not wiped back to their old values.
-func TestConfigPostPartialFailurePreservesOtherFields(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	before, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	form := baseConfigForm()
-	form.Set("board.services", "abc")
-	form.Set("board.refreshSeconds", "120")
-	form.Set("powersaving.start", "22:00")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "services") {
-		t.Fatalf("expected board.services validation error in body: %s", body)
-	}
-	if !strings.Contains(body, `value="120"`) {
-		t.Fatalf("expected refreshSeconds=120 preserved in re-rendered form: %s", body)
-	}
-	if !strings.Contains(body, `value="22:00"`) {
-		t.Fatalf("expected powersaving.start=22:00 preserved in re-rendered form: %s", body)
-	}
-
-	after, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("config file must be unchanged on validation error:\nbefore=%+v\nafter=%+v", before, after)
-	}
-	assertApplyNotCalled(t, applyCh)
-}
-
-// TestConfigPostShortPasswordRerendersWithError covers the finding this task
-// resolves: UpdateConfig previously enforced no minimum length on a password
-// change, unlike SetInitialPassword's 8-character floor. A config POST
-// setting web.password to a too-short value must re-render with an error and
-// leave the file (and stored password hash) unchanged.
-func TestConfigPostShortPasswordRerendersWithError(t *testing.T) {
-	srv, _, path, applyCh := newConfigTestServer(t)
-	cookie, csrf := loginAs(t, srv, configTestPassword)
-
-	before, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	form := baseConfigForm()
-	form.Set("web.password", "short")
-	form.Set("web.password.confirm", "short")
-	form.Set("csrf", csrf)
-	rec := postForm(t, srv.Handler(), "/config", form, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 re-render, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "at least 8 characters") {
-		t.Fatalf("expected password-length validation error in body: %s", rec.Body.String())
-	}
-
-	after, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("config file must be unchanged on short password:\nbefore=%+v\nafter=%+v", before, after)
-	}
-	assertApplyNotCalled(t, applyCh)
-}
-
 // The replacements-textarea round trip (POST -> saved -> re-rendered) is
-// covered by TestConfigDeparturesReplacementsRoundTrip now that board.* is a
-// dedicated sub-page (this task) instead of a fieldset on the monolith form
-// GET /config used to serve.
+// covered by TestConfigDeparturesReplacementsRoundTrip; the old monolith's
+// combined-fieldset POST /config tests (valid-change/update-fields/secrets/
+// validation/short-password) are superseded by the per-section
+// TestConfigNetwork*/TestConfigUpdates*/TestConfigAdmin* tests above, now
+// that POST /config itself is gone (TestOldMonolithConfigPostGone).
 
 // --- parsing helper unit tests ---
 

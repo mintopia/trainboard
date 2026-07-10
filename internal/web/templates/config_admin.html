@@ -1,0 +1,19 @@
+{{define "title"}}Admin — Trainboard{{end}}
+{{define "content"}}
+<div class="backrow"><a href="/config">&lsaquo; Configuration</a></div>
+<h3>Admin</h3>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="/config/admin">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label class="f">New admin password
+  <input type="password" name="web.password" placeholder="unchanged" autocomplete="new-password">
+</label>
+<label class="f">Confirm
+  <input type="password" name="web.password.confirm" placeholder="unchanged" autocomplete="new-password">
+</label>
+<div class="savebar">
+  <span class="consequence ok">Applies immediately &mdash; no restart.</span>
+  <button class="btn" type="submit">Save</button>
+</div>
+</form>
+{{end}}

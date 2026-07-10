@@ -108,10 +108,9 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
-	// GET /config is the settings list (this task); the old full-form GET
-	// handler (handleConfigGet) is deleted. Of the monolith only
-	// handleConfigPost — and the renderConfig/config.html error re-render it
-	// uses — remains, behind POST /config below, until Task 7 retires it.
+	// GET /config is the settings list; the old monolith form (GET+POST
+	// /config, handleConfigGet/handleConfigPost) is gone entirely — every
+	// section below is its own sub-page.
 	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigList), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesPost),
@@ -119,11 +118,14 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("GET /config/display", chain(http.HandlerFunc(s.handleConfigDisplayGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /config/display", chain(http.HandlerFunc(s.handleConfigDisplayPost),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
-	// POST /config is the old monolith form's save route — deliberately left
-	// wired (see handlers_config.go): network/updates/admin fields have no
-	// dedicated sub-page yet, so this is still how they get saved from the
-	// HTML surface until Task 7. No template links to it any more.
-	s.mux.Handle("POST /config", chain(http.HandlerFunc(s.handleConfigPost),
+	s.mux.Handle("GET /config/network", chain(http.HandlerFunc(s.handleConfigNetworkGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/network", chain(http.HandlerFunc(s.handleConfigNetworkPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/updates", chain(http.HandlerFunc(s.handleConfigUpdatesGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/updates", chain(http.HandlerFunc(s.handleConfigUpdatesPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/admin", chain(http.HandlerFunc(s.handleConfigAdminGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/admin", chain(http.HandlerFunc(s.handleConfigAdminPost),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
@@ -294,14 +296,18 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = loginTemplate
 	case "index":
 		t = statusTemplate
-	case "config":
-		t = configTemplate
 	case "configList":
 		t = configListTemplate
 	case "configDepartures":
 		t = configDeparturesTemplate
 	case "configDisplay":
 		t = configDisplayTemplate
+	case "configNetwork":
+		t = configNetworkTemplate
+	case "configUpdates":
+		t = configUpdatesTemplate
+	case "configAdmin":
+		t = configAdminTemplate
 	case "applied":
 		t = appliedTemplate
 	case "actions":
@@ -390,11 +396,12 @@ func (s *Server) configuredSSID() string {
 //     until this call, running runConfigErrorLoop's static E04 snapshot with
 //     no poller at all, so something must actually restart the process for
 //     the newly-valid config to take effect and E04 to clear. That is exactly
-//     what handleConfigPost's scheduleApply() does for later config saves, so
-//     setup schedules the same apply-by-restart here and renders a "setup
-//     done, restarting" page instead of redirecting — mirroring
-//     handleConfigPost/handleActionsRestart's render-then-scheduleApply shape
-//     rather than diverging from it. The session cookie is still issued
+//     what a restart-triggering config save's scheduleApply() does (e.g.
+//     handleConfigNetworkPost), so setup schedules the same apply-by-restart
+//     here and renders a "setup done, restarting" page instead of
+//     redirecting — mirroring that handler/handleActionsRestart's
+//     render-then-scheduleApply shape rather than diverging from it. The
+//     session cookie is still issued
 //     (harmless: it is an in-memory session that dies with the process either
 //     way), so a browser that reloads before the restart completes is still
 //     authed, and one that reloads after it lands on /login per setupGate.

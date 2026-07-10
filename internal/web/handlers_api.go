@@ -136,10 +136,10 @@ type configUpdateJSON struct {
 }
 
 // handleAPIConfigPut is PUT /api/config: decode, validate-and-save via
-// Service.UpdateConfig (same as the HTML config form), then respond
-// {"status":"applied"} and schedule Actions.Apply — mirroring
-// handleConfigPost's success path exactly, just without a re-rendered form
-// on failure (a JSON API instead gets a 400 with the validation error).
+// Service.UpdateConfig (same as the HTML config sub-pages), then respond
+// {"status":"applied"} and schedule Actions.Apply — mirroring a restart-
+// triggering config save's success path exactly, just without a re-rendered
+// form on failure (a JSON API instead gets a 400 with the validation error).
 func (s *Server) handleAPIConfigPut(w http.ResponseWriter, r *http.Request) {
 	var body configUpdateJSON
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

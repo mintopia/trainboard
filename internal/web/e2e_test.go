@@ -75,7 +75,7 @@ func TestE2EFullJourney(t *testing.T) {
 
 	// 2. POST /setup (password+origin, blank token keeps the stored one) ->
 	// 200 restart page with a session issued and Actions.Apply scheduled,
-	// exactly like handleConfigPost's apply-by-restart — this Service's Apply
+	// exactly like a config sub-page save's apply-by-restart — this Service's Apply
 	// is a channel send rather than a real os.Exit, so the session created
 	// here stays valid for step 3 instead of the process actually restarting;
 	// /setup then 404s.
@@ -120,17 +120,14 @@ func TestE2EFullJourney(t *testing.T) {
 	}
 	awaitApply(t, applyCh)
 
-	// 4b. POST /config setting Darwin token "tok-e2e" -> applied; Apply
-	// fired. darwin.token has no dedicated sub-page until Task 7, so it's
-	// still saved via the old monolith route (untouched by this task — see
-	// handlers_config.go's doc comments).
-	cfgForm := baseConfigForm()
-	cfgForm.Set("board.refreshSeconds", "90") // keep step 4a's change; parseConfigForm parses every field unconditionally
-	cfgForm.Set("darwin.token", "tok-e2e")
-	cfgForm.Set("csrf", csrf)
-	recCfg := postForm(t, h, "/config", cfgForm, cookie)
-	if recCfg.Code != http.StatusOK {
-		t.Fatalf("step4b POST /config: want 200, got %d body=%s", recCfg.Code, recCfg.Body.String())
+	// 4b. POST /config/network setting Darwin token "tok-e2e" -> 303, Apply
+	// fired. darwin.token now lives on its own sub-page (this task).
+	netForm := baseNetworkForm()
+	netForm.Set("darwin.token", "tok-e2e")
+	netForm.Set("csrf", csrf)
+	recCfg := postForm(t, h, "/config/network", netForm, cookie)
+	if recCfg.Code != http.StatusSeeOther {
+		t.Fatalf("step4b POST /config/network: want 303, got %d body=%s", recCfg.Code, recCfg.Body.String())
 	}
 	awaitApply(t, applyCh)
 
@@ -174,16 +171,16 @@ func TestE2EFullJourney(t *testing.T) {
 		}
 	}
 
-	// 7. CSRF negative: POST /config with a valid session but the wrong csrf
-	// token -> 403, file unchanged.
+	// 7. CSRF negative: POST /config/network with a valid session but the
+	// wrong csrf token -> 403, file unchanged.
 	beforeCSRF, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	badCSRFForm := baseConfigForm()
+	badCSRFForm := baseNetworkForm()
 	badCSRFForm.Set("darwin.token", "tok-e2e") // keep matching current stored value; blank would too, but be explicit
 	badCSRFForm.Set("csrf", "wrong-csrf-token")
-	recBadCSRF := postForm(t, h2, "/config", badCSRFForm, cookie2)
+	recBadCSRF := postForm(t, h2, "/config/network", badCSRFForm, cookie2)
 	if recBadCSRF.Code != http.StatusForbidden {
 		t.Fatalf("step7: want 403 on bad csrf, got %d body=%s", recBadCSRF.Code, recBadCSRF.Body.String())
 	}
@@ -199,9 +196,9 @@ func TestE2EFullJourney(t *testing.T) {
 	// otherwise-valid CSRF token) -> 403. originCheck runs in the outer
 	// middleware chain, ahead of csrfProtect, so this is rejected before the
 	// CSRF token is even inspected.
-	originForm := baseConfigForm()
+	originForm := baseNetworkForm()
 	originForm.Set("csrf", csrf2)
-	req := httptest.NewRequest(http.MethodPost, "/config", strings.NewReader(originForm.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/config/network", strings.NewReader(originForm.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://evil.example")
 	req.AddCookie(cookie2)
@@ -314,7 +311,6 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/                              | GET    | 302 /login   | 200
 //	/events                        | GET    | 302 /login   | 200
 //	/config                        | GET    | 302 /login   | 200
-//	/config                        | POST   | 302 /login   | 200
 //	/config/departures             | GET    | 302 /login   | 200
 //	/config/departures             | POST   | 302 /login   | 303 /config
 //	/config/display                | GET    | 302 /login   | 200
@@ -336,11 +332,14 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/api/actions/wifi-retry        | POST   | 401 JSON     | 200
 //	/logout                        | POST   | 302 /login   | 302 /login (destroys session; kept LAST)
 //
-// Task 13's five new routes (/actions/update/{check,apply,dismiss},
-// /api/actions/update/{check,apply}) are NOT rows in this table — see
-// TestRouteSecurityInvariantMatrixUpdateRoutes below, which checks them
-// against its own Server so their extra requests don't blow this table's
-// shared actionLimit budget (see that test's doc comment for why).
+// The HTML monolith's POST /config is GONE (task 7 — see
+// TestOldMonolithConfigPostGone in handlers_config_test.go), so there is no
+// row for it any more. Its replacement per-section routes
+// (/config/{network,updates,admin}) are NOT rows in this table either — see
+// TestRouteSecurityInvariantMatrixConfigSectionRoutes below, alongside
+// task 13's five update routes, which check them against their own Servers
+// so their extra requests don't blow this table's shared actionLimit budget
+// (see that test's doc comment for why).
 func TestRouteSecurityInvariantMatrix(t *testing.T) {
 	srv, _, _, applyCh := newConfigTestServer(t)
 	h := srv.Handler()
@@ -361,7 +360,6 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "GET /", method: http.MethodGet, path: "/", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /events", method: http.MethodGet, path: "/events", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /config", method: http.MethodGet, path: "/config", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "POST /config", method: http.MethodPost, path: "/config", body: htmlForm(baseConfigForm()), wantAuthedStatus: http.StatusOK, appliesAsync: true},
 		{name: "GET /config/departures", method: http.MethodGet, path: "/config/departures", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /config/departures", method: http.MethodPost, path: "/config/departures", body: htmlForm(baseDeparturesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
 		{name: "GET /config/display", method: http.MethodGet, path: "/config/display", body: noBody, wantAuthedStatus: http.StatusOK},
@@ -487,6 +485,42 @@ func TestRouteSecurityInvariantMatrixUpdateRoutes(t *testing.T) {
 	}
 }
 
+// TestRouteSecurityInvariantMatrixConfigSectionRoutes covers task 7's three
+// new config sub-page routes (/config/{network,updates,admin}) with the same
+// two-arm check as TestRouteSecurityInvariantMatrix, against its own fresh
+// Server for the same reason as TestRouteSecurityInvariantMatrixUpdateRoutes:
+// the main table's shared session is already close to its actionLimit
+// budget. Network and Updates schedule Actions.Apply on a successful save
+// (appliesAsync); Admin deliberately does not — see handleConfigAdminPost's
+// doc comment.
+//
+//	Route                          | method | no session   | valid session
+//	-------------------------------|--------|--------------|----------------
+//	/config/network                | GET    | 302 /login   | 200
+//	/config/network                | POST   | 302 /login   | 303 /config
+//	/config/updates                | GET    | 302 /login   | 200
+//	/config/updates                | POST   | 302 /login   | 303 /config
+//	/config/admin                  | GET    | 302 /login   | 200
+//	/config/admin                  | POST   | 302 /login   | 303 /config (no restart)
+func TestRouteSecurityInvariantMatrixConfigSectionRoutes(t *testing.T) {
+	srv, _, _, applyCh := newConfigTestServer(t)
+	h := srv.Handler()
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	configSectionRouteMatrix := []routeCase{
+		{name: "GET /config/network", method: http.MethodGet, path: "/config/network", body: noBody, wantAuthedStatus: http.StatusOK},
+		{name: "POST /config/network", method: http.MethodPost, path: "/config/network", body: htmlForm(baseNetworkForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "GET /config/updates", method: http.MethodGet, path: "/config/updates", body: noBody, wantAuthedStatus: http.StatusOK},
+		{name: "POST /config/updates", method: http.MethodPost, path: "/config/updates", body: htmlForm(baseUpdatesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "GET /config/admin", method: http.MethodGet, path: "/config/admin", body: noBody, wantAuthedStatus: http.StatusOK},
+		{name: "POST /config/admin", method: http.MethodPost, path: "/config/admin", body: htmlForm(url.Values{"web.password": {"routematrixpw1"}, "web.password.confirm": {"routematrixpw1"}}), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config"},
+	}
+
+	for _, tc := range configSectionRouteMatrix {
+		runRouteCase(t, h, tc, cookie, csrf, applyCh)
+	}
+}
+
 // --- Test 3: the partial-setup (AP-mode) finish-provisioning journey -------
 
 // TestE2EPartialSetupLoginAndFinishConfig is the end-to-end guard for Gap 1:
@@ -528,22 +562,36 @@ func TestE2EPartialSetupLoginAndFinishConfig(t *testing.T) {
 	// 2. Login with the portal-set password works.
 	cookie, csrf := loginAs(t, srv, e2ePassword)
 
-	// 3. GET /config renders the finish-provisioning page.
+	// 3. GET /config renders the settings list.
 	if rec := getPath(t, h, "/config", cookie); rec.Code != http.StatusOK {
 		t.Fatalf("partial-setup: GET /config want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// 4. Finish provisioning: supply the missing origin + token (WiFi SSID
-	// arrives pre-filled in the real form, so submit it back as-is), which
-	// promotes the document to fully board-valid and saves it.
-	form := baseConfigForm()
+	// 3b. GET /config/network shows the "Station" field, since this device
+	// has no Board.Origin yet — see handleConfigNetworkPost's doc comment
+	// for why this page (rather than Departures) is where first-boot
+	// AP-mode provisioning finishes.
+	recNetGet := getPath(t, h, "/config/network", cookie)
+	if recNetGet.Code != http.StatusOK || !strings.Contains(recNetGet.Body.String(), `name="board.origin"`) {
+		t.Fatalf("partial-setup: GET /config/network want 200 with a board.origin field, got %d body=%s", recNetGet.Code, recNetGet.Body.String())
+	}
+
+	// 4. Finish provisioning: a single POST /config/network supplies the
+	// missing origin + token together (WiFi SSID arrives pre-filled in the
+	// real form, so submit it back as-is), which promotes the document to
+	// fully board-valid and saves it. Origin and token must land together in
+	// one save: UpdateConfig's full Validate rejects a document with only
+	// one of the two, so submitting them across two independent section
+	// saves (Departures then Network, or vice versa) would fail on
+	// whichever save runs first.
+	form := baseNetworkForm()
 	form.Set("board.origin", "PAD")
 	form.Set("darwin.token", "tok-finish")
 	form.Set("wifi.ssid", "HomeNet") // mirrors the pre-filled, non-secret SSID input
 	form.Set("csrf", csrf)
-	recCfg := postForm(t, h, "/config", form, cookie)
-	if recCfg.Code != http.StatusOK {
-		t.Fatalf("partial-setup: POST /config want 200, got %d body=%s", recCfg.Code, recCfg.Body.String())
+	recCfg := postForm(t, h, "/config/network", form, cookie)
+	if recCfg.Code != http.StatusSeeOther {
+		t.Fatalf("partial-setup: POST /config/network want 303, got %d body=%s", recCfg.Code, recCfg.Body.String())
 	}
 	awaitApply(t, applyCh)
 
