@@ -284,8 +284,11 @@ func TestServerLoginFlow(t *testing.T) {
 	if recBad.Code != http.StatusOK {
 		t.Fatalf("want 200 re-render on bad password, got %d", recBad.Code)
 	}
-	if !strings.Contains(recBad.Body.String(), "incorrect") {
-		t.Fatalf("expected generic 'incorrect' message, got: %s", recBad.Body.String())
+	if !strings.Contains(recBad.Body.String(), "That password didn&#39;t match") {
+		t.Fatalf("expected new error copy, got: %s", recBad.Body.String())
+	}
+	if !strings.Contains(recBad.Body.String(), `class="error"`) {
+		t.Fatalf("expected error markup in body: %s", recBad.Body.String())
 	}
 }
 

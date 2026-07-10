@@ -571,7 +571,7 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	pw := r.PostFormValue("password")
 	if !s.svc.VerifyLogin(pw) {
-		s.render(w, "login", loginPageData{Error: "incorrect password"})
+		s.render(w, "login", loginPageData{Error: "That password didn't match — try again."})
 		return
 	}
 
