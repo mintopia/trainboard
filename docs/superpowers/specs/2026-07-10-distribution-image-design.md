@@ -82,16 +82,19 @@ than forcing it.
 
 ## 3. R2 publishing
 
-- Bucket `trainboard-images`, S3-compatible API (rclone or aws-cli in CI).
-- Secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
-  **Attended step for Jess:** create the bucket + API token, add the three
-  repo secrets, choose public access (managed `pub-….r2.dev` URL or a
-  custom domain) — README/deploy.md get whichever URL results.
-- Keys: `trainboard-vX.Y.Z.img.xz` + `.sha256`, and a
-  `trainboard-latest.img.xz` (+`.sha256`) alias updated by server-side
-  copy after a successful versioned upload.
-- Retention: CI prunes to the newest 5 versioned images (R2 free tier is
-  10GB; images are ~300-500MB).
+- Existing bucket **`mintopia-github`**, public at
+  **https://github-files.mintopia.net** — all trainboard artifacts under
+  the **`trainboard/`** prefix. CI must scope every operation (upload,
+  copy, prune) to that prefix; the bucket is shared with other projects.
+- S3-compatible API (rclone or aws-cli in CI). Secrets: `R2_ACCOUNT_ID`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`. **Attended step for Jess:**
+  create an API token scoped to the bucket, add the three repo secrets.
+- Keys: `trainboard/trainboard-vX.Y.Z.img.xz` + `.sha256`, and a
+  `trainboard/trainboard-latest.img.xz` (+`.sha256`) alias updated by
+  server-side copy after a successful versioned upload. README quick-start
+  URL: `https://github-files.mintopia.net/trainboard/trainboard-latest.img.xz`.
+- Retention: CI prunes to the newest 5 versioned images under the
+  `trainboard/` prefix only (images are ~300-500MB).
 
 ## 4. Testing & gates
 
