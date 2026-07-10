@@ -49,11 +49,13 @@ func TestActionsGetUnauthenticatedRedirects(t *testing.T) {
 	}
 }
 
-// (b) authed GET /actions shows both forms: restart and reboot (with its
-// confirm() guard). The update-firmware button that used to sit here as a
-// disabled placeholder is gone (task 13): the real update controls now live
-// on the status page's Software section (see handlers_update_test.go).
-func TestActionsGetShowsThreeForms(t *testing.T) {
+// (b) authed GET /actions shows the consequence-first action rows: restart,
+// reboot (behind a no-JS <details> inline confirm, not a confirm() guard),
+// and the soak start form (also behind <details>). The update-firmware
+// button that used to sit here as a disabled placeholder is gone (task 13):
+// the real update controls now live on the status page's Software section
+// (see handlers_update_test.go).
+func TestActionsGetShowsActionRows(t *testing.T) {
 	srv, _, _, _ := newActionsTestServer(t)
 	cookie, _ := loginAs(t, srv, actionsTestPassword)
 
@@ -68,8 +70,14 @@ func TestActionsGetShowsThreeForms(t *testing.T) {
 	if !strings.Contains(body, `action="/actions/reboot"`) {
 		t.Fatalf("expected reboot form action in body: %s", body)
 	}
-	if !strings.Contains(body, `onsubmit="return confirm('Reboot the device?')"`) {
-		t.Fatalf("expected reboot confirm() guard in body: %s", body)
+	if !strings.Contains(body, `action="/actions/soak"`) {
+		t.Fatalf("expected soak start form action in body: %s", body)
+	}
+	if !strings.Contains(body, `<details class="act-confirm">`) {
+		t.Fatalf("expected the no-JS <details> inline-confirm pattern in body: %s", body)
+	}
+	if strings.Contains(body, "confirm(") {
+		t.Fatalf("no confirm() guard should remain anywhere on the page: %s", body)
 	}
 	if strings.Contains(body, "coming in a later release") {
 		t.Fatalf("update-firmware placeholder should be gone (controls moved to status page): %s", body)
@@ -77,16 +85,36 @@ func TestActionsGetShowsThreeForms(t *testing.T) {
 }
 
 // (c) authed POST /actions/restart with the session's CSRF token fires
-// Actions.Apply and renders the applied-style page.
+// Actions.Apply and 303s to /restarting, the shared wait interstitial.
 func TestActionsRestartAuthedFiresApply(t *testing.T) {
 	srv, applyCh, _, _ := newActionsTestServer(t)
 	cookie, csrf := loginAs(t, srv, actionsTestPassword)
 
 	rec := postForm(t, srv.Handler(), "/actions/restart", url.Values{"csrf": {csrf}}, cookie)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/restarting" {
+		t.Fatalf("want 303 /restarting, got %d %q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+}
+
+// (c2) GET /restarting renders 200 with NO session at all — it is the wait
+// interstitial a just-restarted, session-lost browser lands on, so it must
+// never require auth. It also carries reconnect.js's contract: a
+// data-reconnect-delay body attribute and a script tag pulling the file in.
+func TestRestartingRendersWithoutSession(t *testing.T) {
+	srv, _, _, _ := newActionsTestServer(t)
+
+	rec := getPath(t, srv.Handler(), "/restarting")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	awaitApply(t, applyCh)
+	body := rec.Body.String()
+	if !strings.Contains(body, `data-reconnect-delay="5000"`) {
+		t.Fatalf("expected reconnect.js's data-reconnect-delay attribute in body: %s", body)
+	}
+	if !strings.Contains(body, `/static/reconnect.js`) {
+		t.Fatalf("expected reconnect.js script tag in body: %s", body)
+	}
 }
 
 // (d) unauthenticated POST /actions/restart redirects to /login.
@@ -305,7 +333,7 @@ func TestActionsPageShowsRetryFormOnlyWhenHotspotActive(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "/actions/wifi-retry") {
 		t.Fatalf("expected retry form while hotspot active: %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "hotspot will drop") {
+	if !strings.Contains(rec.Body.String(), "drops this hotspot") {
 		t.Fatalf("expected hotspot-drop copy in body: %s", rec.Body.String())
 	}
 }

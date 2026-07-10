@@ -74,15 +74,15 @@ func TestE2EFullJourney(t *testing.T) {
 	}
 
 	// 2. POST /setup (password+origin, blank token keeps the stored one) ->
-	// 200 restart page with a session issued and Actions.Apply scheduled,
-	// exactly like a config sub-page save's apply-by-restart — this Service's Apply
-	// is a channel send rather than a real os.Exit, so the session created
-	// here stays valid for step 3 instead of the process actually restarting;
-	// /setup then 404s.
+	// 303 /restarting (the shared wait interstitial) with a session issued
+	// and Actions.Apply scheduled, exactly like a config sub-page save's
+	// apply-by-restart — this Service's Apply is a channel send rather than a
+	// real os.Exit, so the session created here stays valid for step 3
+	// instead of the process actually restarting; /setup then 404s.
 	setupForm := url.Values{"password": {e2ePassword}, "confirm": {e2ePassword}, "origin": {"PAD"}, "token": {""}}
 	recSetup := postForm(t, h, "/setup", setupForm)
-	if recSetup.Code != http.StatusOK {
-		t.Fatalf("step2 POST /setup: want 200 restart page, got %d body=%s", recSetup.Code, recSetup.Body.String())
+	if recSetup.Code != http.StatusSeeOther || recSetup.Header().Get("Location") != "/restarting" {
+		t.Fatalf("step2 POST /setup: want 303 /restarting, got %d %q body=%s", recSetup.Code, recSetup.Header().Get("Location"), recSetup.Body.String())
 	}
 	awaitApply(t, applyCh)
 	cookies := recSetup.Result().Cookies()
@@ -288,17 +288,21 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 }
 
 // TestRouteSecurityInvariantMatrix is the tripwire test: it enumerates EVERY
-// route NewServer registers except /setup, /login, /static/*, and the three
-// captive-portal probe endpoints (/generate_204, /hotspot-detect.html,
-// /ncsi.txt) — all six are governed by the setup-gate/no-auth exception in
-// spec invariant 1, not by session auth. /setup, /login, /static/* have
-// their own coverage in TestServerSetupGateRedirectsWhenNoPassword and
-// TestServerStaticServesWithoutAuth; the three probes are deliberately
-// pre-auth AND pre-CSRF by design — a just-associated phone has no session
-// and never will until a human deliberately visits /setup — and are pinned
-// instead by TestPortalProbeMatrix (handlers_portal_test.go), whose two arms
-// (AP mode / not AP mode) play the role this table's (no session / valid
-// session) arms play here. Each route is
+// route NewServer registers except /setup, /login, /static/*, GET /restarting,
+// and the three captive-portal probe endpoints (/generate_204,
+// /hotspot-detect.html, /ncsi.txt) — all seven are governed by the
+// setup-gate/no-auth exception in spec invariant 1, not by session auth.
+// /setup, /login, /static/* have their own coverage in
+// TestServerSetupGateRedirectsWhenNoPassword and
+// TestServerStaticServesWithoutAuth; GET /restarting is deliberately public
+// (a restart-triggering save's browser may have lost its session by the time
+// it lands there) and is pinned by TestRestartingRendersWithoutSession
+// (handlers_actions_test.go); the three probes are deliberately pre-auth AND
+// pre-CSRF by design — a just-associated phone has no session and never will
+// until a human deliberately visits /setup — and are pinned instead by
+// TestPortalProbeMatrix (handlers_portal_test.go), whose two arms (AP mode /
+// not AP mode) play the role this table's (no session / valid session) arms
+// play here. Each route is
 // checked twice: with no session (must be blocked — 302 for HTML, 401 JSON
 // for /api/*) and with a valid session (must succeed with its normal,
 // documented response).
@@ -312,11 +316,11 @@ func apiBody(payload []byte) func(csrf string) (io.Reader, string, string) {
 //	/events                        | GET    | 302 /login   | 200
 //	/config                        | GET    | 302 /login   | 200
 //	/config/departures             | GET    | 302 /login   | 200
-//	/config/departures             | POST   | 302 /login   | 303 /config
+//	/config/departures             | POST   | 302 /login   | 303 /restarting
 //	/config/display                | GET    | 302 /login   | 200
-//	/config/display                | POST   | 302 /login   | 303 /config
+//	/config/display                | POST   | 302 /login   | 303 /restarting
 //	/actions                       | GET    | 302 /login   | 200
-//	/actions/restart               | POST   | 302 /login   | 200
+//	/actions/restart               | POST   | 302 /login   | 303 /restarting
 //	/actions/reboot                | POST   | 302 /login   | 200
 //	/actions/soak                  | POST   | 302 /login   | 302 /actions
 //	/actions/soak/cancel           | POST   | 302 /login   | 302 /actions
@@ -361,11 +365,11 @@ func TestRouteSecurityInvariantMatrix(t *testing.T) {
 		{name: "GET /events", method: http.MethodGet, path: "/events", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /config", method: http.MethodGet, path: "/config", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "GET /config/departures", method: http.MethodGet, path: "/config/departures", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "POST /config/departures", method: http.MethodPost, path: "/config/departures", body: htmlForm(baseDeparturesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "POST /config/departures", method: http.MethodPost, path: "/config/departures", body: htmlForm(baseDeparturesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/restarting", appliesAsync: true},
 		{name: "GET /config/display", method: http.MethodGet, path: "/config/display", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "POST /config/display", method: http.MethodPost, path: "/config/display", body: htmlForm(baseDisplayForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "POST /config/display", method: http.MethodPost, path: "/config/display", body: htmlForm(baseDisplayForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/restarting", appliesAsync: true},
 		{name: "GET /actions", method: http.MethodGet, path: "/actions", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "POST /actions/restart", method: http.MethodPost, path: "/actions/restart", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK, appliesAsync: true},
+		{name: "POST /actions/restart", method: http.MethodPost, path: "/actions/restart", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/restarting", appliesAsync: true},
 		{name: "POST /actions/reboot", method: http.MethodPost, path: "/actions/reboot", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusOK},
 		{name: "POST /actions/soak", method: http.MethodPost, path: "/actions/soak", body: htmlForm(url.Values{"duration": {"1h"}}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
 		{name: "POST /actions/soak/cancel", method: http.MethodPost, path: "/actions/soak/cancel", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/actions"},
@@ -497,9 +501,9 @@ func TestRouteSecurityInvariantMatrixUpdateRoutes(t *testing.T) {
 //	Route                          | method | no session   | valid session
 //	-------------------------------|--------|--------------|----------------
 //	/config/network                | GET    | 302 /login   | 200
-//	/config/network                | POST   | 302 /login   | 303 /config
+//	/config/network                | POST   | 302 /login   | 303 /restarting
 //	/config/updates                | GET    | 302 /login   | 200
-//	/config/updates                | POST   | 302 /login   | 303 /config
+//	/config/updates                | POST   | 302 /login   | 303 /restarting
 //	/config/admin                  | GET    | 302 /login   | 200
 //	/config/admin                  | POST   | 302 /login   | 303 /config (no restart)
 func TestRouteSecurityInvariantMatrixConfigSectionRoutes(t *testing.T) {
@@ -509,9 +513,9 @@ func TestRouteSecurityInvariantMatrixConfigSectionRoutes(t *testing.T) {
 
 	configSectionRouteMatrix := []routeCase{
 		{name: "GET /config/network", method: http.MethodGet, path: "/config/network", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "POST /config/network", method: http.MethodPost, path: "/config/network", body: htmlForm(baseNetworkForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "POST /config/network", method: http.MethodPost, path: "/config/network", body: htmlForm(baseNetworkForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/restarting", appliesAsync: true},
 		{name: "GET /config/updates", method: http.MethodGet, path: "/config/updates", body: noBody, wantAuthedStatus: http.StatusOK},
-		{name: "POST /config/updates", method: http.MethodPost, path: "/config/updates", body: htmlForm(baseUpdatesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config", appliesAsync: true},
+		{name: "POST /config/updates", method: http.MethodPost, path: "/config/updates", body: htmlForm(baseUpdatesForm()), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/restarting", appliesAsync: true},
 		{name: "GET /config/admin", method: http.MethodGet, path: "/config/admin", body: noBody, wantAuthedStatus: http.StatusOK},
 		{name: "POST /config/admin", method: http.MethodPost, path: "/config/admin", body: htmlForm(url.Values{"web.password": {"routematrixpw1"}, "web.password.confirm": {"routematrixpw1"}}), wantAuthedStatus: http.StatusSeeOther, wantAuthedLoc: "/config"},
 	}

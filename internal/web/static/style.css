@@ -162,6 +162,8 @@ label.check input { width: 1.35rem; height: 1.35rem; accent-color: var(--navy); 
 .act .body .t { font-family: var(--ra); font-size: .92rem; }
 .act .body .d { font-size: .76rem; color: var(--muted); margin-top: .1rem; }
 .act .btn { flex-shrink: 0; }
+details.act-confirm > summary { list-style: none; }
+details.act-confirm > summary::-webkit-details-marker { display: none; }
 
 /* Events */
 table.events { width: 100%; border-collapse: collapse; font-size: .8rem; }

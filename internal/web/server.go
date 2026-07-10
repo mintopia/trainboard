@@ -135,6 +135,15 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.HandleFunc("GET /hotspot-detect.html", s.handleHotspotDetect)
 	s.mux.HandleFunc("GET /ncsi.txt", s.handleNCSI)
 
+	// GET /restarting is a public wait interstitial (handlers_actions.go):
+	// every restart-triggering save (config sub-page saves, first-boot setup,
+	// the actions page's restart button, a firmware update apply) 303s here
+	// instead of rendering its own page, so a session-lost or not-yet-relogged
+	// browser can still see it — deliberately outside the requireAuth chain,
+	// like GET /api/station, and exempted from setupGate below for the same
+	// reason.
+	s.mux.Handle("GET /restarting", http.HandlerFunc(s.handleRestarting))
+
 	s.mux.Handle("GET /actions", chain(http.HandlerFunc(s.handleActionsGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /actions/restart", chain(http.HandlerFunc(s.handleActionsRestart),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
@@ -191,14 +200,21 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	return s
 }
 
-// setupGate redirects every request but /setup, /static/, /api/station, and
-// the captive-portal probe endpoints to /setup while no admin password is
-// stored; once one exists, /setup itself 404s. The probe endpoints are
-// exempted like /static/ so they always reach their own AP-mode-aware
-// handlers instead of setupGate's generic redirect, which cannot answer the
-// OS-specific bodies those probes expect (see handlers_portal.go). /api/station
-// is exempted because the pre-auth setup pages use it (CRS→name lookup as the
-// user types) and it carries no secrets — see handleAPIStation.
+// setupGate redirects every request but /setup, /static/, /api/station,
+// /restarting, and the captive-portal probe endpoints to /setup while no
+// admin password is stored; once one exists, /setup itself 404s. The probe
+// endpoints are exempted like /static/ so they always reach their own
+// AP-mode-aware handlers instead of setupGate's generic redirect, which
+// cannot answer the OS-specific bodies those probes expect (see
+// handlers_portal.go). /api/station is exempted because the pre-auth setup
+// pages use it (CRS→name lookup as the user types) and it carries no secrets
+// — see handleAPIStation. /restarting is exempted because first-boot setup
+// (handleSetupPost) itself now redirects there: the moment that redirect is
+// issued, SetInitialPassword has just written the password hash, so
+// s.needsSetup() should already read false on this same process — but the
+// exemption is added anyway as a defensive belt-and-braces, so a
+// session-lost or slow-reloading browser can never get bounced to /setup
+// while waiting for the restart it just triggered.
 //
 // While a password is still needed, the redirect target is normally the
 // relative "/setup" — but in AP mode (svc.Hotspot() != nil) a
@@ -209,7 +225,7 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 // displays.
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/api/station" || isPortalProbePath(r.URL.Path) {
+		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/api/station" || r.URL.Path == "/restarting" || isPortalProbePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -286,8 +302,6 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	switch page {
 	case "setup":
 		t = setupTemplate
-	case "setupDone":
-		t = setupDoneTemplate
 	case "setupWifiDone":
 		t = setupWifiDoneTemplate
 	case "setupWifiStatus":
@@ -308,8 +322,8 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 		t = configUpdatesTemplate
 	case "configAdmin":
 		t = configAdminTemplate
-	case "applied":
-		t = appliedTemplate
+	case "restarting":
+		t = restartingTemplate
 	case "actions":
 		t = actionsTemplate
 	case "rebooting":
@@ -398,13 +412,13 @@ func (s *Server) configuredSSID() string {
 //     the newly-valid config to take effect and E04 to clear. That is exactly
 //     what a restart-triggering config save's scheduleApply() does (e.g.
 //     handleConfigNetworkPost), so setup schedules the same apply-by-restart
-//     here and renders a "setup done, restarting" page instead of
-//     redirecting — mirroring that handler/handleActionsRestart's
-//     render-then-scheduleApply shape rather than diverging from it. The
-//     session cookie is still issued
-//     (harmless: it is an in-memory session that dies with the process either
-//     way), so a browser that reloads before the restart completes is still
-//     authed, and one that reloads after it lands on /login per setupGate.
+//     here and 303s to /restarting instead of redirecting to "/" — the same
+//     shape every other restart-triggering save uses (handleActionsRestart,
+//     handleUpdateApply, the config sub-page posts). The session cookie is
+//     still issued (harmless: it is an in-memory session that dies with the
+//     process either way), so a browser that reloads before the restart
+//     completes is still authed, and one that reloads after it lands on
+//     /login per setupGate.
 //
 //   - AP mode: admin password + WiFi SSID/PSK only (see
 //     handleSetupPostAPMode) — no origin/token collected here, and
@@ -437,8 +451,8 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 
 	tok, _ := s.sessions.Create()
 	setSessionCookie(w, tok)
-	s.render(w, "setupDone", basePage{LoggedIn: false, CSRF: csrfFrom(r)})
 	s.scheduleApply()
+	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
 }
 
 // handleSetupPostAPMode handles the AP-mode partial setup: admin password +

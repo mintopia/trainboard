@@ -27,7 +27,6 @@ func parseTemplates() *template.Template {
 var (
 	baseTemplate             = parseTemplates()
 	setupTemplate            = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
-	setupDoneTemplate        = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_done.html"))
 	setupWifiDoneTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_done.html"))
 	setupWifiStatusTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_status.html"))
 	loginTemplate            = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
@@ -38,7 +37,7 @@ var (
 	configNetworkTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_network.html"))
 	configUpdatesTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_updates.html"))
 	configAdminTemplate      = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_admin.html"))
-	appliedTemplate          = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/applied.html"))
+	restartingTemplate       = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/restarting.html"))
 	actionsTemplate          = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/actions.html"))
 	rebootingTemplate        = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/rebooting.html"))
 )

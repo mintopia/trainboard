@@ -135,6 +135,18 @@ func TestServerSetupGateRedirectsWhenNoPassword(t *testing.T) {
 	}
 }
 
+// (a2) GET /restarting is exempt from the setup gate too, alongside
+// /static/ and /api/station — it must render even on a genuinely
+// unprovisioned device (no password stored yet), not bounce to /setup.
+func TestServerRestartingExemptFromSetupGate(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := srv.Handler()
+	rec := getPath(t, h, "/restarting")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d %q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+}
+
 // (b) POST /setup with password+confirm+origin creates the password (usable
 // via VerifyLogin), issues a session cookie, schedules Actions.Apply (the
 // same apply-by-restart a config sub-page save uses — this is what actually clears
@@ -147,11 +159,8 @@ func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 
 	form := url.Values{"password": {"longenough1"}, "confirm": {"longenough1"}, "origin": {"pad"}}
 	rec := postForm(t, h, "/setup", form)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 restart page, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "restarting") {
-		t.Fatalf("expected restart copy in body: %s", rec.Body.String())
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/restarting" {
+		t.Fatalf("want 303 /restarting, got %d %q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 	}
 	if len(rec.Result().Cookies()) != 1 {
 		t.Fatalf("expected exactly one Set-Cookie, got %d", len(rec.Result().Cookies()))

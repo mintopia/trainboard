@@ -260,8 +260,7 @@ func (s *Server) handleConfigDeparturesPost(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.scheduleApply()
-	// TODO(task-8): redirect to /restarting once that page exists.
-	http.Redirect(w, r, "/config", http.StatusSeeOther)
+	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
 }
 
 // configDisplayPageData is GET/POST /config/display's render data.
@@ -324,8 +323,7 @@ func (s *Server) handleConfigDisplayPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.scheduleApply()
-	// TODO(task-8): redirect to /restarting once that page exists.
-	http.Redirect(w, r, "/config", http.StatusSeeOther)
+	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
 }
 
 // --- Network, Updates, Admin sub-pages --------------------------------------
@@ -450,8 +448,7 @@ func (s *Server) handleConfigNetworkPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.scheduleApply()
-	// TODO(task-8): redirect to /restarting once that page exists.
-	http.Redirect(w, r, "/config", http.StatusSeeOther)
+	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
 }
 
 // configUpdatesPageData is GET/POST /config/updates's render data.
@@ -510,8 +507,7 @@ func (s *Server) handleConfigUpdatesPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.scheduleApply()
-	// TODO(task-8): redirect to /restarting once that page exists.
-	http.Redirect(w, r, "/config", http.StatusSeeOther)
+	http.Redirect(w, r, "/restarting", http.StatusSeeOther)
 }
 
 // configAdminPageData is GET/POST /config/admin's render data. It carries no
