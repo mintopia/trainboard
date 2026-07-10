@@ -6,6 +6,14 @@ hardware bench session follows end to end.
 
 ## 1. Flash the SD card
 
+> **Fast path:** a prebaked image with trainboard preinstalled is published
+> for each release — download
+> https://github-files.mintopia.net/trainboard/trainboard-latest.img.xz,
+> flash it with Raspberry Pi Imager/balenaEtcher, and skip straight to
+> first boot: the board comes up in hotspot setup mode (§9) with
+> self-update ready. The rest of §1 is the manual path this image bakes
+> for you.
+
 Requires macOS, a DietPi Bookworm ARMv8 image for the Pi 2/3/4 family
 (`DietPi_RPi234-ARMv8-Bookworm.img.xz`), and a spare SD card in a USB reader.
 
