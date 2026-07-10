@@ -212,7 +212,11 @@
     clockHM.style.lineHeight = "14px";
     clockSS = el("span", "t"); clockSS.style.font = FONT_CLOCK_SEC;
     clockSS.style.left = (margin + w1) + "px";
-    clockSS.style.top = (CLOCK_Y + 5) + "px"; // clockSecondsDrop=5
+    clockSS.style.lineHeight = "10px";
+    // clockSecondsDrop=5 (element_clock.go), minus the half-leading skew
+    // between the two spans' line boxes — tuned against the panel golden
+    // el_clock_at_50.png, not derived: webfont metrics are not the bitmap's.
+    clockSS.style.top = (CLOCK_Y + 3.4) + "px";
     parent.appendChild(clockHM); parent.appendChild(clockSS);
     tickClock();
   }
