@@ -220,6 +220,14 @@ p.error { color: var(--red-text); background: #fbe9e5; border-radius: 4px; paddi
 .cols { display: block; }
 .cfgnav { display: none; }
 @media (min-width: 64rem) {
+  /* Logged-out pages (login, setup, wait pages): the sign spans the full
+     window — a station fascia, not a floating card — while the content
+     keeps the centered phone column. The brand lines up with that column
+     (50vw - 21rem finds the column's left edge, +1rem matches main's
+     inner padding). */
+  body:not(.shell) { max-width: none; }
+  body:not(.shell) main { max-width: 42rem; margin: 0 auto; }
+  body:not(.shell) .totem { padding-left: max(1rem, calc(50vw - 20rem)); }
   body.shell { max-width: none; padding: 0 0 2.5rem; }
   body.shell header {
     position: fixed; top: 0; left: 0; bottom: 0; width: 15rem;
