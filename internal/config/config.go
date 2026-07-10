@@ -9,6 +9,7 @@ const CurrentVersion = 1
 type Config struct {
 	Version     int               `json:"version"`
 	Darwin      DarwinConfig      `json:"darwin"`
+	RTT         RTTConfig         `json:"rtt"`
 	Board       BoardConfig       `json:"board"`
 	Layout      LayoutConfig      `json:"layout"`
 	Powersaving PowersavingConfig `json:"powersaving"`
@@ -20,6 +21,14 @@ type Config struct {
 // DarwinConfig holds the Darwin Lite access token (secret).
 type DarwinConfig struct {
 	Token string `json:"token"`
+}
+
+// RTTConfig holds RealTime Trains API credentials (password is secret).
+// Both empty (the default) disables headcode enrichment; a missing "rtt"
+// key in configs predating this section unmarshals to exactly that.
+type RTTConfig struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // BoardConfig holds departure-board content settings.
@@ -41,6 +50,10 @@ type BoardConfig struct {
 // LayoutConfig holds display layout toggles.
 type LayoutConfig struct {
 	Times bool `json:"times"` // show calling-point times
+	// Headcodes shows the train headcode column (reference layout parity).
+	// Off by default — the zero value keeps configs predating this field
+	// unchanged, and the column needs RTT credentials to have data anyway.
+	Headcodes bool `json:"headcodes"`
 }
 
 // PowersavingConfig dims the panel during a (possibly cross-midnight) window.

@@ -4,11 +4,14 @@ import "fmt"
 
 const redacted = "***REDACTED***"
 
-// Redacted returns a copy of c with the Darwin token, wifi PSK, and web
-// password hash masked (empty stays empty).
+// Redacted returns a copy of c with the Darwin token, RTT password, wifi
+// PSK, and web password hash masked (empty stays empty).
 func (c Config) Redacted() Config {
 	if c.Darwin.Token != "" {
 		c.Darwin.Token = redacted
+	}
+	if c.RTT.Password != "" {
+		c.RTT.Password = redacted
 	}
 	if c.Wifi.PSK != "" {
 		c.Wifi.PSK = redacted
@@ -40,6 +43,18 @@ func (c Config) GoString() string { return c.String() }
 
 // GoString masks the token so %#v can't leak it.
 func (d DarwinConfig) GoString() string { return d.String() }
+
+// String masks the password so RTTConfig can't leak it via %s/%v; the
+// username is not a secret and passes through.
+func (r RTTConfig) String() string {
+	if r.Password == "" {
+		return fmt.Sprintf("RTTConfig{username:%q password:unset}", r.Username)
+	}
+	return fmt.Sprintf("RTTConfig{username:%q password:%s}", r.Username, redacted)
+}
+
+// GoString masks the password so %#v can't leak it.
+func (r RTTConfig) GoString() string { return r.String() }
 
 // String masks the PSK so WifiConfig can't leak it via %s/%v; SSID is not a
 // secret and passes through.

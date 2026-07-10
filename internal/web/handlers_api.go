@@ -166,10 +166,11 @@ func (s *Server) handleAPIConfigGet(w http.ResponseWriter, _ *http.Request) {
 // configUpdateJSON is PUT /api/config's request body: the non-secret config
 // plus the three write-only secret fields UpdateConfig accepts.
 type configUpdateJSON struct {
-	Config      config.Config `json:"config"`
-	NewToken    string        `json:"newToken"`
-	NewWifiPSK  string        `json:"newWifiPsk"`
-	NewPassword string        `json:"newPassword"`
+	Config         config.Config `json:"config"`
+	NewToken       string        `json:"newToken"`
+	NewWifiPSK     string        `json:"newWifiPsk"`
+	NewPassword    string        `json:"newPassword"`
+	NewRTTPassword string        `json:"newRttPassword"`
 }
 
 // handleAPIConfigPut is PUT /api/config: decode, validate-and-save via
@@ -185,10 +186,11 @@ func (s *Server) handleAPIConfigPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	update := ConfigUpdate{
-		Cfg:         body.Config,
-		NewToken:    body.NewToken,
-		NewWifiPSK:  body.NewWifiPSK,
-		NewPassword: body.NewPassword,
+		Cfg:            body.Config,
+		NewToken:       body.NewToken,
+		NewWifiPSK:     body.NewWifiPSK,
+		NewPassword:    body.NewPassword,
+		NewRTTPassword: body.NewRTTPassword,
 	}
 	if err := s.svc.UpdateConfig(update); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
