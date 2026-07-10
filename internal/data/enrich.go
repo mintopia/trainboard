@@ -13,13 +13,22 @@ type Fetcher interface {
 }
 
 // HeadcodeEnricher decorates a base fetcher, filling Departure.Headcode from
-// an RTT station lineup. RTT is strictly best-effort: any lineup failure is
-// logged and the Darwin board passes through with blank headcodes — the
-// panel must never degrade because RTT is down.
+// an RTT station lineup. RTT is strictly best-effort: any lineup failure
+// leaves the Darwin board passing through with blank headcodes — the panel
+// must never degrade because RTT is down. Failures are logged on state
+// transitions only (WARN once when enrichment starts failing, INFO once on
+// recovery) so a persistent outage doesn't flood the event feed with one
+// WARN per poll.
 type HeadcodeEnricher struct {
 	Base Fetcher
 	RTT  *RTTClient
 	Log  *slog.Logger
+
+	// failing tracks whether the previous Fetch's lineup call failed, so
+	// only transitions get logged. Fetch is called sequentially from
+	// runtime.Poller.pollOnce (one-poll-at-a-time invariant is structural,
+	// not enforced with a lock), so a plain field is safe here.
+	failing bool
 }
 
 // Fetch fetches the Darwin board, then annotates headcodes.
@@ -30,8 +39,15 @@ func (e *HeadcodeEnricher) Fetch(ctx context.Context, r Request) (*Board, error)
 	}
 	lineup, rerr := e.RTT.Lineup(ctx, r.OriginCRS)
 	if rerr != nil {
-		e.Log.Warn("rtt lineup failed; headcodes left blank", "err", rerr.Error())
+		if !e.failing {
+			e.Log.Warn("rtt lineup failed; headcodes left blank", "err", rerr.Error())
+			e.failing = true
+		}
 		return b, nil
+	}
+	if e.failing {
+		e.Log.Info("rtt lineup recovered")
+		e.failing = false
 	}
 	MatchHeadcodes(b, lineup)
 	return b, nil
