@@ -15,7 +15,7 @@
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   // --- Panel geometry (internal/board/board.go) ---
-  var W = 256, H = 64, ROW_H = 12;
+  var W = 256, ROW_H = 12;
   var COL_ORDER_X = 0, COL_SCHED_X = 17, COL_SCHED_W = 28;
   var COL_PLAT_X = 45, COL_PLAT_W = 19, COL_DEST_X = 64;
   var COL_STATUS_X = 216, COL_STATUS_W = 40;
@@ -257,6 +257,7 @@
     if (!caption) return;
     var text;
     if (!v.fetchedAt) {
+      root.classList.remove("stale");
       text = "Live panel · rendered in your browser";
     } else {
       var age = Math.max(0, (Date.now() - Date.parse(v.fetchedAt)) / 1000);
