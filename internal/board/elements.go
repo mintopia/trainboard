@@ -66,8 +66,8 @@ type nextServiceRow struct {
 	strip *render.Framebuffer // 256×12 pre-rendered row
 }
 
-func newNextServiceRow(d data.Departure, f *Fonts) render.Element {
-	return &nextServiceRow{strip: prerender(rowElements(d, 1, 0, f), W, RowH)}
+func newNextServiceRow(d data.Departure, f *Fonts, headcodes bool) render.Element {
+	return &nextServiceRow{strip: prerender(rowElements(d, 1, 0, f, headcodes), W, RowH)}
 }
 
 func (n *nextServiceRow) Render(fb *render.Framebuffer, tick int, _ time.Time) {
@@ -87,7 +87,7 @@ type remainingServices struct {
 	n     int
 }
 
-func newRemainingServices(deps []data.Departure, f *Fonts) render.Element {
+func newRemainingServices(deps []data.Departure, f *Fonts, headcodes bool) render.Element {
 	if len(deps) == 0 {
 		// n stays 0 (zero value); Render's nil-strip guard below depends on
 		// strip being nil in this case, not on n.
@@ -96,9 +96,9 @@ func newRemainingServices(deps []data.Departure, f *Fonts) render.Element {
 	n := len(deps)
 	var els []render.Element
 	for i, d := range deps {
-		els = append(els, rowElements(d, i+2, (i+1)*RowH, f)...)
+		els = append(els, rowElements(d, i+2, (i+1)*RowH, f, headcodes)...)
 	}
-	els = append(els, rowElements(deps[0], 2, (n+1)*RowH, f)...)
+	els = append(els, rowElements(deps[0], 2, (n+1)*RowH, f, headcodes)...)
 	return &remainingServices{strip: prerender(els, W, (n+2)*RowH), n: n}
 }
 

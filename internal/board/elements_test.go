@@ -22,7 +22,7 @@ func TestOffsetElementPlacesClock(t *testing.T) {
 
 func TestNextServiceScrollIn(t *testing.T) {
 	f := mustFonts(t)
-	el := newNextServiceRow(fixtureBoard().Departures[0], f)
+	el := newNextServiceRow(fixtureBoard().Departures[0], f, false)
 	// Mid scroll-in: t=2 → 6 rows visible at y=6.
 	rendertest.AssertGolden(t, "testdata", "el_next_t2", fbFor(t, el, 2))
 	// Fully in: identical frames at t=5 and t=500.
@@ -36,7 +36,7 @@ func TestNextServiceScrollIn(t *testing.T) {
 
 func TestNextServiceMidScrollShowsTopSliceAtBottom(t *testing.T) {
 	f := mustFonts(t)
-	el := newNextServiceRow(fixtureBoard().Departures[0], f)
+	el := newNextServiceRow(fixtureBoard().Departures[0], f, false)
 	fb := fbFor(t, el, 0) // b=2 → scratch rows 0..1 at y=10..11
 	for y := 0; y < 10; y++ {
 		for x := 0; x < W; x++ {
@@ -49,7 +49,7 @@ func TestNextServiceMidScrollShowsTopSliceAtBottom(t *testing.T) {
 
 func TestRemainingServicesEmptyRendersNothing(t *testing.T) {
 	f := mustFonts(t)
-	fb := fbFor(t, newRemainingServices(nil, f), 100)
+	fb := fbFor(t, newRemainingServices(nil, f, false), 100)
 	for i, p := range fb.Pix {
 		if p != 0 {
 			t.Fatalf("pixel %d lit for empty remaining services", i)
@@ -60,7 +60,7 @@ func TestRemainingServicesEmptyRendersNothing(t *testing.T) {
 func TestRemainingServicesSlidesFirstRowIn(t *testing.T) {
 	f := mustFonts(t)
 	deps := fixtureBoard().Departures[1:] // ordinals 2..5
-	el := newRemainingServices(deps, f)
+	el := newRemainingServices(deps, f, false)
 
 	// t=5: end of the blank scroll-in phase, band still fully blank.
 	at5 := fbFor(t, el, 5)
@@ -100,7 +100,7 @@ func TestRemainingServicesSlidesFirstRowIn(t *testing.T) {
 func TestRemainingServicesHoldsRowDuringPause(t *testing.T) {
 	f := mustFonts(t)
 	deps := fixtureBoard().Departures[1:] // ordinals 2..5
-	el := newRemainingServices(deps, f)
+	el := newRemainingServices(deps, f, false)
 	// Row 1 finishes sliding in at t=11 (top=12) and holds until t=136
 	// (t'=5..130, i.e. rsPauseTicks worth of held frames).
 	a := fbFor(t, el, 11)
@@ -114,7 +114,7 @@ func TestRemainingServicesHoldsRowDuringPause(t *testing.T) {
 func TestRemainingServicesAdvancesToNextRow(t *testing.T) {
 	f := mustFonts(t)
 	deps := fixtureBoard().Departures[1:]
-	el := newRemainingServices(deps, f)
+	el := newRemainingServices(deps, f, false)
 	// One full segment after the first hold: window shows ordinal "3rd".
 	rendertest.AssertGolden(t, "testdata", "el_remaining_hold3rd", fbFor(t, el, 11+131))
 }
@@ -122,7 +122,7 @@ func TestRemainingServicesAdvancesToNextRow(t *testing.T) {
 func TestRemainingServicesWrapsSeamlessly(t *testing.T) {
 	f := mustFonts(t)
 	deps := fixtureBoard().Departures[1:] // n = 4
-	el := newRemainingServices(deps, f)
+	el := newRemainingServices(deps, f, false)
 	// Hold frame of cycle 0 row 0 must equal hold frame of cycle 1 row 0.
 	a := fbFor(t, el, 11)
 	b := fbFor(t, el, 11+4*131)
