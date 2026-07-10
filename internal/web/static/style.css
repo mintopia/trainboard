@@ -222,7 +222,7 @@ p.error { color: var(--red-text); background: #fbe9e5; border-radius: 4px; paddi
   /* Cap the hero elements (state line, board preview, notices, update
      buttons) so the 4:1 board doesn't become comically tall on a wide
      monitor — only the .cols grid below them is meant to fill the width. */
-  .statebar, .boardwrap, .boardwrap + .caption, .notice, .btnrow { max-width: 64rem; }
+  .statebar, .statebar + .caption, .boardwrap, .boardwrap + .caption, .notice, .btnrow { max-width: 64rem; }
   /* Forms and settings/action lists keep a readable measure rather than
      stretching across the full width. */
   main form { max-width: 42rem; }
