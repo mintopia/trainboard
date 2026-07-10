@@ -128,6 +128,21 @@ func newConfigTestServer(t *testing.T) (srv *Server, svc *Service, path string, 
 	return newConfigTestServerCore(t, nil)
 }
 
+// setBoardTOCs is a test helper that mutates the stored config's Board.TOCs
+// directly via UpdateConfig, used to seed the test data for Operators-field
+// tests.
+func setBoardTOCs(t *testing.T, svc *Service, tocs []string) {
+	t.Helper()
+	cfg, err := svc.ConfigRedacted()
+	if err != nil {
+		t.Fatalf("setBoardTOCs: load config: %v", err)
+	}
+	cfg.Board.TOCs = tocs
+	if err := svc.UpdateConfig(ConfigUpdate{Cfg: cfg}); err != nil {
+		t.Fatalf("setBoardTOCs: save config: %v", err)
+	}
+}
+
 // awaitApply waits up to 1s for a value on ch, failing the test if it never
 // arrives.
 func awaitApply(t *testing.T, ch chan struct{}) {
@@ -310,6 +325,26 @@ func TestDeparturesFormHasStationSuggest(t *testing.T) {
 	}
 	if strings.Contains(body, `hx-get="/api/station"`) {
 		t.Errorf("legacy htmx station lookup still present")
+	}
+}
+
+// The Operators field carries TOC suggest + server-rendered name hints
+// (#63): "GW, XR" renders "Great Western Railway, Elizabeth line".
+func TestDeparturesFormTOCHints(t *testing.T) {
+	srv, svc, _, _ := newConfigTestServer(t)
+	setBoardTOCs(t, svc, []string{"GW", "XR"})
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	body := getPath(t, srv.Handler(), "/config/departures", cookie).Body.String()
+	for _, want := range []string{
+		`data-suggest="/api/tocs"`,
+		`data-multi=","`,
+		`data-hint="tocs-names"`,
+		`Great Western Railway, Elizabeth line`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("departures form missing %q", want)
+		}
 	}
 }
 

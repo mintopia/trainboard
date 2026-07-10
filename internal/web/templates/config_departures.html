@@ -20,8 +20,9 @@
   <div class="hint">Comma-separated, e.g. 1, 2 &mdash; leave empty for all</div>
 </label>
 <label class="f">Operators
-  <input type="text" name="board.tocs" value="{{.TOCsCSV}}" placeholder="All operators">
-  <div class="hint">Comma-separated TOC codes, e.g. GW, XR &mdash; leave empty for all</div>
+  <input type="text" name="board.tocs" value="{{.TOCsCSV}}" placeholder="All operators"
+         data-suggest="/api/tocs" data-multi="," data-hint="tocs-names">
+  <div class="hint">Type an operator name or code, comma-separated &mdash; leave empty for all &middot; <span id="tocs-names">{{.TOCNames}}</span></div>
 </label>
 <label class="f">Services shown
   <input type="number" name="board.services" value="{{.Cfg.Board.Services}}" min="1" max="10" style="max-width:8rem">
