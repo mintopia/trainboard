@@ -32,6 +32,7 @@
     <button class="btn ghost" type="submit">Check again</button></form>
 </div>
 {{else if .Enabled}}
+{{if and $.CheckedNow (not .LastError)}}<div class="notice calm">You're up to date &mdash; {{.Running}} is the latest release.</div>{{end}}
 <form method="post" action="/actions/update/check" style="margin:0 0 1rem"><input type="hidden" name="csrf" value="{{$.CSRF}}">
   <button class="btn ghost" type="submit">Check for updates</button></form>
 {{end}}

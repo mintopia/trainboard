@@ -123,8 +123,13 @@ func TestUpdateCheckActionCallsSeamAndRedirects(t *testing.T) {
 	cookie, csrf := loginAs(t, srv, updateTestPassword)
 
 	rec := postForm(t, srv.Handler(), "/actions/update/check", url.Values{"csrf": {csrf}}, cookie)
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
-		t.Fatalf("want 302 /, got %d %q", rec.Code, rec.Header().Get("Location"))
+	// handleUpdateCheck must land back on the status page with the
+	// checked flag, so the page can confirm "no update" affirmatively.
+	if loc := rec.Header().Get("Location"); loc != "/?checked=1" {
+		t.Fatalf("Location = %q, want /?checked=1", loc)
+	}
+	if rec.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d", rec.Code)
 	}
 	if calls.checks != 1 {
 		t.Fatalf("calls.checks = %d, want 1", calls.checks)

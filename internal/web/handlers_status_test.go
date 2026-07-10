@@ -12,6 +12,7 @@ import (
 	"github.com/mintopia/trainboard/internal/board"
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/obs"
+	"github.com/mintopia/trainboard/internal/update"
 )
 
 // statusTestPassword is the admin password newTestServerWithSources sets up,
@@ -340,5 +341,35 @@ func TestStatusAddressesOnSeparateLines(t *testing.T) {
 	}
 	if strings.Contains(body, `192.168.0.102 · 10.55.0.1`) {
 		t.Errorf("addresses still dot-joined on one line")
+	}
+}
+
+// The status page affirms "up to date" only on the ?checked=1 landing that
+// immediately follows an explicit "Check for updates" — never on a bare GET
+// / (every other visit), and never alongside LastError (the error line takes
+// precedence; #71 follow-up).
+func TestStatusShowsUpToDateAfterCheck(t *testing.T) {
+	st := update.Status{Enabled: true, Running: "v0.4.1"}
+	srv, _, _ := newUpdateTestServer(t, st, nil)
+	cookie, _ := loginAs(t, srv, updateTestPassword)
+
+	body := getPath(t, srv.Handler(), "/?checked=1", cookie).Body.String()
+	if !strings.Contains(body, "You're up to date") {
+		t.Fatalf("expected up-to-date notice after check: %s", body)
+	}
+
+	body = getPath(t, srv.Handler(), "/", cookie).Body.String()
+	if strings.Contains(body, "You're up to date") {
+		t.Fatalf("unqualified GET / must not show the up-to-date notice: %s", body)
+	}
+
+	errSrv, _, _ := newUpdateTestServer(t, update.Status{Enabled: true, Running: "v0.4.1", LastError: "boom"}, nil)
+	errCookie, _ := loginAs(t, errSrv, updateTestPassword)
+	body = getPath(t, errSrv.Handler(), "/?checked=1", errCookie).Body.String()
+	if strings.Contains(body, "You're up to date") {
+		t.Fatalf("LastError must suppress the up-to-date notice: %s", body)
+	}
+	if !strings.Contains(body, "boom") {
+		t.Fatalf("expected the error line to render instead: %s", body)
 	}
 }
