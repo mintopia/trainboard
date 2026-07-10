@@ -357,6 +357,10 @@ func TestStatusShowsUpToDateAfterCheck(t *testing.T) {
 	if !strings.Contains(body, "You're up to date") {
 		t.Fatalf("expected up-to-date notice after check: %s", body)
 	}
+	// The check form must opt into the busy-state script (Enabled branch).
+	if !strings.Contains(body, `data-busy="Checking for updates`) {
+		t.Fatal("check form lacks data-busy")
+	}
 
 	body = getPath(t, srv.Handler(), "/", cookie).Body.String()
 	if strings.Contains(body, "You're up to date") {
