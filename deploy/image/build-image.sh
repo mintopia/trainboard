@@ -67,12 +67,15 @@ umount_all() {
   # failure-tolerant (falls back to a lazy unmount, then just warns) so
   # `losetup -d` always runs. A `losetup -d` that never happens leaks the
   # loop device for the life of the CI runner and breaks every build after it.
-  # stage_bake nests the FAT boot partition at $WORK/root/boot (so /boot
-  # inside the nspawn container is the real firmware partition and the hook
-  # paths line up); unmount it before its parent rootfs.
-  if mountpoint -q "$WORK/root/boot" 2>/dev/null; then
-    umount "$WORK/root/boot" 2>/dev/null || umount -l "$WORK/root/boot" 2>/dev/null || echo "WARN: unmount $WORK/root/boot failed" >&2
-  fi
+  # stage_bake nests the FAT boot partition inside the mounted rootfs
+  # (at /boot/firmware on Bookworm-layout images, /boot on older ones) so
+  # the partition appears where the OS's own fstab expects it; unmount the
+  # nested mount before its parent rootfs.
+  for nested in "$WORK/root/boot/firmware" "$WORK/root/boot"; do
+    if mountpoint -q "$nested" 2>/dev/null; then
+      umount "$nested" 2>/dev/null || umount -l "$nested" 2>/dev/null || echo "WARN: unmount $nested failed" >&2
+    fi
+  done
   if mountpoint -q "$WORK/root" 2>/dev/null; then
     umount "$WORK/root" 2>/dev/null || umount -l "$WORK/root" 2>/dev/null || echo "WARN: unmount $WORK/root failed" >&2
   fi
@@ -190,33 +193,95 @@ grow_image() {
   bake_log "grow complete"
 }
 
+# BOOTMNT = where the FAT partition is mounted inside the rootfs tree.
+# DietPi Bookworm RPi images use the RPi-OS-Bookworm layout: the FAT
+# partition mounts at /boot/firmware, while /boot is an ext4 directory
+# holding the DietPi script tree (/boot/dietpi/...). Run 1 of this PoC
+# mounted the FAT at /boot, shadowing that tree — every dietpi-*.service
+# ExecStart=/boot/dietpi/... then failed instantly and first-run never
+# started. Detect the layout from the image's own fstab instead of
+# assuming.
+BOOTMNT=""
+
 mount_bake() {
   [ "$(id -u)" -eq 0 ] || { echo "stage bake requires root (loop devices + nspawn)" >&2; exit 1; }
   LOOP=$(losetup -Pf --show "$WORK/base.img")
   mkdir -p "$WORK/root"
   mount "${LOOP}p2" "$WORK/root"
-  mkdir -p "$WORK/root/boot"
-  mount "${LOOP}p1" "$WORK/root/boot"
+  if grep -Eq '^[^#]*[[:space:]]/boot/firmware[[:space:]]' "$WORK/root/etc/fstab"; then
+    BOOTMNT="$WORK/root/boot/firmware"
+  else
+    BOOTMNT="$WORK/root/boot"
+  fi
+  mkdir -p "$BOOTMNT"
+  mount "${LOOP}p1" "$BOOTMNT"
+}
+
+# Container-visible prep the real device never needs, plus recording of
+# the pre-bake state so it can be restored afterwards:
+#  - /etc/.dietpi_hw_model_identifier=75 pins DietPi's hardware detection
+#    to "Container" for the duration of the bake. Without it,
+#    dietpi-obtain_hw_model's dtb glob (/boot/{,firmware/}bcm*-rpi-*.dtb)
+#    detects "RPi", then finds no Revision line in the runner's
+#    /proc/cpuinfo and falls back to RPi 1 — whose first-boot path WRITES
+#    arm_freq=900/over_voltage overclock lines into the shipped
+#    config.txt. Model 75 is DietPi's sanctioned container identity: it
+#    skips CPU-governor setup, serial-console setup, NTP mode setup and
+#    the RPi clock rewrite. Restored (or removed) after a successful bake
+#    so the flashed device re-detects its real RPi model on first boot.
+#  - /boot/Automation_Custom_Script.sh compat symlink: dietpi-software
+#    executes that literal path, but inject stages the hook on the FAT
+#    partition (mounted at /boot/firmware on Bookworm). Create the
+#    symlink only if the path does not already resolve.
+prep_container() {
+  local dst="$WORK/logs" hwid="$WORK/root/etc/.dietpi_hw_model_identifier"
+  # Ground truth for the task report, captured before every boot loop.
+  cp "$WORK/root/etc/fstab" "$dst/image-fstab.txt" 2>/dev/null || true
+  ls -la "$WORK/root/boot" > "$dst/rootfs-boot-listing.txt" 2>/dev/null || true
+  if [ -f "$hwid" ] && [ ! -f "$WORK/.hwid.prebake" ]; then
+    cp "$hwid" "$WORK/.hwid.prebake"
+    bake_log "pre-bake hw_model_identifier: $(cat "$hwid")"
+  fi
+  echo 75 > "$hwid"
+  if [ "$BOOTMNT" = "$WORK/root/boot/firmware" ] && [ ! -e "$WORK/root/boot/Automation_Custom_Script.sh" ]; then
+    ln -sf firmware/Automation_Custom_Script.sh "$WORK/root/boot/Automation_Custom_Script.sh"
+    bake_log "created /boot/Automation_Custom_Script.sh -> firmware/ compat symlink"
+  fi
+}
+
+# Undo the container-only identity after a successful bake: the flashed
+# device must re-detect its real RPi model on first boot.
+unprep_container() {
+  local hwid="$WORK/root/etc/.dietpi_hw_model_identifier"
+  if [ -f "$WORK/.hwid.prebake" ]; then
+    cp "$WORK/.hwid.prebake" "$hwid"
+    bake_log "restored pre-bake hw_model_identifier"
+  else
+    rm -f "$hwid"
+    bake_log "removed bake-only hw_model_identifier (image had none)"
+  fi
+  # /boot/dietpi/.hw_model caches model 75 + a generated hardware UUID
+  # from the bake. preboot regenerates it on every boot, but delete it so
+  # no two flashed devices share a UUID and nothing reads stale container
+  # identity before preboot runs.
+  rm -f "$WORK/root/boot/dietpi/.hw_model"
 }
 
 # Best-effort capture of what happened inside the container, whatever the
 # outcome. The live nspawn console (captured per-boot below) is the richest
-# source; these are the persisted extras.
+# source; these are the persisted extras. DietPi's own logs land in
+# /var/lib/dietpi/logs (persistent ext4) — /var/log is a tmpfs (RAMlog)
+# whose contents, journal included, evaporate when the container exits.
 dump_diagnostics() {
   local dst="$WORK/logs"
   bake_log "collecting diagnostics into $dst"
-  if [ -d "$WORK/root/var/log/journal" ]; then
-    journalctl --directory="$WORK/root/var/log/journal" --no-pager \
-      > "$dst/container-journal.log" 2>/dev/null || true
+  if [ -d "$WORK/root/var/lib/dietpi/logs" ]; then
+    mkdir -p "$dst/dietpi-logs"
+    cp -r "$WORK/root/var/lib/dietpi/logs/." "$dst/dietpi-logs/" 2>/dev/null || true
   fi
-  # DietPi writes its own install log; grab it plus the general logs.
-  for f in "$WORK/root/var/tmp/dietpi/logs/dietpi-firstrun-setup.log" \
-           "$WORK/root/var/tmp/dietpi/logs/dietpi-firstboot.log" \
-           "$WORK/root/DietPi-Automation.log" \
-           "$WORK/root/boot/dietpi/.installed"; do
-    [ -f "$f" ] && cp "$f" "$dst/" 2>/dev/null || true
-  done
-  ls -la "$WORK/root/boot" > "$dst/boot-listing.txt" 2>/dev/null || true
+  ls -la "$WORK/root/boot" > "$dst/rootfs-boot-listing-after.txt" 2>/dev/null || true
+  ls -la "$BOOTMNT" > "$dst/fat-listing-after.txt" 2>/dev/null || true
+  [ -f "$WORK/root/boot/dietpi/.install_stage" ] && cp "$WORK/root/boot/dietpi/.install_stage" "$dst/install_stage.txt" 2>/dev/null || true
 }
 
 stage_bake() {
@@ -229,15 +294,16 @@ stage_bake() {
 
   grow_image
   mount_bake
-  bake_log "mounted: rootfs=${LOOP}p2 -> $WORK/root, boot=${LOOP}p1 -> $WORK/root/boot"
-  bake_log "boot dir contents: $(find "$WORK/root/boot" -maxdepth 1 -printf '%f ' 2>/dev/null)"
+  bake_log "mounted: rootfs=${LOOP}p2 -> $WORK/root, boot=${LOOP}p1 -> $BOOTMNT"
+  prep_container
+  local marker="$BOOTMNT/trainboard-baked"
 
   local max_boots=5
   local deadline=$(( $(date +%s) + 30 * 60 ))
   local boot=0 baked=0
   while [ "$boot" -lt "$max_boots" ]; do
     boot=$((boot + 1))
-    if [ -f "$WORK/root/boot/trainboard-baked" ]; then baked=1; break; fi
+    if [ -f "$marker" ]; then baked=1; break; fi
     local console="$WORK/logs/nspawn-boot-$boot.log"
     bake_log "boot attempt $boot/$max_boots -> $console"
     # No -n/--network-veth: the container shares the host network namespace,
@@ -250,12 +316,10 @@ stage_bake() {
     local npid=$!
 
     while kill -0 "$npid" 2>/dev/null; do
-      if [ -f "$WORK/root/boot/trainboard-baked" ]; then
+      if [ -f "$marker" ]; then
         bake_log "marker appeared during boot $boot — powering off container"
         machinectl poweroff tbbake 2>/dev/null || kill -TERM "$npid" 2>/dev/null || true
-        break
-      fi
-      if [ "$(date +%s)" -ge "$deadline" ]; then
+      elif [ "$(date +%s)" -ge "$deadline" ]; then
         bake_log "HARD TIMEOUT (30 min) — terminating container"
         machinectl terminate tbbake 2>/dev/null || kill -KILL "$npid" 2>/dev/null || true
         wait "$npid" 2>/dev/null || true
@@ -267,13 +331,14 @@ stage_bake() {
     done
     wait "$npid" 2>/dev/null || true
     bake_log "boot $boot ended (nspawn exited)"
-    if [ -f "$WORK/root/boot/trainboard-baked" ]; then baked=1; break; fi
+    if [ -f "$marker" ]; then baked=1; break; fi
     bake_log "no marker yet after boot $boot (DietPi likely rebooted mid-first-run) — relaunching"
   done
 
   dump_diagnostics
   if [ "$baked" -eq 1 ]; then
-    bake_log "GO: /boot/trainboard-baked present after $boot boot(s)"
+    bake_log "GO: trainboard-baked present after $boot boot(s)"
+    unprep_container
     umount_all
     return 0
   fi

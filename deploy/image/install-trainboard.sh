@@ -6,14 +6,24 @@
 # A/B slot layout + launcher + service (--production --manage-network) +
 # M4 gadget lifeline (deploy.md §10), then marks completion for the bake
 # supervisor. DESTDIR/SRCDIR/SKIP_SYSTEMCTL exist so the layout logic is
-# testable off-device (SRCDIR=/boot, DESTDIR="" in production).
+# testable off-device (SRCDIR auto-detected, DESTDIR="" in production).
 #
 # The dwc2 overlay (config.txt/cmdline.txt) is already baked into the boot
 # partition by build-image.sh's inject stage — this script only does the
 # rootfs side of §10.
 set -euo pipefail
 DESTDIR=${DESTDIR:-}
-SRCDIR=${SRCDIR:-/boot}
+# The staged payload lives on the FAT boot partition. DietPi Bookworm RPi
+# images mount it at /boot/firmware (Bookworm layout — /boot is an ext4
+# directory holding DietPi's script tree); older layouts mount it at
+# /boot. Probe for the staged version marker rather than hardcoding.
+if [ -z "${SRCDIR:-}" ]; then
+  if [ -f /boot/firmware/trainboard-version ]; then
+    SRCDIR=/boot/firmware
+  else
+    SRCDIR=/boot
+  fi
+fi
 SLOTS=$DESTDIR/opt/trainboard/slots
 STATE_DIR=$DESTDIR/var/lib/trainboard/updater
 
