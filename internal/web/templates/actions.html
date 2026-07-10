@@ -1,33 +1,57 @@
-{{define "title"}}actions — trainboard{{end}}
+{{define "title"}}Actions — Trainboard{{end}}
 {{define "content"}}
 <h2>Actions</h2>
-<form method="post" action="/actions/restart"><input type="hidden" name="csrf" value="{{.CSRF}}">
-  <button type="submit">Restart board software</button></form>
-<form method="post" action="/actions/reboot" onsubmit="return confirm('Reboot the device?')"><input type="hidden" name="csrf" value="{{.CSRF}}">
-  <button type="submit">Reboot device</button></form>
-{{if .HotspotActive}}
-<h3>WiFi provisioning</h3>
-<p>Board is in hotspot mode — retry the configured WiFi now (the hotspot will drop for ~20 seconds).</p>
-<form method="post" action="/actions/wifi-retry"><input type="hidden" name="csrf" value="{{.CSRF}}">
-  <button type="submit">Retry WiFi now</button></form>
-{{end}}
-<h3>Burn-in soak</h3>
 {{if .SoakError}}<p class="error">{{.SoakError}}</p>{{end}}
+<div class="act">
+  <div class="body"><div class="t">Restart board software</div>
+    <div class="d">Departures pause for ~15 seconds. Settings are kept.</div></div>
+  <form method="post" action="/actions/restart"><input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="btn ghost" type="submit">Restart</button></form>
+</div>
+<details class="act-confirm">
+  <summary class="act" style="cursor:pointer">
+    <span class="body"><span class="t">Reboot device</span>
+      <span class="d" style="display:block">Full power cycle — the board is dark for about a minute.</span></span>
+    <span class="btn danger" role="button">Reboot…</span>
+  </summary>
+  <div class="notice"><strong>Confirm reboot?</strong> The board goes dark for about a minute and this page reconnects by itself.
+    <form method="post" action="/actions/reboot" class="btnrow" style="margin-top:.6rem">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button class="btn" type="submit">Reboot now</button>
+    </form>
+  </div>
+</details>
+{{if .HotspotActive}}
+<div class="act">
+  <div class="body"><div class="t">Retry WiFi</div>
+    <div class="d">The board is in hotspot mode. Retrying drops this hotspot for ~20 seconds while it tries your network again.</div></div>
+  <form method="post" action="/actions/wifi-retry"><input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="btn ghost" type="submit">Retry now</button></form>
+</div>
+{{end}}
 {{if .SoakRemaining}}
-<p>Soak running — {{.SoakRemaining}} remaining. The panel is cycling white/black; departures resume when it ends.</p>
-<form method="post" action="/actions/soak/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}">
-  <button type="submit">Cancel soak</button></form>
+<div class="act">
+  <div class="body"><div class="t">Burn-in soak — running</div>
+    <div class="d">{{.SoakRemaining}} remaining. The panel cycles white/black; departures resume when it ends.</div></div>
+  <form method="post" action="/actions/soak/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="btn ghost" type="submit">Cancel</button></form>
+</div>
 {{else}}
-<form method="post" action="/actions/soak" onsubmit="return confirm('Start a burn-in soak? The board will cycle white/black instead of departures until it finishes or is cancelled.')">
-  <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label>Duration
-    <select name="duration">
-      <option value="1h">1 hour</option>
-      <option value="4h">4 hours</option>
-      <option value="8h" selected>8 hours</option>
-    </select>
-  </label>
-  <button type="submit">Start soak</button>
-</form>
+<details class="act-confirm">
+  <summary class="act" style="cursor:pointer">
+    <span class="body"><span class="t">Burn-in soak</span>
+      <span class="d" style="display:block">Cycles the panel white/black to even out wear. Departures resume after.</span></span>
+    <span class="btn ghost" role="button">Start…</span>
+  </summary>
+  <div class="notice calm">
+    <form method="post" action="/actions/soak">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label class="f">Duration
+        <select name="duration"><option value="1h">1 hour</option><option value="4h">4 hours</option><option value="8h" selected>8 hours</option></select>
+      </label>
+      <button class="btn" type="submit">Start soak</button>
+    </form>
+  </div>
+</details>
 {{end}}
 {{end}}

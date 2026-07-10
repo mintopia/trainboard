@@ -25,17 +25,22 @@ func parseTemplates() *template.Template {
 }
 
 var (
-	baseTemplate            = parseTemplates()
-	setupTemplate           = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
-	setupDoneTemplate       = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_done.html"))
-	setupWifiDoneTemplate   = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_done.html"))
-	setupWifiStatusTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_status.html"))
-	loginTemplate           = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
-	statusTemplate          = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
-	configTemplate          = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config.html"))
-	appliedTemplate         = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/applied.html"))
-	actionsTemplate         = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/actions.html"))
-	rebootingTemplate       = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/rebooting.html"))
+	baseTemplate             = parseTemplates()
+	setupTemplate            = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup.html"))
+	setupDoneTemplate        = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_done.html"))
+	setupWifiDoneTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_done.html"))
+	setupWifiStatusTemplate  = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/setup_wifi_status.html"))
+	loginTemplate            = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/login.html"))
+	statusTemplate           = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/status.html"))
+	configListTemplate       = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_list.html"))
+	configDeparturesTemplate = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_departures.html"))
+	configDisplayTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_display.html"))
+	configNetworkTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_network.html"))
+	configUpdatesTemplate    = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_updates.html"))
+	configAdminTemplate      = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/config_admin.html"))
+	restartingTemplate       = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/restarting.html"))
+	actionsTemplate          = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/actions.html"))
+	rebootingTemplate        = template.Must(template.Must(baseTemplate.Clone()).ParseFS(embeddedFS, "templates/rebooting.html"))
 )
 
 // staticFS returns the embedded static/ subtree for the file server.

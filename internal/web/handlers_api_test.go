@@ -493,3 +493,37 @@ func TestAPISoakStartCancelAndStatus(t *testing.T) {
 		t.Fatalf("after cancel: SoakRemaining = %v, want 0", got)
 	}
 }
+
+func TestAPIStationLookup(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := srv.Handler()
+	// No session cookie on purpose: endpoint is public (pre-auth setup uses it).
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/station?crs=tha", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got struct{ CRS, Name string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if got.CRS != "THA" || got.Name != "Thatcham" {
+		t.Errorf("got %+v", got)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/station?crs=XXX", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown CRS: want 404, got %d", rec.Code)
+	}
+}
+
+func TestAPIStationLookupBypassesSetupGate(t *testing.T) {
+	srv, _ := newTestServerVirgin(t) // unprovisioned: setupGate active
+	h := srv.Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/station?crs=PAD", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("setup gate must not redirect /api/station: want 200, got %d", rec.Code)
+	}
+}

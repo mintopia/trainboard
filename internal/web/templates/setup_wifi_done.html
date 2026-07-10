@@ -1,5 +1,11 @@
-{{define "title"}}joining wifi — trainboard{{end}}
+{{define "title"}}Joining your WiFi — Trainboard{{end}}
 {{define "content"}}
-<h2>Joining your WiFi</h2>
-<p>Joining {{.SSID}}… the hotspot is about to drop. If the board doesn't appear on your network in a minute, reconnect to the board's hotspot (the network name shown on its display) and revisit this page — it will show the join error.</p>
+{{template "routeline" .Steps}}
+<h3>Joining {{.SSID}}</h3>
+<p>The hotspot is off while the board connects. This usually takes <strong>about 20 seconds</strong>.</p>
+<div class="rows">
+  <div class="r"><span class="k">If your WiFi worked</span><span class="v">visit <strong>http://trainboard.local</strong> and sign in</span></div>
+  <div class="r"><span class="k">If this page goes stale</span><span class="v">rejoin the <strong>trainboard</strong> hotspot</span></div>
+  <div class="r"><span class="k">If it failed</span><span class="v">the hotspot returns and shows the error</span></div>
+</div>
 {{end}}

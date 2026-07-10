@@ -10,7 +10,7 @@ import (
 	"github.com/mintopia/trainboard/internal/update"
 )
 
-// testLogSink is a discard-logger helper for update.go's tests; tee_test.go's
+// testLogSink is a discard-logger helper for update.go's tests; main_test.go's
 // testLog() has no *testing.T parameter, so it isn't a drop-in replacement
 // for the t.Helper()-annotated signature used here.
 func testLogSink(t *testing.T) *slog.Logger {

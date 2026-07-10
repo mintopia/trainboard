@@ -165,6 +165,32 @@ func rateLimit(rl *limiter, log *slog.Logger) middleware {
 	}
 }
 
+// rateLimitHTML is rateLimit's sibling for POST /login: same bucket
+// semantics (keying, budget, enforcement point all untouched), but on
+// rejection it hands off to onLimited instead of writing the generic
+// text/plain 429. That lets the login route render its styled rate-limited
+// page (design brief §6) while every other rate-limited route keeps the
+// bare-429 behavior of rateLimit above — mirroring how requireAuth's isAPI
+// picks a response shape without duplicating the auth check itself.
+func rateLimitHTML(rl *limiter, log *slog.Logger, onLimited http.HandlerFunc) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if stateChanging(r) {
+				ip, _, err := net.SplitHostPort(r.RemoteAddr)
+				if err != nil {
+					ip = r.RemoteAddr
+				}
+				if !rl.allow(ip) {
+					log.Warn("rate limited", "ip", ip, "path", r.URL.Path)
+					onLimited(w, r)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // trackingWriter records whether a response has started (header written or
 // body bytes sent) so recoverPanics can decide whether it is still safe to
 // write its own 500 response.
@@ -220,7 +246,7 @@ func (sw *statusWriter) WriteHeader(code int) {
 //
 // Routine (status < 400) requests log at DEBUG — below the obs tee logger's
 // Info threshold, so they never reach the diagnostics ring or the journal.
-// Without this, the status page's own polling (/preview.png every second,
+// Without this, the status page's own polling (/api/board every 5 seconds,
 // /events every five seconds) floods the ring's fixed capacity within
 // minutes, evicting the rare events an operator actually needs. Failures
 // (status >= 400) log at WARN, so they stay visible in both places alongside

@@ -1,6 +1,9 @@
-{{define "title"}}setup complete — trainboard{{end}}
+{{define "title"}}Setup complete — Trainboard{{end}}
+{{define "bodyattrs"}} data-reconnect-delay="10000"{{end}}
 {{define "content"}}
-<h2>Setup complete</h2>
-<p>Setup complete. The board is restarting with your settings — log in when this page returns to the login screen.</p>
-<meta http-equiv="refresh" content="6;url=/">
+{{template "routeline" .Steps}}
+<h3>Departures live</h3>
+<p>The board is starting with your settings &mdash; this page moves to Status when it's back, usually under a minute.</p>
+<div class="notice calm">If it doesn't within a couple of minutes, reload &mdash; and if the board stays dark, check <a href="/actions">Actions</a> once it's back.</div>
+<script src="/static/reconnect.js" defer></script>
 {{end}}

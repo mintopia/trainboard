@@ -286,7 +286,6 @@ func newTestWebService(t *testing.T, conn webConnSeams) *web.Service {
 		filepath.Join(t.TempDir(), "config.json"),
 		func() *board.Snapshot { return nil },
 		obs.NewRing(4),
-		func() []byte { return nil },
 		time.Now(),
 		&runtime.Soak{},
 		conn,

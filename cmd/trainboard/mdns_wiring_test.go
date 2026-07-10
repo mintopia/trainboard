@@ -95,7 +95,6 @@ func TestNewWebServiceWiresMDNSState(t *testing.T) {
 			filepath.Join(t.TempDir(), "config.json"),
 			func() *board.Snapshot { return nil },
 			obs.NewRing(4),
-			func() []byte { return nil },
 			time.Now(),
 			&runtime.Soak{},
 			webConnSeams{},

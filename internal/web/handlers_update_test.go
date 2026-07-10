@@ -82,7 +82,7 @@ func TestStatusPageShowsSoftwareSection(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"v0.2.0",
-		"Rolled back from v0.1.9",
+		"v0.1.9 failed to boot repeatedly",
 		"boom",
 		`action="/actions/update/check"`,
 		`action="/actions/update/apply"`,
@@ -131,19 +131,16 @@ func TestUpdateCheckActionCallsSeamAndRedirects(t *testing.T) {
 	}
 }
 
-// (d) a successful POST /actions/update/apply renders the same applied/
-// restart copy config save uses, and schedules the same clean-exit restart
-// (Actions.Apply) via scheduleApply.
-func TestUpdateApplySuccessRendersAppliedAndSchedulesRestart(t *testing.T) {
+// (d) a successful POST /actions/update/apply 303s to /restarting — the same
+// shared wait interstitial every other restart-triggering save uses — and
+// schedules the same clean-exit restart (Actions.Apply) via scheduleApply.
+func TestUpdateApplySuccessRedirectsToRestartingAndSchedulesRestart(t *testing.T) {
 	srv, calls, applyCh := newUpdateTestServer(t, update.Status{Enabled: true, Available: "v0.2.0"}, nil)
 	cookie, csrf := loginAs(t, srv, updateTestPassword)
 
 	rec := postForm(t, srv.Handler(), "/actions/update/apply", url.Values{"csrf": {csrf}}, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "restarting") {
-		t.Fatalf("expected applied/restart copy in body: %s", rec.Body.String())
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/restarting" {
+		t.Fatalf("want 303 /restarting, got %d %q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 	}
 	if calls.applies != 1 {
 		t.Fatalf("calls.applies = %d, want 1", calls.applies)

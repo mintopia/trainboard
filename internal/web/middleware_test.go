@@ -306,7 +306,7 @@ func TestLogRequestsOmitsQueryString(t *testing.T) {
 }
 
 // TestLogRequestsKeepsRoutineTrafficOutOfRing guards against ring flooding:
-// the status page polls /preview.png every second and /events every five
+// the status page polls /api/board every 5 seconds and /events every five
 // seconds, so if logRequests logged every request at Info, an open tab would
 // evict real diagnostics from the bounded ring within minutes. Routine
 // (status < 400) requests must log below the obs tee logger's Info
@@ -330,7 +330,7 @@ func TestNoteProvisioningCountsAPSubnetRequests(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, svc, _, _, conn := newConnTestServer(t)
 			h := chain(okHandler(), noteProvisioning(svc))
-			r := httptest.NewRequest("GET", "/preview.png", nil)
+			r := httptest.NewRequest("GET", "/api/board", nil)
 			r.RemoteAddr = tc.remoteAddr
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, r)
@@ -349,7 +349,7 @@ func TestLogRequestsKeepsRoutineTrafficOutOfRing(t *testing.T) {
 	})
 
 	h := chain(okHandler(), logRequests(log))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/preview.png", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/board", nil))
 	if n := ring.Len(); n != 0 {
 		t.Fatalf("200 response: want 0 ring events, got %d: %+v", n, ring.Events())
 	}

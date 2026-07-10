@@ -1,23 +1,50 @@
-{{define "title"}}setup — trainboard{{end}}
+{{define "title"}}Set up — Trainboard{{end}}
 {{define "content"}}
-<h2>First-time setup</h2>
-{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{template "routeline" .Steps}}
 {{if .APMode}}
-{{if .LastError}}<p class="error">Previous attempt failed: {{.LastError}}</p>{{end}}
+<h3>Connect to your WiFi</h3>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{if .LastError}}<div class="notice fault"><strong>The last attempt failed:</strong> {{.LastError}}. Check the details and try again.</div>{{end}}
 <form method="post" action="/setup">
-  <label>WiFi network name (SSID) <input type="text" name="ssid" required maxlength="32"></label>
-  <label>WiFi password <input type="password" name="psk" required minlength="8" maxlength="63"></label>
-  <label>Admin password (min 8 chars) <input type="password" name="password" required minlength="8"></label>
-  <label>Confirm password <input type="password" name="confirm" required></label>
-  <button type="submit" class="primary">Save &amp; join WiFi — the hotspot will drop for ~20 seconds while the board tries your network. If it fails, rejoin the hotspot and this page will show the error.</button>
+  <label class="f">WiFi network name
+    <input type="text" name="ssid" required maxlength="32" autocomplete="off">
+  </label>
+  <label class="f">WiFi password
+    <input type="password" name="psk" required minlength="8" maxlength="63">
+  </label>
+  <label class="f">Choose an admin password
+    <input type="password" name="password" required minlength="8" autocomplete="new-password">
+    <div class="hint">At least 8 characters — you'll use it to sign in to this page from your network</div>
+  </label>
+  <label class="f">Confirm admin password
+    <input type="password" name="confirm" required autocomplete="new-password">
+  </label>
+  <div class="notice calm">This hotspot switches off for about <strong>20 seconds</strong> while the board tries your network. Stay on this page — your phone should rejoin automatically. If the board can't connect, the hotspot comes back and this page shows what went wrong.</div>
+  <button class="btn" type="submit" style="width:100%">Join WiFi</button>
 </form>
 {{else}}
+<h3>Finish setting up</h3>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
 <form method="post" action="/setup">
-  <label>Admin password (min 8 chars) <input type="password" name="password" required minlength="8"></label>
-  <label>Confirm password <input type="password" name="confirm" required></label>
-  <label>Station code (CRS, e.g. PAD) <input type="text" name="origin" required maxlength="3" pattern="[A-Za-z]{3}"></label>
-  <label>Darwin API token (from the National Rail OpenLDBWS registration email) <input type="password" name="token" required autocomplete="off"></label>
-  <button type="submit" class="primary">Save and continue</button>
+  <label class="f">Choose an admin password
+    <input type="password" name="password" required minlength="8" autocomplete="new-password">
+    <div class="hint">At least 8 characters</div>
+  </label>
+  <label class="f">Confirm admin password
+    <input type="password" name="confirm" required autocomplete="new-password">
+  </label>
+  <label class="f">Station
+    <input class="crs" type="text" name="origin" required maxlength="3" pattern="[A-Za-z]{3}"
+           hx-get="/api/station" hx-trigger="keyup changed delay:400ms" hx-target="#origin-name" hx-swap="none"
+           hx-on::after-request="document.getElementById('origin-name').textContent = event.detail.successful ? JSON.parse(event.detail.xhr.responseText).name : 'unknown station code'">
+    <div class="hint">3-letter station code, e.g. PAD &middot; <span id="origin-name"></span></div>
+  </label>
+  <label class="f">Darwin API token
+    <input type="password" name="token" required autocomplete="off">
+    <div class="hint">From your National Rail OpenLDBWS registration email &mdash; <a href="https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/" target="_blank" rel="noopener">register free here</a></div>
+  </label>
+  <div class="notice calm">The board restarts with your settings &mdash; departures appear within about a minute.</div>
+  <button class="btn" type="submit" style="width:100%">Save and start the board</button>
 </form>
 {{end}}
 {{end}}

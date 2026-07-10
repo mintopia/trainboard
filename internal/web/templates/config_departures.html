@@ -1,0 +1,52 @@
+{{define "title"}}Departures — Trainboard{{end}}
+{{define "content"}}
+<div class="backrow"><a href="/config">&lsaquo; Configuration</a></div>
+<h3>Departures</h3>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="/config/departures">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label class="f">Station
+  <input class="crs" type="text" name="board.origin" value="{{.Cfg.Board.Origin}}" required maxlength="3" pattern="[A-Za-z]{3}"
+         hx-get="/api/station" hx-trigger="keyup changed delay:400ms" hx-target="#origin-name" hx-swap="none"
+         hx-on::after-request="document.getElementById('origin-name').textContent = event.detail.successful ? JSON.parse(event.detail.xhr.responseText).name : 'unknown station code'">
+  <div class="hint">3-letter station code{{if .OriginName}} &middot; {{end}}<span id="origin-name">{{.OriginName}}</span></div>
+</label>
+<label class="f">Only trains towards <span style="color:#8b99a5">(optional)</span>
+  <input class="crs" type="text" name="board.destination" value="{{.Cfg.Board.Destination}}" maxlength="3"
+         hx-get="/api/station" hx-trigger="keyup changed delay:400ms" hx-target="#dest-name" hx-swap="none"
+         hx-on::after-request="document.getElementById('dest-name').textContent = event.detail.successful ? JSON.parse(event.detail.xhr.responseText).name : ''">
+  <div class="hint"><span id="dest-name">{{.DestinationName}}</span></div>
+</label>
+<label class="f">Platforms
+  <input type="text" name="board.platforms" value="{{.PlatformsCSV}}" placeholder="All platforms">
+  <div class="hint">Comma-separated, e.g. 1, 2 &mdash; leave empty for all</div>
+</label>
+<label class="f">Operators
+  <input type="text" name="board.tocs" value="{{.TOCsCSV}}" placeholder="All operators">
+  <div class="hint">Comma-separated TOC codes, e.g. GW, XR &mdash; leave empty for all</div>
+</label>
+<label class="f">Services shown
+  <input type="number" name="board.services" value="{{.Cfg.Board.Services}}" min="1" max="10" style="max-width:8rem">
+</label>
+<label class="f">Ignore departures more than
+  <input type="number" name="board.cutoffHours" value="{{.Cfg.Board.CutoffHours}}" min="1" style="max-width:8rem">
+  <div class="hint">hours away</div>
+</label>
+<label class="f">Refresh every
+  <input type="number" name="board.refreshSeconds" value="{{.Cfg.Board.RefreshSeconds}}" min="15" style="max-width:8rem">
+  <div class="hint">seconds</div>
+</label>
+<label class="f">Look ahead
+  <input type="number" name="board.timeWindowMinutes" value="{{.Cfg.Board.TimeWindowMinutes}}" min="1" style="max-width:8rem">
+  <div class="hint">minutes</div>
+</label>
+<label class="f">Station name replacements
+  <textarea name="board.replacements" rows="3">{{.ReplacementsText}}</textarea>
+  <div class="hint">One per line, From=To &mdash; e.g. London Paddington=Paddington</div>
+</label>
+<div class="savebar">
+  <span class="consequence">Restarts the board &mdash; departures pause ~15 seconds.</span>
+  <button class="btn" type="submit">Save</button>
+</div>
+</form>
+{{end}}

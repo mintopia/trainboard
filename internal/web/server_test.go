@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -54,7 +55,7 @@ func newTestServerWithPassword(t *testing.T, pw string) (*Server, *Service) {
 // newTestServerWithApply is newTestServer plus a channel that receives a
 // value whenever this Server's wired Actions.Apply fires — used by the
 // setup-flow tests that must assert POST /setup's success path actually
-// schedules the same apply-by-restart handleConfigPost uses (newTestServer's
+// schedules the same apply-by-restart a config sub-page save uses (newTestServer's
 // underlying newTestServiceAt wires a no-op Apply, which cannot prove that).
 func newTestServerWithApply(t *testing.T) (*Server, *Service, chan struct{}) {
 	t.Helper()
@@ -64,11 +65,10 @@ func newTestServerWithApply(t *testing.T) (*Server, *Service, chan struct{}) {
 	}
 	applyCh := make(chan struct{}, 1)
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now(),
 	}
 	act := Actions{
 		Apply:  func() { applyCh <- struct{}{} },
@@ -136,12 +136,54 @@ func TestServerSetupGateRedirectsWhenNoPassword(t *testing.T) {
 	}
 }
 
+// (a2) GET /restarting is exempt from the setup gate too, alongside
+// /static/ and /api/station — it must render even on a genuinely
+// unprovisioned device (no password stored yet), not bounce to /setup.
+func TestServerRestartingExemptFromSetupGate(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := srv.Handler()
+	rec := getPath(t, h, "/restarting")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d %q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+}
+
+// TestSetupStepStates pins the route-line step model the whole setup-flow
+// visual contract rides on: done stops strictly before the current position,
+// "now" on the stop after current, "" (upcoming) after that — for both
+// builders at both positions each is actually rendered with (form=0,
+// post-submit wait/success=1).
+func TestSetupStepStates(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []setupStep
+		want  []string // State per position
+	}{
+		{"apSetupSteps(0) wifi form", apSetupSteps(0), []string{"done", "now", "", ""}},
+		{"apSetupSteps(1) joining wait", apSetupSteps(1), []string{"done", "done", "now", ""}},
+		{"lanSetupSteps(0) password+station form", lanSetupSteps(0), []string{"done", "now", ""}},
+		{"lanSetupSteps(1) departures-live success", lanSetupSteps(1), []string{"done", "done", "now"}},
+	}
+	for _, tc := range cases {
+		if len(tc.steps) != len(tc.want) {
+			t.Fatalf("%s: want %d stops, got %d (%+v)", tc.name, len(tc.want), len(tc.steps), tc.steps)
+		}
+		for i, w := range tc.want {
+			if tc.steps[i].State != w {
+				t.Errorf("%s: stop %d (%s): want state %q, got %q", tc.name, i, tc.steps[i].Label, w, tc.steps[i].State)
+			}
+		}
+	}
+}
+
 // (b) POST /setup with password+confirm+origin creates the password (usable
 // via VerifyLogin), issues a session cookie, schedules Actions.Apply (the
-// same apply-by-restart handleConfigPost uses — this is what actually clears
-// a virgin device's E04 fault screen, since runConfigErrorLoop has no
-// poller), renders the restart page instead of redirecting to /, and /setup
-// then 404s.
+// same apply-by-restart a config sub-page save uses — this is what actually
+// clears a virgin device's E04 fault screen, since runConfigErrorLoop has no
+// poller), renders the route-line "setupDone" page directly (200,
+// "Departures live" as the now stop, with Task 8's reconnect-and-poll to
+// carry the browser across the restart) instead of redirecting to / or to
+// the generic /restarting interstitial, and /setup then 404s.
 func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 	srv, svc, applyCh := newTestServerWithApply(t)
 	h := srv.Handler()
@@ -149,10 +191,10 @@ func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 	form := url.Values{"password": {"longenough1"}, "confirm": {"longenough1"}, "origin": {"pad"}}
 	rec := postForm(t, h, "/setup", form)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 restart page, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("want 200 setupDone render, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "restarting") {
-		t.Fatalf("expected restart copy in body: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Departures live") {
+		t.Fatalf("expected route-line setup-done copy in body: %s", rec.Body.String())
 	}
 	if len(rec.Result().Cookies()) != 1 {
 		t.Fatalf("expected exactly one Set-Cookie, got %d", len(rec.Result().Cookies()))
@@ -243,8 +285,11 @@ func TestServerLoginFlow(t *testing.T) {
 	if recBad.Code != http.StatusOK {
 		t.Fatalf("want 200 re-render on bad password, got %d", recBad.Code)
 	}
-	if !strings.Contains(recBad.Body.String(), "incorrect") {
-		t.Fatalf("expected generic 'incorrect' message, got: %s", recBad.Body.String())
+	if !strings.Contains(recBad.Body.String(), "That password didn&#39;t match") {
+		t.Fatalf("expected new error copy, got: %s", recBad.Body.String())
+	}
+	if !strings.Contains(recBad.Body.String(), `class="error"`) {
+		t.Fatalf("expected error markup in body: %s", recBad.Body.String())
 	}
 }
 
@@ -296,11 +341,90 @@ func TestServerLoginRateLimited(t *testing.T) {
 	}
 }
 
+// (g2) tripping the login rate limiter renders the styled Wayfinding login
+// page (design brief §6's "rate-limited state"), not the generic middleware
+// text/plain 429 — while other rate-limited routes (e.g. POST
+// /actions/restart, sharing the separate actionLimit bucket) are unaffected
+// and keep the bare 429.
+func TestLoginRateLimitedRendersStyledPage(t *testing.T) {
+	srv, _ := newTestServerWithPassword(t, "longenough1")
+	h := srv.Handler()
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 6; i++ {
+		last = postForm(t, h, "/login", url.Values{"password": {fmt.Sprintf("wrongpassword-%d", i)}})
+	}
+	if last.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 on the 6th rapid attempt, got %d", last.Code)
+	}
+	if ct := last.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("want text/html rate-limited login page, got Content-Type %q", ct)
+	}
+	if !strings.Contains(last.Body.String(), "Too many attempts") {
+		t.Fatalf("expected rate-limited notice copy in body, got: %s", last.Body.String())
+	}
+
+	// Regression: a non-login rate-limited route (separate actionLimit
+	// bucket, burst 30) must still get the generic plain-text 429 —
+	// rateLimitHTML's styled fallback is login-only.
+	var lastAction *httptest.ResponseRecorder
+	for i := 0; i < 31; i++ {
+		lastAction = postForm(t, h, "/actions/restart", url.Values{})
+	}
+	if lastAction.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 on the 31st rapid /actions/restart attempt, got %d", lastAction.Code)
+	}
+	if ct := lastAction.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("want bare text/plain 429 on non-login route, got Content-Type %q", ct)
+	}
+	if strings.Contains(lastAction.Body.String(), "Too many attempts") {
+		t.Fatal("non-login rate-limited route must not render the login page")
+	}
+}
+
 // (h) /static/style.css is served without authentication, even pre-setup.
 func TestServerStaticServesWithoutAuth(t *testing.T) {
 	srv, _ := newTestServer(t)
 	rec := getPath(t, srv.Handler(), "/static/style.css")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
+	}
+}
+
+// TestStaticFontsServed confirms the Wayfinding design system's subset
+// woff2 fonts land under static/fonts/ and are picked up automatically by
+// the //go:embed templates/* static/* directive, with no route wiring
+// needed beyond the existing GET /static/ file server.
+func TestStaticFontsServed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := srv.Handler()
+	for _, path := range []string{
+		"/static/fonts/rail-alphabet-dark.woff2",
+		"/static/fonts/rail-alphabet-light.woff2",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: want 200, got %d", path, rec.Code)
+		}
+		if rec.Body.Len() < 1000 {
+			t.Errorf("GET %s: suspiciously small body (%d bytes)", path, rec.Body.Len())
+		}
+	}
+}
+
+// TestStaticBoardJSServed confirms board.js (Task 4's client-side board
+// renderer) is served, without auth, the same way as style.css and the
+// fonts — picked up automatically by //go:embed templates/* static/*, no
+// dedicated route.
+func TestStaticBoardJSServed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rec := getPath(t, srv.Handler(), "/static/board.js")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "/api/board") {
+		t.Fatalf("board.js body does not reference /api/board: %s", rec.Body.String())
 	}
 }

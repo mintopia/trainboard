@@ -1,5 +1,8 @@
-{{define "title"}}rebooting — trainboard{{end}}
+{{define "title"}}Rebooting — Trainboard{{end}}
+{{define "bodyattrs"}} data-reconnect-delay="30000"{{end}}
 {{define "content"}}
-<h2>Rebooting…</h2>
-<p>The device is rebooting. This page will not update; check back in a minute.</p>
+<h2>Rebooting the device</h2>
+<p>Full power cycle — the board is dark for <strong>about a minute</strong>.</p>
+<div class="notice calm">This page returns to Status by itself. If it doesn't within a couple of minutes, reload — and if the board stays dark, check <a href="/actions">Actions</a> once it's back.</div>
+<script src="/static/reconnect.js" defer></script>
 {{end}}

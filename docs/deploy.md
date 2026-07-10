@@ -108,6 +108,14 @@ apply-by-restart path is used by the `/actions/restart` button.
 `/actions/reboot` is different: it shells out to `systemctl reboot`, so it
 restarts the whole Pi, not just the process.
 
+**Live board preview:** the old `GET /preview.png` route is gone. The status
+page's live board preview now renders client-side from `GET /api/board` (a
+JSON row-model of the current scene, polled every 5s) via `static/board.js` —
+if you had a personal bookmark or script pointed at `/preview.png`, point it
+at `/api/board` instead. The admin UI's fonts (Rail Alphabet, subsetted
+`.woff2`) and JS (htmx) are bundled and served from `/static/` — the page
+works fully with no internet access from the browser, same as before.
+
 ## 5. Install the binary (first-time bootstrap)
 
 > **This is the one-time bootstrap flow only.** Once a device has been

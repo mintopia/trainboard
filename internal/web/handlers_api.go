@@ -9,6 +9,7 @@ import (
 
 	"github.com/mintopia/trainboard/internal/config"
 	"github.com/mintopia/trainboard/internal/obs"
+	"github.com/mintopia/trainboard/internal/stations"
 	"github.com/mintopia/trainboard/internal/update"
 )
 
@@ -99,6 +100,20 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, toStatusJSON(s.svc.Status()))
 }
 
+// handleAPIStation is GET /api/station?crs=XXX: an offline CRS-code →
+// station-name lookup (internal/stations), used by the web UI to resolve
+// codes as the user types. Deliberately public — no auth, no setupGate — so
+// the pre-auth setup pages can use it too (see setupGate's exemption list).
+func (s *Server) handleAPIStation(w http.ResponseWriter, r *http.Request) {
+	crs := r.URL.Query().Get("crs")
+	name, ok := stations.Name(crs)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "unknown station code")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"crs": strings.ToUpper(crs), "name": name})
+}
+
 // handleAPIConfigGet is GET /api/config: the redacted config, as JSON.
 // config.Config already carries lowerCamel json tags for its own on-disk
 // shape, so it is written directly rather than through a dedicated DTO.
@@ -121,10 +136,10 @@ type configUpdateJSON struct {
 }
 
 // handleAPIConfigPut is PUT /api/config: decode, validate-and-save via
-// Service.UpdateConfig (same as the HTML config form), then respond
-// {"status":"applied"} and schedule Actions.Apply — mirroring
-// handleConfigPost's success path exactly, just without a re-rendered form
-// on failure (a JSON API instead gets a 400 with the validation error).
+// Service.UpdateConfig (same as the HTML config sub-pages), then respond
+// {"status":"applied"} and schedule Actions.Apply — mirroring a restart-
+// triggering config save's success path exactly, just without a re-rendered
+// form on failure (a JSON API instead gets a 400 with the validation error).
 func (s *Server) handleAPIConfigPut(w http.ResponseWriter, r *http.Request) {
 	var body configUpdateJSON
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

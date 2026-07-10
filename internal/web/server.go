@@ -29,6 +29,16 @@ type Server struct {
 type basePage struct {
 	LoggedIn bool
 	CSRF     string
+	Active   string // which tab: "status" | "config" | "actions" | ""
+}
+
+// pageBase fills the fields every logged-in page shares: LoggedIn is always
+// true (every caller sits behind requireAuth), CSRF comes from the session,
+// and active is the nav tab to highlight. Introduced by the config list +
+// departures/display sub-pages (this task); later tasks reuse it instead of
+// building basePage by hand.
+func (s *Server) pageBase(r *http.Request, active string) basePage {
+	return basePage{LoggedIn: true, CSRF: csrfFrom(r), Active: active}
 }
 
 type setupPageData struct {
@@ -42,6 +52,10 @@ type setupPageData struct {
 	// to a phone reconnecting to the hotspot after a bad attempt. Only
 	// rendered in the AP-mode block; always "" in LAN mode.
 	LastError string
+	// Steps drives the "routeline" partial: where this render sits on the
+	// setup journey (apSetupSteps for the AP-mode form, lanSetupSteps for
+	// the LAN-mode form).
+	Steps []setupStep
 }
 
 // setupWifiStatusPageData is setup_wifi_status.html's render data: the
@@ -57,6 +71,9 @@ type setupWifiStatusPageData struct {
 	// SSID is the configured WiFi network name (Wifi.SSID), read via the
 	// existing ConfigRedacted path; it is not a secret. "" when unavailable.
 	SSID string
+	// Steps drives the "routeline" partial: this fallback view sits back at
+	// the "WiFi + password" stop (apSetupSteps(0)).
+	Steps []setupStep
 }
 
 // setupWifiDonePageData is setup_wifi_done.html's render data: the
@@ -66,18 +83,73 @@ type setupWifiDonePageData struct {
 	// SSID is the network the board is about to attempt, named in the
 	// handoff copy so the user knows what to reconnect to if it fails.
 	SSID string
+	// Steps drives the "routeline" partial: joining sits between the
+	// "WiFi + password" and "Configure station" stops (apSetupSteps(1)).
+	Steps []setupStep
+}
+
+// setupDonePageData is setup_done.html's render data: the LAN-mode setup
+// success page. Unlike handleActionsRestart's generic /restarting redirect,
+// this keeps the setup journey's route-line context — "Departures live" is
+// the current stop — while reusing the same reconnect-and-poll behaviour
+// (Task 8's reconnect.js) once the board actually restarts.
+type setupDonePageData struct {
+	basePage
+	Steps []setupStep
+}
+
+// setupStep is one stop on the setup route-line. State is "done", "now" or
+// "" (upcoming). The line reads left→right like a line-of-route diagram.
+type setupStep struct {
+	Label string
+	State string
+}
+
+// apSetupSteps builds the AP-mode route-line: current 0 is the WiFi+password
+// form, current 1 is the post-submit "joining" wait (setup_wifi_done.html).
+// Every stop at or before current is "done", the stop after current is
+// "now", everything later stays "" (upcoming).
+func apSetupSteps(current int) []setupStep {
+	steps := []setupStep{{Label: "Hotspot joined"}, {Label: "WiFi + password"}, {Label: "Configure station"}, {Label: "Departures live"}}
+	for i := range steps {
+		switch {
+		case i <= current:
+			steps[i].State = "done"
+		case i == current+1:
+			steps[i].State = "now"
+		}
+	}
+	return steps
+}
+
+// lanSetupSteps builds the LAN-mode route-line: current 0 is the
+// password+station form, current 1 is the post-submit success
+// (setup_done.html, "Departures live" now).
+func lanSetupSteps(current int) []setupStep {
+	steps := []setupStep{{Label: "Connected"}, {Label: "Password + station"}, {Label: "Departures live"}}
+	for i := range steps {
+		switch {
+		case i <= current:
+			steps[i].State = "done"
+		case i == current+1:
+			steps[i].State = "now"
+		}
+	}
+	return steps
 }
 
 type loginPageData struct {
 	basePage
-	Error string
+	Error       string
+	RateLimited bool
 }
 
 // NewServer builds the full route table: /setup, /login, /logout, /static/,
-// the authed status page (/), its live preview image (/preview.png), its
-// polled event feed (/events), and later tasks add the rest. authLimit gates
-// setup/login POSTs at a burst of 5/min; actionLimit gates other
-// state-changing routes at 30/min.
+// the authed status page (/) — whose live board renders client-side from
+// GET /api/board (board.js), not a server-streamed image — its polled event
+// feed (/events), and later tasks add the rest. authLimit gates setup/login
+// POSTs at a burst of 5/min; actionLimit gates other state-changing routes
+// at 30/min.
 func NewServer(svc *Service, log *slog.Logger) *Server {
 	s := &Server{
 		svc:         svc,
@@ -92,14 +164,29 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.HandleFunc("GET /setup", s.handleSetupGet)
 	s.mux.Handle("POST /setup", chain(http.HandlerFunc(s.handleSetupPost), rateLimit(s.authLimit, log)))
 	s.mux.HandleFunc("GET /login", s.handleLoginGet)
-	s.mux.Handle("POST /login", chain(http.HandlerFunc(s.handleLoginPost), rateLimit(s.authLimit, log)))
+	s.mux.Handle("POST /login", chain(http.HandlerFunc(s.handleLoginPost), rateLimitHTML(s.authLimit, log, s.handleLoginRateLimited)))
 	s.mux.Handle("POST /logout", chain(http.HandlerFunc(s.handleLogout),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /", chain(http.HandlerFunc(s.handleIndex), requireAuth(s.sessions, false)))
-	s.mux.Handle("GET /preview.png", chain(http.HandlerFunc(s.handlePreviewPNG), requireAuth(s.sessions, false)))
 	s.mux.Handle("GET /events", chain(http.HandlerFunc(s.handleEvents), requireAuth(s.sessions, false)))
-	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigGet), requireAuth(s.sessions, false)))
-	s.mux.Handle("POST /config", chain(http.HandlerFunc(s.handleConfigPost),
+	// GET /config is the settings list; the old monolith form (GET+POST
+	// /config, handleConfigGet/handleConfigPost) is gone entirely — every
+	// section below is its own sub-page.
+	s.mux.Handle("GET /config", chain(http.HandlerFunc(s.handleConfigList), requireAuth(s.sessions, false)))
+	s.mux.Handle("GET /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/departures", chain(http.HandlerFunc(s.handleConfigDeparturesPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/display", chain(http.HandlerFunc(s.handleConfigDisplayGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/display", chain(http.HandlerFunc(s.handleConfigDisplayPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/network", chain(http.HandlerFunc(s.handleConfigNetworkGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/network", chain(http.HandlerFunc(s.handleConfigNetworkPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/updates", chain(http.HandlerFunc(s.handleConfigUpdatesGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/updates", chain(http.HandlerFunc(s.handleConfigUpdatesPost),
+		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
+	s.mux.Handle("GET /config/admin", chain(http.HandlerFunc(s.handleConfigAdminGet), requireAuth(s.sessions, false)))
+	s.mux.Handle("POST /config/admin", chain(http.HandlerFunc(s.handleConfigAdminPost),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(staticFS())))
 
@@ -108,6 +195,15 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.HandleFunc("GET /generate_204", s.handleGenerate204)
 	s.mux.HandleFunc("GET /hotspot-detect.html", s.handleHotspotDetect)
 	s.mux.HandleFunc("GET /ncsi.txt", s.handleNCSI)
+
+	// GET /restarting is a public wait interstitial (handlers_actions.go):
+	// every restart-triggering save (config sub-page saves, first-boot setup,
+	// the actions page's restart button, a firmware update apply) 303s here
+	// instead of rendering its own page, so a session-lost or not-yet-relogged
+	// browser can still see it — deliberately outside the requireAuth chain,
+	// like GET /api/station, and exempted from setupGate below for the same
+	// reason.
+	s.mux.Handle("GET /restarting", http.HandlerFunc(s.handleRestarting))
 
 	s.mux.Handle("GET /actions", chain(http.HandlerFunc(s.handleActionsGet), requireAuth(s.sessions, false)))
 	s.mux.Handle("POST /actions/restart", chain(http.HandlerFunc(s.handleActionsRestart),
@@ -127,11 +223,19 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	s.mux.Handle("POST /actions/update/dismiss", chain(http.HandlerFunc(s.handleUpdateDismiss),
 		rateLimit(s.actionLimit, log), requireAuth(s.sessions, false), csrfProtect(log)))
 
+	// GET /api/station is public (offline CRS→name lookup, used by pre-auth
+	// setup pages) — deliberately outside the requireAuth/apiJSONErrors chain
+	// below, and exempted from setupGate alongside /static/ and the portal
+	// probes.
+	s.mux.Handle("GET /api/station", http.HandlerFunc(s.handleAPIStation))
+
 	// JSON API: mirrors the HTML surface. requireAuth(s.sessions, true) gives
 	// 401 JSON instead of a redirect; apiJSONErrors is outermost so it can
 	// also translate the shared csrfProtect/rateLimit middleware's plain-text
 	// 403/429 into the API's uniform {"error":"..."} shape.
 	s.mux.Handle("GET /api/status", chain(http.HandlerFunc(s.handleAPIStatus),
+		apiJSONErrors, requireAuth(s.sessions, true)))
+	s.mux.Handle("GET /api/board", chain(http.HandlerFunc(s.handleAPIBoard),
 		apiJSONErrors, requireAuth(s.sessions, true)))
 	s.mux.Handle("GET /api/config", chain(http.HandlerFunc(s.handleAPIConfigGet),
 		apiJSONErrors, requireAuth(s.sessions, true)))
@@ -157,12 +261,21 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 	return s
 }
 
-// setupGate redirects every request but /setup, /static/, and the
-// captive-portal probe endpoints to /setup while no admin password is
-// stored; once one exists, /setup itself 404s. The probe endpoints are
-// exempted like /static/ so they always reach their own AP-mode-aware
-// handlers instead of setupGate's generic redirect, which cannot answer the
-// OS-specific bodies those probes expect (see handlers_portal.go).
+// setupGate redirects every request but /setup, /static/, /api/station,
+// /restarting, and the captive-portal probe endpoints to /setup while no
+// admin password is stored; once one exists, /setup itself 404s. The probe
+// endpoints are exempted like /static/ so they always reach their own
+// AP-mode-aware handlers instead of setupGate's generic redirect, which
+// cannot answer the OS-specific bodies those probes expect (see
+// handlers_portal.go). /api/station is exempted because the pre-auth setup
+// pages use it (CRS→name lookup as the user types) and it carries no secrets
+// — see handleAPIStation. /restarting is exempted because first-boot setup
+// (handleSetupPost) itself now redirects there: the moment that redirect is
+// issued, SetInitialPassword has just written the password hash, so
+// s.needsSetup() should already read false on this same process — but the
+// exemption is added anyway as a defensive belt-and-braces, so a
+// session-lost or slow-reloading browser can never get bounced to /setup
+// while waiting for the restart it just triggered.
 //
 // While a password is still needed, the redirect target is normally the
 // relative "/setup" — but in AP mode (svc.Hotspot() != nil) a
@@ -173,7 +286,7 @@ func NewServer(svc *Service, log *slog.Logger) *Server {
 // displays.
 func (s *Server) setupGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") || isPortalProbePath(r.URL.Path) {
+		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/api/station" || r.URL.Path == "/restarting" || isPortalProbePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -250,20 +363,30 @@ func (s *Server) render(w http.ResponseWriter, page string, data any) {
 	switch page {
 	case "setup":
 		t = setupTemplate
-	case "setupDone":
-		t = setupDoneTemplate
 	case "setupWifiDone":
 		t = setupWifiDoneTemplate
+	case "setupDone":
+		t = setupDoneTemplate
 	case "setupWifiStatus":
 		t = setupWifiStatusTemplate
 	case "login":
 		t = loginTemplate
 	case "index":
 		t = statusTemplate
-	case "config":
-		t = configTemplate
-	case "applied":
-		t = appliedTemplate
+	case "configList":
+		t = configListTemplate
+	case "configDepartures":
+		t = configDeparturesTemplate
+	case "configDisplay":
+		t = configDisplayTemplate
+	case "configNetwork":
+		t = configNetworkTemplate
+	case "configUpdates":
+		t = configUpdatesTemplate
+	case "configAdmin":
+		t = configAdminTemplate
+	case "restarting":
+		t = restartingTemplate
 	case "actions":
 		t = actionsTemplate
 	case "rebooting":
@@ -319,12 +442,19 @@ func (s *Server) handleSetupGet(w http.ResponseWriter, _ *http.Request) {
 		s.render(w, "setupWifiStatus", setupWifiStatusPageData{
 			LastError: s.svc.LastSTAError(),
 			SSID:      s.configuredSSID(),
+			Steps:     apSetupSteps(0),
 		})
 		return
 	}
+	apMode := s.svc.Hotspot() != nil
+	steps := lanSetupSteps(0)
+	if apMode {
+		steps = apSetupSteps(0)
+	}
 	s.render(w, "setup", setupPageData{
-		APMode:    s.svc.Hotspot() != nil,
+		APMode:    apMode,
 		LastError: s.svc.LastSTAError(),
+		Steps:     steps,
 	})
 }
 
@@ -350,14 +480,18 @@ func (s *Server) configuredSSID() string {
 //     until this call, running runConfigErrorLoop's static E04 snapshot with
 //     no poller at all, so something must actually restart the process for
 //     the newly-valid config to take effect and E04 to clear. That is exactly
-//     what handleConfigPost's scheduleApply() does for later config saves, so
-//     setup schedules the same apply-by-restart here and renders a "setup
-//     done, restarting" page instead of redirecting — mirroring
-//     handleConfigPost/handleActionsRestart's render-then-scheduleApply shape
-//     rather than diverging from it. The session cookie is still issued
-//     (harmless: it is an in-memory session that dies with the process either
-//     way), so a browser that reloads before the restart completes is still
-//     authed, and one that reloads after it lands on /login per setupGate.
+//     what a restart-triggering config save's scheduleApply() does (e.g.
+//     handleConfigNetworkPost), so setup schedules the same apply-by-restart
+//     here. Unlike every other restart-triggering save (which 303s to the
+//     generic /restarting interstitial), this renders "setupDone" directly
+//     (200): the setup journey keeps its route-line context ("Departures
+//     live" as the current stop) through the restart wait, using the same
+//     Task 8 reconnect-and-poll behaviour (data-reconnect-delay +
+//     reconnect.js) once the board actually restarts. The session cookie is
+//     still issued (harmless: it is an in-memory session that dies with the
+//     process either way), so a browser that reloads before the restart
+//     completes is still authed, and one that reloads after it lands on
+//     /login per setupGate.
 //
 //   - AP mode: admin password + WiFi SSID/PSK only (see
 //     handleSetupPostAPMode) — no origin/token collected here, and
@@ -380,18 +514,21 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	token := r.PostFormValue("token")
 
 	if pw != confirm {
-		s.render(w, "setup", setupPageData{Error: "passwords do not match"})
+		s.render(w, "setup", setupPageData{Error: "passwords do not match", Steps: lanSetupSteps(0)})
 		return
 	}
 	if err := s.svc.SetInitialPassword(pw, origin, token); err != nil {
-		s.render(w, "setup", setupPageData{Error: err.Error()})
+		s.render(w, "setup", setupPageData{Error: err.Error(), Steps: lanSetupSteps(0)})
 		return
 	}
 
 	tok, _ := s.sessions.Create()
 	setSessionCookie(w, tok)
-	s.render(w, "setupDone", basePage{LoggedIn: false, CSRF: csrfFrom(r)})
 	s.scheduleApply()
+	s.render(w, "setupDone", setupDonePageData{
+		basePage: basePage{CSRF: csrfFrom(r)},
+		Steps:    lanSetupSteps(1),
+	})
 }
 
 // handleSetupPostAPMode handles the AP-mode partial setup: admin password +
@@ -412,20 +549,34 @@ func (s *Server) handleSetupPostAPMode(w http.ResponseWriter, r *http.Request) {
 	psk := r.PostFormValue("psk")
 
 	if pw != confirm {
-		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: "passwords do not match"})
+		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: "passwords do not match", Steps: apSetupSteps(0)})
 		return
 	}
 	if err := s.svc.SetupConnectivity(pw, ssid, psk); err != nil {
-		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: err.Error()})
+		s.render(w, "setup", setupPageData{APMode: true, LastError: s.svc.LastSTAError(), Error: err.Error(), Steps: apSetupSteps(0)})
 		return
 	}
 
-	s.render(w, "setupWifiDone", setupWifiDonePageData{basePage: basePage{CSRF: csrfFrom(r)}, SSID: ssid})
+	s.render(w, "setupWifiDone", setupWifiDonePageData{basePage: basePage{CSRF: csrfFrom(r)}, SSID: ssid, Steps: apSetupSteps(1)})
 	s.scheduleWifiRetry()
 }
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, "login", loginPageData{})
+}
+
+// handleLoginRateLimited is rateLimitHTML's onLimited callback for POST
+// /login: it renders the same login template as a normal GET, but with
+// RateLimited set and the response written as 429 instead of render()'s
+// implicit 200. It runs from the middleware chain, before handleLoginPost —
+// the limiter itself decides whether the bucket has room, so there's no
+// handler-level branch to hook into (see rateLimitHTML in middleware.go).
+func (s *Server) handleLoginRateLimited(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusTooManyRequests)
+	if err := loginTemplate.ExecuteTemplate(w, "layout", loginPageData{RateLimited: true}); err != nil {
+		s.log.Error("template render failed", "page", "login", "error", err.Error())
+	}
 }
 
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
@@ -435,7 +586,7 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	pw := r.PostFormValue("password")
 	if !s.svc.VerifyLogin(pw) {
-		s.render(w, "login", loginPageData{Error: "incorrect password"})
+		s.render(w, "login", loginPageData{Error: "That password didn't match — try again."})
 		return
 	}
 

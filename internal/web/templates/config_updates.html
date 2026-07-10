@@ -1,0 +1,21 @@
+{{define "title"}}Updates — Trainboard{{end}}
+{{define "content"}}
+<div class="backrow"><a href="/config">&lsaquo; Configuration</a></div>
+<h3>Updates</h3>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="/config/updates">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label class="f">Channel
+  <select name="update.channel">
+    <option value="stable" {{if ne .Cfg.Update.Channel "prerelease"}}selected{{end}}>stable</option>
+    <option value="prerelease" {{if eq .Cfg.Update.Channel "prerelease"}}selected{{end}}>prerelease</option>
+  </select>
+</label>
+<label class="check"><input type="checkbox" name="update.autoApply" {{if .Cfg.Update.AutoApply}}checked{{end}}> Install updates automatically (overnight)</label>
+<label class="check"><input type="checkbox" name="update.checks" {{if not .Cfg.Update.DisableChecks}}checked{{end}}> Check for updates periodically</label>
+<div class="savebar">
+  <span class="consequence">Restarts the board &mdash; departures pause ~15 seconds.</span>
+  <button class="btn" type="submit">Save</button>
+</div>
+</form>
+{{end}}

@@ -41,11 +41,10 @@ func newTestService(t *testing.T, cfg config.Config) (*Service, string) {
 func newTestServiceAt(t *testing.T, path string) *Service {
 	t.Helper()
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now().Add(-time.Hour),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now().Add(-time.Hour),
 	}
 	return NewService(path, src, Actions{Apply: func() {}, Reboot: func() error { return nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
@@ -76,11 +75,10 @@ func TestStatusEventsNewestFirstCapped(t *testing.T) {
 // more than 50 events must still only surface the newest 50, newest first.
 func TestStatusEventsCapAt50(t *testing.T) {
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(64),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(64),
+		Version:   "vtest",
+		StartedAt: time.Now(),
 	}
 	svc := NewService(filepath.Join(t.TempDir(), "config.json"), src, Actions{Apply: func() {}, Reboot: func() error { return nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := config.Save(svc.cfgPath, validCfg()); err != nil {
@@ -440,13 +438,12 @@ func TestServiceStatusCarriesSoakRemaining(t *testing.T) {
 func TestServiceSoakNilSourcesSafe(t *testing.T) {
 	// A Service whose Sources/Actions omit the soak funcs (older callers,
 	// other tests) must not panic: reads report 0, StartSoak errors.
-	// Snapshot/Ring/PreviewPNG must still be wired — Status() dereferences
-	// them unconditionally; only the soak funcs are deliberately absent.
+	// Snapshot/Ring must still be wired — Status() dereferences them
+	// unconditionally; only the soak funcs are deliberately absent.
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(1),
-		PreviewPNG: func() []byte { return nil },
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(1),
+		StartedAt: time.Now(),
 	}
 	svc := NewService("/nonexistent", src, Actions{}, testLog())
 	if got := svc.SoakRemaining(); got != 0 {
@@ -482,8 +479,7 @@ func TestServiceConnectivitySeams(t *testing.T) {
 }
 
 func TestServiceConnectivityNilSeamsSafe(t *testing.T) {
-	src := Sources{Snapshot: func() *board.Snapshot { return nil }, Ring: obs.NewRing(1),
-		PreviewPNG: func() []byte { return nil }, StartedAt: time.Now()}
+	src := Sources{Snapshot: func() *board.Snapshot { return nil }, Ring: obs.NewRing(1), StartedAt: time.Now()}
 	svc := NewService("/nonexistent", src, Actions{}, testLog())
 	if svc.Hotspot() != nil || svc.LastSTAError() != "" {
 		t.Fatal("nil seams must read as inactive")

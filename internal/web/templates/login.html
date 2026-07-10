@@ -1,9 +1,16 @@
-{{define "title"}}login — trainboard{{end}}
+{{define "title"}}Sign in — Trainboard{{end}}
 {{define "content"}}
-<h2>Log in</h2>
-{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<h2>Sign in</h2>
+{{if .RateLimited}}
+<div class="notice fault"><strong>Too many attempts.</strong> Sign-in is paused for a minute — try again shortly.</div>
+{{else if .Error}}
+<p class="error">{{.Error}}</p>
+{{end}}
 <form method="post" action="/login">
-  <label>Admin password <input type="password" name="password" required autofocus></label>
-  <button type="submit" class="primary">Log in</button>
+  <label class="f">Admin password
+    <input type="password" name="password" required autocomplete="current-password" autofocus>
+  </label>
+  <button class="btn" type="submit">Sign in</button>
 </form>
+<p class="caption" style="margin-top:1rem">This is the admin password you chose during setup.</p>
 {{end}}

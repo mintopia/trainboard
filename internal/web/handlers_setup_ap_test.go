@@ -47,11 +47,10 @@ func newAPSetupTestServer(t *testing.T) (srv *Server, svc *Service, path string,
 	path = filepath.Join(t.TempDir(), "config.json")
 	fakes = &apSetupFakes{hs: &board.Hotspot{SSID: "Trainboard-AB12", Addr: "192.168.4.1"}}
 	src := Sources{
-		Snapshot:   func() *board.Snapshot { return nil },
-		Ring:       obs.NewRing(8),
-		PreviewPNG: func() []byte { return nil },
-		Version:    "vtest",
-		StartedAt:  time.Now(),
+		Snapshot:  func() *board.Snapshot { return nil },
+		Ring:      obs.NewRing(8),
+		Version:   "vtest",
+		StartedAt: time.Now(),
 		Hotspot: func() *board.Hotspot {
 			fakes.mu.Lock()
 			defer fakes.mu.Unlock()
@@ -230,7 +229,6 @@ func newProvisionedAPFallbackTestServer(t *testing.T, lastErr string, hotspot bo
 	src := Sources{
 		Snapshot:     func() *board.Snapshot { return nil },
 		Ring:         obs.NewRing(8),
-		PreviewPNG:   func() []byte { return nil },
 		Version:      "vtest",
 		StartedAt:    time.Now(),
 		LastSTAError: func() string { return lastErr },
@@ -265,6 +263,16 @@ func TestSetupGetProvisionedAPFallbackServesReadOnlyStatus(t *testing.T) {
 	}
 	if !strings.Contains(body, "http://192.168.4.1/login") {
 		t.Fatalf("expected /login guidance for Retry WiFi now: %s", body)
+	}
+	// The wrong-details correction path is Configuration -> Network (where
+	// wifi.ssid/psk actually live once signed in) — NOT a link back to
+	// /setup, which for a provisioned+hotspot device only ever re-serves
+	// this same read-only view (GET) or 404s (POST): a dead end.
+	if !strings.Contains(body, "Configuration") || !strings.Contains(body, "Network") {
+		t.Fatalf("expected Configuration > Network correction guidance: %s", body)
+	}
+	if strings.Contains(body, `href="/setup"`) {
+		t.Fatalf("read-only status view must not link back to /setup (dead end): %s", body)
 	}
 	if strings.Contains(body, `name="ssid"`) || strings.Contains(body, `name="psk"`) ||
 		strings.Contains(body, `name="password"`) || strings.Contains(body, "<form") {
