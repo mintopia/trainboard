@@ -12,9 +12,10 @@ the Pi Zero 2 W, published to Cloudflare R2.
   support — it would double the build matrix and the fleet is Zero 2 W.
 - **Image hosting: R2 only.** GitHub Releases keep binaries + manifest as
   today; the image is not attached to releases.
-- **Image base: DietPi, pre-baked in CI.** CI boots the DietPi image once
-  under QEMU with network so its automated first-run completes, installs
-  trainboard, then shrinks and snapshots. The shipped image boots offline
+- **Image base: DietPi, pre-baked in CI.** CI boots the DietPi rootfs once
+  (systemd-nspawn on a native arm64 runner; QEMU fallback) with network so
+  its automated first-run completes, installs trainboard, then shrinks and
+  snapshots. The shipped image boots offline
   straight into AP-mode provisioning. This matches the OS the fleet runs.
 - **License: MIT, Copyright (c) 2026 Jessica Smith** (confirmed).
 
@@ -55,26 +56,34 @@ well as in CI):
    for unattended setup — hostname `trainboard`, locale/keyboard GB,
    `CONFIG_WIFI_COUNTRY_CODE=GB`, survey off, `dtparam=spi=on` in
    config.txt. No WiFi credentials — the shipped image is generic.
-3. **Pre-bake boot (QEMU):** boot the image under qemu-system-aarch64 with
-   user-mode NAT networking; wait for DietPi's automated first-run to
-   complete (poll via serial console/marker file). The trainboard install
-   runs as DietPi's own post-setup hook (`AUTO_SETUP_CUSTOM_SCRIPT_EXEC`
-   pointing at a script staged on the boot partition in step 2): it lays
-   down exactly what docs/deploy.md prescribes — slots directory +
-   launcher + released arm64 binary in the active slot + systemd service
-   enabled + minisign public keyring — then writes a completion marker so
-   step 4 knows the bake succeeded. **Self-update works out of the box on
-   first boot.**
+3. **Pre-bake boot:** boot the image's rootfs once in CI so DietPi's
+   automated first-run completes. Primary mechanism: `systemd-nspawn
+   --boot` on a native arm64 runner (`ubuntu-24.04-arm` — no emulation
+   needed); fallback if DietPi's first-run misbehaves in a container:
+   qemu-system-aarch64. Wait for completion via a marker file. The
+   trainboard install runs as DietPi's own post-setup hook
+   (`AUTO_SETUP_CUSTOM_SCRIPT_EXEC` pointing at a script staged on the
+   boot partition in step 2): it lays down exactly what docs/deploy.md
+   prescribes — slots directory + launcher + released arm64 binary in the
+   active slot + seeded updater state.json + the systemd unit enabled
+   with `--production --manage-network` (AP-mode provisioning is the
+   image's whole first-boot story) + the M4 USB-gadget lifeline units
+   (usb0 at 10.55.0.1) — then writes a completion marker so step 4 knows
+   the bake succeeded. The minisign keyring is embedded in the binaries
+   (internal/update/keyring.go), so there is no keyring file to install.
+   **Self-update works out of the box on first boot.**
 4. **Snapshot:** clean shutdown; fsck both partitions; reset first-boot
    state so per-device identity (SSH host keys, machine-id) regenerates on
    the user's first boot; shrink the rootfs; zero free space; truncate;
    compress to `trainboard-vX.Y.Z.img.xz`; emit `.sha256`.
 5. **Smoke gate:** loop-mount the final artifact read-only and assert: the
-   systemd unit is enabled, launcher + slot binary present and the binary's
-   embedded version matches the tag, keyring present, no WiFi credentials
-   or SSH host keys baked in. Publishing is gated on this check.
+   systemd unit is enabled (with `--manage-network`), launcher + slot
+   binary present and the slot binary's `--version` output matches the tag
+   (executable natively on the arm64 runner), updater state seeded
+   (active=a), first-boot resize re-armed, and no WiFi credentials or SSH
+   host keys baked in. Publishing is gated on this check.
 
-Risk note: the QEMU pre-bake is the novel piece. The plan must sequence a
+Risk note: the pre-bake boot is the novel piece. The plan must sequence a
 standalone proof-of-concept script (runnable locally and in a branch CI
 run) before the workflow wiring, with a fallback decision point: if DietPi
 first-run under QEMU proves unworkable, revisit the base-OS decision rather
