@@ -1,5 +1,8 @@
 {{define "title"}}Departures — Trainboard{{end}}
 {{define "content"}}
+<div class="cfgwrap">
+{{template "confignav" "departures"}}
+<div class="cfgdetail">
 <div class="backrow"><a href="/config">&lsaquo; Configuration</a></div>
 <h3>Departures</h3>
 {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
@@ -48,5 +51,7 @@
   <button class="btn" type="submit">Save</button>
 </div>
 </form>
+</div>
+</div>
 <script src="/static/suggest.js" defer></script>
 {{end}}

@@ -1,5 +1,8 @@
 {{define "title"}}Admin — Trainboard{{end}}
 {{define "content"}}
+<div class="cfgwrap">
+{{template "confignav" "admin"}}
+<div class="cfgdetail">
 <div class="backrow"><a href="/config">&lsaquo; Configuration</a></div>
 <h3>Admin</h3>
 {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
@@ -16,4 +19,6 @@
   <button class="btn" type="submit">Save</button>
 </div>
 </form>
+</div>
+</div>
 {{end}}

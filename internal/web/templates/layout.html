@@ -1,4 +1,12 @@
 {{define "routeline"}}{{if .}}<div class="route">{{range .}}<div class="stop{{if .State}} {{.State}}{{end}}">{{.Label}}</div>{{end}}</div>{{end}}{{end}}
+{{define "confignav"}}<nav class="cfgnav" aria-label="Configuration sections">
+  <a class="head" href="/config">Configuration</a>
+  <a href="/config/departures"{{if eq . "departures"}} class="on" aria-current="page"{{end}}>Departures</a>
+  <a href="/config/display"{{if eq . "display"}} class="on" aria-current="page"{{end}}>Display</a>
+  <a href="/config/network"{{if eq . "network"}} class="on" aria-current="page"{{end}}>Network</a>
+  <a href="/config/updates"{{if eq . "updates"}} class="on" aria-current="page"{{end}}>Updates</a>
+  <a href="/config/admin"{{if eq . "admin"}} class="on" aria-current="page"{{end}}>Admin</a>
+</nav>{{end}}
 {{define "layout"}}<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,7 +17,7 @@
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js" defer></script>
 </head>
-<body class="{{block "bodyclass" .}}{{end}}"{{block "bodyattrs" .}}{{end}}>
+<body class="{{if .LoggedIn}}shell {{end}}{{block "bodyclass" .}}{{end}}"{{block "bodyattrs" .}}{{end}}>
 <header>
   <div class="totem"><a class="brand" href="/">Trainboard</a></div>
   <div class="yellowband"></div>

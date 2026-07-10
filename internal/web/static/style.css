@@ -193,6 +193,7 @@ details.act-confirm > summary { list-style: none; }
 details.act-confirm > summary::-webkit-details-marker { display: none; }
 
 /* Events */
+#events { overflow-x: auto; } /* long nowrap attrs scroll here, never the page */
 table.events { width: 100%; border-collapse: collapse; font-size: .8rem; }
 table.events td { padding: .42rem 0; border-bottom: 1px solid #edf0f2; vertical-align: top; }
 table.events td.t { color: var(--muted); white-space: nowrap; padding-right: .9rem; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: .74rem; }
@@ -209,24 +210,73 @@ tr.warn td:last-child { color: var(--red-text); }
 /* Error paragraph (new pages) */
 p.error { color: var(--red-text); background: #fbe9e5; border-radius: 4px; padding: .6rem .8rem; font-size: .85rem; }
 
-/* Desktop adaptation (#64, #69) — phone-first unchanged; wide screens let the
-   existing hierarchy breathe instead of stretching a phone column, and use
-   the full browser width rather than centering in a fixed column. */
+/* Desktop shell — the totem rail. Phone-first styles above are untouched; at
+   desktop widths a LOGGED-IN page (body.shell, stamped by the layout) trades
+   the horizontal station sign for a station totem: the navy header becomes a
+   fixed full-height rail with the yellow band running down its edge, nav
+   stacked beneath the brand, and log out at the foot. Content fills the
+   remaining width. Logged-out pages (login, setup, wait pages) keep the
+   centered phone column, which already reads correctly at any width. */
 .cols { display: block; }
+.cfgnav { display: none; }
 @media (min-width: 64rem) {
-  /* Full viewport width: the totem/yellowband/tabs (direct children of body
-     via header) and the .cols grid span the whole browser window. */
-  body { max-width: none; }
-  main { padding: 0 2.5rem; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 3rem; align-items: start; }
-  /* Cap the hero elements (state line, board preview, notices, update
-     buttons) so the 4:1 board doesn't become comically tall on a wide
-     monitor — only the .cols grid below them is meant to fill the width. */
-  .statebar, .statebar + .caption, .boardwrap, .boardwrap + .caption, .notice, .btnrow { max-width: 64rem; }
-  /* Forms and settings/action lists keep a readable measure rather than
-     stretching across the full width. */
-  main form { max-width: 42rem; }
-  .setlist, .act, .act-confirm { max-width: 46rem; }
+  body.shell { max-width: none; padding: 0 0 2.5rem; }
+  body.shell header {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 15rem;
+    background: var(--navy); display: flex; flex-direction: column;
+  }
+  body.shell .yellowband { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; height: auto; }
+  body.shell .totem { padding: 1.3rem 1.4rem 1.1rem; }
+  body.shell .totem .brand { font-size: 1.3rem; }
+  body.shell .tabs {
+    flex: 1; flex-direction: column; align-items: stretch; gap: .3rem;
+    padding: 1.3rem 1.3rem 1.1rem 1rem; border-bottom: 0; font-size: .92rem;
+    overflow-y: auto;
+  }
+  body.shell .tabs a { color: #b9c6d4; padding: .55rem .65rem; border-radius: 4px; }
+  body.shell .tabs a.on { color: #fff; background: rgba(255, 255, 255, .12); box-shadow: none; }
+  body.shell .tabs form.inline { margin: auto 0 0; }
+  body.shell .tabs form.inline button {
+    color: #b9c6d4; font-size: .92rem; padding: .55rem .65rem; border-radius: 4px;
+    width: 100%; justify-content: flex-start; display: inline-flex;
+  }
+  body.shell main { margin-left: 15rem; padding: 1.6rem 3rem 0; }
+  /* Hero (state line, board, notices, update buttons) keeps a bounded width:
+     the 4:1 panel must not become a wall of amber on a wide monitor. */
+  body.shell .statebar { margin-top: .4rem; }
+  body.shell .statebar, body.shell .statebar + .caption, body.shell .boardwrap,
+  body.shell .boardwrap + .caption, body.shell .notice, body.shell .btnrow { max-width: 64rem; }
+  /* Below the two-column breakpoint the facts/events flow stays stacked;
+     cap it at the hero width so fact rows don't spread key/value apart. */
+  body.shell .cols { max-width: 64rem; }
+  /* Forms and settings/action lists keep a readable measure. */
+  body.shell main form { max-width: 42rem; }
+  body.shell .setlist, body.shell .act, body.shell .act-confirm { max-width: 46rem; }
   /* Full-bleed save bar is a phone affordance; inline it on desktop. */
-  .savebar { margin: 0; padding-left: 0; padding-right: 0; }
+  body.shell .savebar { margin: 0; padding-left: 0; padding-right: 0; }
+  /* Configuration master-detail: the shared section nav (hidden on phones)
+     becomes a sidebar beside the form, and the phone back-link drill-down
+     disappears — every section is one click away. */
+  body.shell .backrow { display: none; }
+  body.shell .cfgwrap { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 0 3rem; align-items: start; }
+  body.shell .cfgnav { display: block; position: sticky; top: 1.6rem; border-right: 1px solid var(--hairline); padding: .2rem 1.2rem .4rem 0; }
+  body.shell .cfgnav a {
+    display: flex; align-items: center; min-height: 40px;
+    font-family: var(--ra); font-size: .9rem; color: #405264;
+    text-decoration: none; padding: .45rem .7rem; border-radius: 4px;
+  }
+  body.shell .cfgnav a.head { font-size: .78rem; color: var(--muted); min-height: 0; padding: .35rem .7rem .55rem; }
+  body.shell .cfgnav a.on { color: var(--navy); background: #eef3f9; }
+  body.shell .cfgdetail h3 { margin-top: .45rem; }
+}
+/* Facts + events columns need real room; between 64 and 80rem they stay
+   stacked (the rail has already claimed 15rem of the window). */
+@media (min-width: 80rem) {
+  body.shell .cols { display: grid; grid-template-columns: 23rem minmax(0, 1fr); gap: 0 3.5rem; align-items: start; max-width: 88rem; }
+}
+@media (min-width: 64rem) and (hover: hover) {
+  body.shell .tabs a:hover, body.shell .tabs form.inline button:hover { color: #fff; background: rgba(255, 255, 255, .07); }
+  body.shell .tabs a.on:hover { background: rgba(255, 255, 255, .12); }
+  body.shell .cfgnav a:hover { color: var(--ink); background: #f2f5f8; }
+  body.shell .cfgnav a.on:hover { color: var(--navy); background: #eef3f9; }
 }

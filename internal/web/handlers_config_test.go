@@ -1232,3 +1232,35 @@ func TestFormatReplacements(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigSectionNav pins the desktop master-detail navigation: every
+// config section page renders the shared section nav (confignav, shown as a
+// sidebar at desktop widths, display:none on phones) with aria-current="page"
+// marking its own link, and the layout stamps the logged-in shell class on
+// <body> so the desktop stylesheet can swap the horizontal sign for the
+// totem rail without touching logged-out pages.
+func TestConfigSectionNav(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	for _, slug := range []string{"departures", "display", "network", "updates", "admin"} {
+		body := getPath(t, srv.Handler(), "/config/"+slug, cookie).Body.String()
+		if !strings.Contains(body, `class="cfgnav"`) {
+			t.Errorf("/config/%s: section nav missing", slug)
+		}
+		want := `<a href="/config/` + slug + `" class="on" aria-current="page">`
+		if !strings.Contains(body, want) {
+			t.Errorf("/config/%s: active link %s missing", slug, want)
+		}
+		if !strings.Contains(body, `<body class="shell`) {
+			t.Errorf("/config/%s: logged-in page missing body shell class", slug)
+		}
+	}
+
+	// Logged-out pages must NOT get the shell class: the desktop rail is a
+	// logged-in affordance; login/setup keep the centered column.
+	login := getPath(t, srv.Handler(), "/login").Body.String()
+	if strings.Contains(login, `<body class="shell`) {
+		t.Error("/login: logged-out page must not carry the shell class")
+	}
+}
