@@ -1322,6 +1322,29 @@ func TestFormatReplacements(t *testing.T) {
 	}
 }
 
+// TestConfigListDesktopRedirectScript pins the desktop redirect to /config/departures:
+// GET /config (authed) renders an inline script that location.replace's to
+// /config/departures when the viewport is >=64rem (desktop), keeping the index
+// as mobile navigation. The script is present on the index page but the index
+// itself has no master-detail rail; the rail only appears on section pages
+// like /config/departures.
+func TestConfigListDesktopRedirectScript(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /config: want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `min-width: 64rem`) {
+		t.Errorf("expected desktop redirect script with media query, got: %s", body)
+	}
+	if !strings.Contains(body, `location.replace("/config/departures")`) {
+		t.Errorf("expected location.replace redirect, got: %s", body)
+	}
+}
+
 // TestConfigSectionNav pins the desktop master-detail navigation: every
 // config section page renders the shared section nav (confignav, shown as a
 // sidebar at desktop widths, display:none on phones) with aria-current="page"
