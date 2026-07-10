@@ -401,6 +401,9 @@ func TestStaticFontsServed(t *testing.T) {
 	for _, path := range []string{
 		"/static/fonts/rail-alphabet-dark.woff2",
 		"/static/fonts/rail-alphabet-light.woff2",
+		"/static/fonts/dotmatrix-regular.woff2",
+		"/static/fonts/dotmatrix-bold.woff2",
+		"/static/fonts/dotmatrix-bold-tall.woff2",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()

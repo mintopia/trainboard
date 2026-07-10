@@ -11,6 +11,21 @@
   src: url(/static/fonts/rail-alphabet-light.woff2) format("woff2");
   font-weight: 400; font-style: normal; font-display: swap;
 }
+@font-face {
+  font-family: "Dot Matrix";
+  src: url(/static/fonts/dotmatrix-regular.woff2) format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Dot Matrix Bold";
+  src: url(/static/fonts/dotmatrix-bold.woff2) format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Dot Matrix Bold Tall";
+  src: url(/static/fonts/dotmatrix-bold-tall.woff2) format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
 
 :root {
   --navy: #002f63;
