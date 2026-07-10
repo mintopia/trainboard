@@ -264,6 +264,16 @@ func TestSetupGetProvisionedAPFallbackServesReadOnlyStatus(t *testing.T) {
 	if !strings.Contains(body, "http://192.168.4.1/login") {
 		t.Fatalf("expected /login guidance for Retry WiFi now: %s", body)
 	}
+	// The wrong-details correction path is Configuration -> Network (where
+	// wifi.ssid/psk actually live once signed in) — NOT a link back to
+	// /setup, which for a provisioned+hotspot device only ever re-serves
+	// this same read-only view (GET) or 404s (POST): a dead end.
+	if !strings.Contains(body, "Configuration") || !strings.Contains(body, "Network") {
+		t.Fatalf("expected Configuration > Network correction guidance: %s", body)
+	}
+	if strings.Contains(body, `href="/setup"`) {
+		t.Fatalf("read-only status view must not link back to /setup (dead end): %s", body)
+	}
 	if strings.Contains(body, `name="ssid"`) || strings.Contains(body, `name="psk"`) ||
 		strings.Contains(body, `name="password"`) || strings.Contains(body, "<form") {
 		t.Fatalf("read-only status view must not render any setup form fields: %s", body)

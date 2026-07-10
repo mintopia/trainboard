@@ -147,12 +147,42 @@ func TestServerRestartingExemptFromSetupGate(t *testing.T) {
 	}
 }
 
+// TestSetupStepStates pins the route-line step model the whole setup-flow
+// visual contract rides on: done stops strictly before the current position,
+// "now" on the stop after current, "" (upcoming) after that — for both
+// builders at both positions each is actually rendered with (form=0,
+// post-submit wait/success=1).
+func TestSetupStepStates(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []setupStep
+		want  []string // State per position
+	}{
+		{"apSetupSteps(0) wifi form", apSetupSteps(0), []string{"done", "now", "", ""}},
+		{"apSetupSteps(1) joining wait", apSetupSteps(1), []string{"done", "done", "now", ""}},
+		{"lanSetupSteps(0) password+station form", lanSetupSteps(0), []string{"done", "now", ""}},
+		{"lanSetupSteps(1) departures-live success", lanSetupSteps(1), []string{"done", "done", "now"}},
+	}
+	for _, tc := range cases {
+		if len(tc.steps) != len(tc.want) {
+			t.Fatalf("%s: want %d stops, got %d (%+v)", tc.name, len(tc.want), len(tc.steps), tc.steps)
+		}
+		for i, w := range tc.want {
+			if tc.steps[i].State != w {
+				t.Errorf("%s: stop %d (%s): want state %q, got %q", tc.name, i, tc.steps[i].Label, w, tc.steps[i].State)
+			}
+		}
+	}
+}
+
 // (b) POST /setup with password+confirm+origin creates the password (usable
 // via VerifyLogin), issues a session cookie, schedules Actions.Apply (the
-// same apply-by-restart a config sub-page save uses — this is what actually clears
-// a virgin device's E04 fault screen, since runConfigErrorLoop has no
-// poller), renders the restart page instead of redirecting to /, and /setup
-// then 404s.
+// same apply-by-restart a config sub-page save uses — this is what actually
+// clears a virgin device's E04 fault screen, since runConfigErrorLoop has no
+// poller), renders the route-line "setupDone" page directly (200,
+// "Departures live" as the now stop, with Task 8's reconnect-and-poll to
+// carry the browser across the restart) instead of redirecting to / or to
+// the generic /restarting interstitial, and /setup then 404s.
 func TestServerSetupPostCreatesPasswordAndSession(t *testing.T) {
 	srv, svc, applyCh := newTestServerWithApply(t)
 	h := srv.Handler()
