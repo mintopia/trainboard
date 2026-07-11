@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
-[ -n "$TAG" ] && [ -n "$WORK" ] || usage
+if [ -z "$TAG" ] || [ -z "$WORK" ]; then usage; fi
 case "$STAGE" in
   fetch|inject|bake|snapshot|smoke|all) ;;
   *) usage;;
@@ -352,7 +352,7 @@ dump_diagnostics() {
   # DietPi's first-run transcript is the single most useful artifact.
   for f in dietpi-firstrun-setup.log dietpi-update.log dietpi-firstboot.log \
            fs_partition_resize.log dietpi-ramlog.log; do
-    [ -f "$WORK/root/var/lib/dietpi/logs/$f" ] && cp "$WORK/root/var/lib/dietpi/logs/$f" "$dst/" 2>/dev/null || true
+    if [ -f "$WORK/root/var/lib/dietpi/logs/$f" ]; then cp "$WORK/root/var/lib/dietpi/logs/$f" "$dst/" 2>/dev/null || true; fi
   done
   cp "$WORK/root/boot/dietpi/.install_stage" "$dst/install_stage.txt" 2>/dev/null || true
   ls -la "$WORK/root/boot" > "$dst/rootfs-boot-listing-after.txt" 2>/dev/null || true

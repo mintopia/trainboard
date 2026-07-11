@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
-[ -n "$TAG" ] && [ -n "$WORK" ] || usage
+if [ -z "$TAG" ] || [ -z "$WORK" ]; then usage; fi
 
 if [ -n "$LIST_FILE" ] && [ -z "$DRY" ]; then
   echo "--list-file is only valid together with --dry-run" >&2
