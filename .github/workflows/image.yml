@@ -14,7 +14,7 @@ on:
   # workflow that lands on main is workflow_dispatch-only, per policy.
   push:
     branches: [feat/distribution-image]
-    paths: [.github/workflows/image.yml]
+    paths: [.github/workflows/image.yml, deploy/image/**]
 env:
   # Only consulted by the push-trigger branch test above (workflow_dispatch
   # always supplies inputs.tag). Bakes the current latest release so the
