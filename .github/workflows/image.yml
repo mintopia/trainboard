@@ -40,10 +40,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs util-linux unzip
           # ubuntu-24.04-arm has no `awscli` apt candidate (arm64 universe
-          # gap) — install AWS CLI v2 from the official aarch64 bundle.
-          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
-          unzip -q /tmp/awscliv2.zip -d /tmp
-          sudo /tmp/aws/install
+          # gap); GitHub's runner image ships AWS CLI v2 preinstalled, but
+          # don't rely on that staying true — install the official aarch64
+          # bundle only if `aws` isn't already on PATH.
+          if ! command -v aws >/dev/null 2>&1; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            sudo /tmp/aws/install
+          fi
           aws --version
       - name: build image
         env: { GH_TOKEN: "${{ github.token }}" }
