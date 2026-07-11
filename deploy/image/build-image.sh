@@ -272,11 +272,20 @@ prep_container() {
   # GitHub reachable from the container). Reverted in unprep, and inert on
   # the device regardless (install_stage=2 skips first-run there, and
   # fs_partition_resize re-migrates the untouched FAT copy on real boot).
+  # Also point the IPv6 leg at loopback: G_CHECK_NET skips it when the runner
+  # has no IPv6 default route (the usual GH-hosted case, so normally a no-op),
+  # but if a runner ever has a global IPv6 address with ICMP still filtered
+  # the ping to CONFIG_CHECK_CONNECTION_IPV6 (2620:fe::fe) would abort just
+  # like the IPv4 leg — ::1 is always reachable. Both reverted in unprep.
   local dietpitxt="$WORK/root/boot/dietpi.txt"
   if [ -f "$dietpitxt" ]; then
     [ -f "$WORK/.conn_ip.prebake" ] || grep -m1 '^CONFIG_CHECK_CONNECTION_IP=' "$dietpitxt" > "$WORK/.conn_ip.prebake" 2>/dev/null || true
-    sed -i 's/^CONFIG_CHECK_CONNECTION_IP=.*/CONFIG_CHECK_CONNECTION_IP=127.0.0.1/' "$dietpitxt"
-    bake_log "bake-only: CONFIG_CHECK_CONNECTION_IP -> 127.0.0.1 (runner blocks outbound ICMP)"
+    [ -f "$WORK/.conn_ipv6.prebake" ] || grep -m1 '^CONFIG_CHECK_CONNECTION_IPV6=' "$dietpitxt" > "$WORK/.conn_ipv6.prebake" 2>/dev/null || true
+    sed -i \
+      -e 's/^CONFIG_CHECK_CONNECTION_IP=.*/CONFIG_CHECK_CONNECTION_IP=127.0.0.1/' \
+      -e 's/^CONFIG_CHECK_CONNECTION_IPV6=.*/CONFIG_CHECK_CONNECTION_IPV6=::1/' \
+      "$dietpitxt"
+    bake_log "bake-only: CONFIG_CHECK_CONNECTION_IP{,V6} -> loopback (runner blocks outbound ICMP)"
   fi
 }
 
@@ -296,10 +305,14 @@ unprep_container() {
   # no two flashed devices share a UUID and nothing reads stale container
   # identity before preboot runs.
   rm -f "$WORK/root/boot/dietpi/.hw_model"
-  # Revert the bake-only ICMP-gate override to the image's shipped value.
+  # Revert the bake-only ICMP-gate overrides to the image's shipped values.
   if [ -f "$WORK/.conn_ip.prebake" ] && [ -s "$WORK/.conn_ip.prebake" ]; then
     sed -i "s|^CONFIG_CHECK_CONNECTION_IP=.*|$(cat "$WORK/.conn_ip.prebake")|" "$WORK/root/boot/dietpi.txt"
     bake_log "restored CONFIG_CHECK_CONNECTION_IP to shipped value"
+  fi
+  if [ -f "$WORK/.conn_ipv6.prebake" ] && [ -s "$WORK/.conn_ipv6.prebake" ]; then
+    sed -i "s|^CONFIG_CHECK_CONNECTION_IPV6=.*|$(cat "$WORK/.conn_ipv6.prebake")|" "$WORK/root/boot/dietpi.txt"
+    bake_log "restored CONFIG_CHECK_CONNECTION_IPV6 to shipped value"
   fi
 }
 
