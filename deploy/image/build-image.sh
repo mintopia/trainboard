@@ -262,6 +262,22 @@ prep_container() {
       fi
     done
   fi
+  # DietPi's first-run connectivity gate (dietpi-globals G_CHECK_NET) does
+  # `ping -4c1 CONFIG_CHECK_CONNECTION_IP` (default 9.9.9.9). GitHub-hosted
+  # runners block outbound ICMP to the internet, so that ping fails,
+  # dietpi-update aborts, and Prompt_on_Failure FORCES an interactive
+  # whiptail prompt that blocks unattended until the hard timeout — run 4's
+  # exact death. Point the gate at loopback for the bake only; the TCP/DNS/
+  # HTTPS that dietpi-update actually uses are unaffected (verified: apt +
+  # GitHub reachable from the container). Reverted in unprep, and inert on
+  # the device regardless (install_stage=2 skips first-run there, and
+  # fs_partition_resize re-migrates the untouched FAT copy on real boot).
+  local dietpitxt="$WORK/root/boot/dietpi.txt"
+  if [ -f "$dietpitxt" ]; then
+    [ -f "$WORK/.conn_ip.prebake" ] || grep -m1 '^CONFIG_CHECK_CONNECTION_IP=' "$dietpitxt" > "$WORK/.conn_ip.prebake" 2>/dev/null || true
+    sed -i 's/^CONFIG_CHECK_CONNECTION_IP=.*/CONFIG_CHECK_CONNECTION_IP=127.0.0.1/' "$dietpitxt"
+    bake_log "bake-only: CONFIG_CHECK_CONNECTION_IP -> 127.0.0.1 (runner blocks outbound ICMP)"
+  fi
 }
 
 # Undo the container-only identity after a successful bake: the flashed
@@ -280,6 +296,11 @@ unprep_container() {
   # no two flashed devices share a UUID and nothing reads stale container
   # identity before preboot runs.
   rm -f "$WORK/root/boot/dietpi/.hw_model"
+  # Revert the bake-only ICMP-gate override to the image's shipped value.
+  if [ -f "$WORK/.conn_ip.prebake" ] && [ -s "$WORK/.conn_ip.prebake" ]; then
+    sed -i "s|^CONFIG_CHECK_CONNECTION_IP=.*|$(cat "$WORK/.conn_ip.prebake")|" "$WORK/root/boot/dietpi.txt"
+    bake_log "restored CONFIG_CHECK_CONNECTION_IP to shipped value"
+  fi
 }
 
 # Best-effort capture of what happened inside the container, whatever the
@@ -342,7 +363,10 @@ stage_bake() {
     local tailpid=$!
     # No -n/--network-veth: the container shares the host network namespace,
     # so apt + dietpi-update get the runner's outbound HTTPS directly.
-    # --resolv-conf=replace-host gives it working DNS. --timezone=off avoids
+    # --resolv-conf=off KEEPS the image's shipped /etc/resolv.conf
+    # (nameserver 9.9.9.9) instead of stamping the runner's over it — GH
+    # runners ship a 127.0.0.53 systemd-resolved stub that is meaningless
+    # inside the container and would break DNS. --timezone=off avoids
     # nspawn bind-mounting a host /etc/localtime the RPi image doesn't want.
     # --setenv=TERM=linux: with the console piped to a file, PID 1 inherits
     # TERM=unknown and passes it to console-getty -> the autologin root
@@ -351,7 +375,7 @@ stage_bake() {
     # disarms the automation (AUTO_SETUP_AUTOMATED=0 + autologin removal).
     # Local PoC evidence, boot 1 of the migration-fix iteration.
     systemd-nspawn --directory="$WORK/root" --boot --machine=tbbake \
-      --resolv-conf=replace-host --timezone=off --setenv=TERM=linux \
+      --resolv-conf=off --timezone=off --setenv=TERM=linux \
       > "$console" 2>&1 &
     local npid=$!
 
