@@ -1,4 +1,7 @@
-# TEMPORARY pre-bake proof-of-concept (Task 4, GO/NO-GO gate).
+# TEMPORARY image proof-of-concept (Tasks 4+5).
+# Runs the full fetch -> inject -> bake -> snapshot -> smoke chain: bake is
+# the GO/NO-GO boot gate, snapshot produces the shippable trainboard-<tag>.img.xz,
+# smoke re-verifies every ship-critical property on the compressed artifact.
 # Push-triggered on the feature branch only — workflow_dispatch cannot reach
 # a workflow that isn't on the default branch, so every push of an iteration
 # runs it. Deleted in Task 7 once the real image pipeline lands.
@@ -12,11 +15,11 @@ on:
 jobs:
   bake:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: install host tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs util-linux
       - name: fetch
         env: { GH_TOKEN: "${{ github.token }}" }
         run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage fetch
@@ -24,7 +27,21 @@ jobs:
         run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage inject
       - name: bake
         run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage bake
-      - uses: actions/upload-artifact@v4
+      - name: snapshot
+        run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage snapshot
+      - name: smoke
+        run: sudo -E deploy/image/build-image.sh --tag v0.4.1 --work /tmp/tbimg --stage smoke
+      - name: image artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trainboard-image
+          path: |
+            /tmp/tbimg/trainboard-*.img.xz
+            /tmp/tbimg/trainboard-*.img.xz.sha256
+          if-no-files-found: warn
+      - name: bake logs
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bake-logs
