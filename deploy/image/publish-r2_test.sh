@@ -54,9 +54,11 @@ grep -qF "$CP $T/$IMG.sha256 s3://mintopia-github/trainboard/$IMG.sha256" <<<"$O
 [ "$(grep -c "^$CP $T/" <<<"$OUT")" -eq 2 ] || fail "expected exactly 2 versioned uploads"
 
 echo "=== Checking latest-alias copy (2 objects) ==="
-grep -qF "$CP s3://mintopia-github/trainboard/$IMG s3://mintopia-github/trainboard/trainboard-latest.img.xz" <<<"$OUT" || fail "missing latest alias copy"
-grep -qF "$CP s3://mintopia-github/trainboard/$IMG.sha256 s3://mintopia-github/trainboard/trainboard-latest.img.xz.sha256" <<<"$OUT" || fail "missing latest alias sha256 copy"
-[ "$(grep -c "^$CP s3://" <<<"$OUT")" -eq 2 ] || fail "expected exactly 2 alias copies"
+# --copy-props none: R2 doesn't implement GetObjectTagging, which aws s3
+# cp's server-side copy calls by default to replicate tags; skip it.
+grep -qF "$CP --copy-props none s3://mintopia-github/trainboard/$IMG s3://mintopia-github/trainboard/trainboard-latest.img.xz" <<<"$OUT" || fail "missing latest alias copy"
+grep -qF "$CP --copy-props none s3://mintopia-github/trainboard/$IMG.sha256 s3://mintopia-github/trainboard/trainboard-latest.img.xz.sha256" <<<"$OUT" || fail "missing latest alias sha256 copy"
+[ "$(grep -c "^$CP --copy-props none s3://" <<<"$OUT")" -eq 2 ] || fail "expected exactly 2 alias copies"
 
 echo "=== Checking prune deletes exactly the 2 oldest versions (4 keys) ==="
 deletes=$(grep "^$RM " <<<"$OUT" || true)
