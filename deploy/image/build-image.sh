@@ -229,12 +229,19 @@ mount_bake() {
 #    skips CPU-governor setup, serial-console setup, NTP mode setup and
 #    the RPi clock rewrite. Restored (or removed) after a successful bake
 #    so the flashed device re-detects its real RPi model on first boot.
-#  - /boot/Automation_Custom_Script.sh compat symlink: dietpi-software
-#    executes that literal path, but inject stages the hook on the FAT
-#    partition (mounted at /boot/firmware on Bookworm). Create the
-#    symlink only if the path does not already resolve.
+#  - FAT->rootfs config migration: on Bookworm-layout images the copy of
+#    dietpi.txt that DietPi actually READS is /boot/dietpi.txt on the
+#    ROOTFS; the FAT partition's copy (the one inject edits, and the one
+#    users edit after flashing) is migrated over it on first boot by
+#    fs_partition_resize.sh — which in a container dies before the
+#    migration (its `mount -o remount,rw /` can't resolve the fstab root
+#    UUID). Local PoC evidence: firstboot then read the shipped
+#    AUTO_SETUP_AUTOMATED=0, never wrote the autologin drop-ins, and the
+#    container idled at a login prompt for the whole 30-min budget.
+#    Replicate the migration here, host-side, using
+#    fs_partition_resize.sh's own file list.
 prep_container() {
-  local dst="$WORK/logs" hwid="$WORK/root/etc/.dietpi_hw_model_identifier"
+  local dst="$WORK/logs" hwid="$WORK/root/etc/.dietpi_hw_model_identifier" f
   # Ground truth for the task report, captured before every boot loop.
   cp "$WORK/root/etc/fstab" "$dst/image-fstab.txt" 2>/dev/null || true
   ls -la "$WORK/root/boot" > "$dst/rootfs-boot-listing.txt" 2>/dev/null || true
@@ -243,9 +250,17 @@ prep_container() {
     bake_log "pre-bake hw_model_identifier: $(cat "$hwid")"
   fi
   echo 75 > "$hwid"
-  if [ "$BOOTMNT" = "$WORK/root/boot/firmware" ] && [ ! -e "$WORK/root/boot/Automation_Custom_Script.sh" ]; then
-    ln -sf firmware/Automation_Custom_Script.sh "$WORK/root/boot/Automation_Custom_Script.sh"
-    bake_log "created /boot/Automation_Custom_Script.sh -> firmware/ compat symlink"
+  if [ "$BOOTMNT" = "$WORK/root/boot/firmware" ]; then
+    # Same list fs_partition_resize.sh migrates for the RPi /boot/firmware
+    # layout on real hardware.
+    for f in dietpi.txt dietpi-wifi.txt Automation_Custom_PreScript.sh \
+             Automation_Custom_Script.sh unattended_pivpn.conf dietpi-k3s.yaml; do
+      if [ -f "$BOOTMNT/$f" ]; then
+        rm -f "$WORK/root/boot/$f"   # never write through a stale symlink
+        cp "$BOOTMNT/$f" "$WORK/root/boot/$f"
+        bake_log "migrated $f from FAT to rootfs /boot (fs_partition_resize is dead in-container)"
+      fi
+    done
   fi
 }
 
@@ -298,6 +313,11 @@ stage_bake() {
 
   command -v systemd-nspawn >/dev/null 2>&1 || { echo "systemd-nspawn not found (install systemd-container)" >&2; exit 1; }
 
+  # Self-heal from a previous aborted bake on the same host (stale machined
+  # registration or supervisor would make every launch fail "already
+  # exists"/"currently busy"). No-op on a clean CI runner.
+  machinectl terminate tbbake 2>/dev/null || true
+
   grow_image
   mount_bake
   bake_log "mounted: rootfs=${LOOP}p2 -> $WORK/root, boot=${LOOP}p1 -> $BOOTMNT"
@@ -306,10 +326,11 @@ stage_bake() {
 
   local max_boots=5
   local deadline=$(( $(date +%s) + 30 * 60 ))
-  local boot=0 baked=0
+  local boot=0 baked=0 boot_start
   while [ "$boot" -lt "$max_boots" ]; do
     boot=$((boot + 1))
     if [ -f "$marker" ]; then baked=1; break; fi
+    boot_start=$(date +%s)
     local console="$WORK/logs/nspawn-boot-$boot.log"
     bake_log "boot attempt $boot/$max_boots -> $console"
     : > "$console"
@@ -323,8 +344,14 @@ stage_bake() {
     # so apt + dietpi-update get the runner's outbound HTTPS directly.
     # --resolv-conf=replace-host gives it working DNS. --timezone=off avoids
     # nspawn bind-mounting a host /etc/localtime the RPi image doesn't want.
+    # --setenv=TERM=linux: with the console piped to a file, PID 1 inherits
+    # TERM=unknown and passes it to console-getty -> the autologin root
+    # shell; DietPi's whiptail/tput UI then crashes dietpi-update
+    # (arithmetic on empty `tput cols`) and Prompt_on_Failure PERMANENTLY
+    # disarms the automation (AUTO_SETUP_AUTOMATED=0 + autologin removal).
+    # Local PoC evidence, boot 1 of the migration-fix iteration.
     systemd-nspawn --directory="$WORK/root" --boot --machine=tbbake \
-      --resolv-conf=replace-host --timezone=off \
+      --resolv-conf=replace-host --timezone=off --setenv=TERM=linux \
       > "$console" 2>&1 &
     local npid=$!
 
@@ -345,8 +372,17 @@ stage_bake() {
     done
     wait "$npid" 2>/dev/null || true
     kill "$tailpid" 2>/dev/null || true
-    bake_log "boot $boot ended (nspawn exited)"
+    bake_log "boot $boot ended (nspawn exited after $(( $(date +%s) - boot_start ))s)"
     if [ -f "$marker" ]; then baked=1; break; fi
+    # A container that lives under 15s never even reached DietPi's earliest
+    # possible mid-first-run reboot — that's nspawn failing to launch (e.g.
+    # a stale directory lock). Relaunching would burn the remaining boots
+    # on the same error; fail fast instead.
+    if [ $(( $(date +%s) - boot_start )) -lt 15 ]; then
+      dump_diagnostics
+      echo "stage bake: container exited within 15s of launch — nspawn launch failure, see $console" >&2
+      exit 1
+    fi
     bake_log "no marker yet after boot $boot (DietPi likely rebooted mid-first-run) — relaunching"
   done
 
