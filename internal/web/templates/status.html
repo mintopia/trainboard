@@ -26,13 +26,14 @@
 {{if .Available}}
 <div class="notice"><strong>Update available.</strong> {{.Available}} is ready to install — the board restarts and is back in about a minute.{{if .NotesURL}} <a href="{{.NotesURL}}" target="_blank" rel="noopener">Release notes</a>.{{end}}</div>
 <div class="btnrow" style="margin-bottom:1rem">
-  <form method="post" action="/actions/update/apply"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <form method="post" action="/actions/update/apply" data-busy="Installing update — downloading and verifying… the board restarts itself when it's done."><input type="hidden" name="csrf" value="{{$.CSRF}}">
     <button class="btn" type="submit">Install {{.Available}}</button></form>
-  <form method="post" action="/actions/update/check"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <form method="post" action="/actions/update/check" data-busy="Checking for updates…"><input type="hidden" name="csrf" value="{{$.CSRF}}">
     <button class="btn ghost" type="submit">Check again</button></form>
 </div>
 {{else if .Enabled}}
-<form method="post" action="/actions/update/check" style="margin:0 0 1rem"><input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{if and $.CheckedNow (not .LastError)}}<div class="notice calm">You're up to date &mdash; {{.Running}} is the latest release.</div>{{end}}
+<form method="post" action="/actions/update/check" style="margin:0 0 1rem" data-busy="Checking for updates…"><input type="hidden" name="csrf" value="{{$.CSRF}}">
   <button class="btn ghost" type="submit">Check for updates</button></form>
 {{end}}
 {{if .LastError}}<p class="error">Update check failed: {{.LastError}}</p>{{end}}
@@ -59,6 +60,7 @@
 </section>
 </div>
 <script src="/static/board.js" defer></script>
+<script src="/static/busy.js" defer></script>
 {{end}}
 {{define "eventlist"}}
 <table class="events"><tbody>

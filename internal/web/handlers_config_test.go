@@ -23,6 +23,11 @@ const configTestPassword = "longenough1"
 // in a rendered page is unambiguous.
 const configTestToken = "tok-super-secret-xyz"
 
+// configTestRTTPassword is the RealTime Trains password stored by
+// newConfigTestServer's baseline config — a value distinctive enough that its
+// accidental presence anywhere in a rendered page is unambiguous.
+const configTestRTTPassword = "rtt-password-secret123"
+
 // connFakes tracks connectivity seam state for testing, backed by plain vars.
 type connFakes struct {
 	hs        *board.Hotspot
@@ -60,6 +65,7 @@ func newConfigTestServerCore(t *testing.T, conn *connFakes) (srv *Server, svc *S
 	cfg := config.Default()
 	cfg.Board.Origin = "PAD"
 	cfg.Darwin.Token = configTestToken
+	cfg.RTT.Password = configTestRTTPassword
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -699,6 +705,49 @@ func TestConfigDisplayValidationError(t *testing.T) {
 	assertApplyNotCalled(t, applyCh)
 }
 
+// TestConfigDisplayPostSavesHeadcodes covers layout.headcodes' checkbox
+// semantics (Task 6): a POST with the key present saves true, and a second
+// POST without the key (absent = unchecked) saves it back to false — mirrors
+// TestConfigDisplay's layout.times coverage above, for the new field.
+func TestConfigDisplayPostSavesHeadcodes(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := baseDisplayForm()
+	form.Set("layout.headcodes", "on")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/display", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cur.Layout.Headcodes {
+		t.Fatalf("Layout.Headcodes = false, want true")
+	}
+
+	form = baseDisplayForm()
+	form.Del("layout.headcodes")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/display", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("second POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Layout.Headcodes {
+		t.Fatalf("Layout.Headcodes = true, want false (checkbox key absent)")
+	}
+}
+
 // baseNetworkForm returns a fresh, fully-populated, valid form matching the
 // baseline config written by newConfigTestServer's network fields (no wifi
 // configured, secrets left blank i.e. "keep the stored value").
@@ -858,12 +907,12 @@ func TestConfigNetworkSecretsNeverRoundTrip(t *testing.T) {
 	if strings.Contains(body, configTestToken) {
 		t.Fatalf("stored Darwin token leaked into network page body: %s", body)
 	}
-	for _, want := range []string{`name="wifi.psk" placeholder="unchanged"`, `name="darwin.token" placeholder="unchanged"`} {
+	for _, want := range []string{`name="wifi.psk" placeholder="unchanged"`, `name="darwin.token" placeholder="unchanged"`, `name="rtt.password" placeholder="unchanged"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected %s in network page: %s", want, body)
 		}
 	}
-	for _, secretField := range []string{"wifi.psk", "darwin.token"} {
+	for _, secretField := range []string{"wifi.psk", "darwin.token", "rtt.password"} {
 		if strings.Contains(body, `name="`+secretField+`" value=`) {
 			t.Fatalf("secret field %s must never render a value attribute: %s", secretField, body)
 		}
@@ -879,10 +928,56 @@ func TestConfigNetworkSecretsNeverRoundTrip(t *testing.T) {
 		t.Fatalf("POST validation error: want 200, got %d", recErr.Code)
 	}
 	errBody := recErr.Body.String()
-	for _, secretField := range []string{"wifi.psk", "darwin.token"} {
+	for _, secretField := range []string{"wifi.psk", "darwin.token", "rtt.password"} {
 		if strings.Contains(errBody, `name="`+secretField+`" value=`) {
 			t.Fatalf("secret field %s must never render a value attribute on error re-render: %s", secretField, errBody)
 		}
+	}
+}
+
+// TestConfigNetworkPostSavesRTTCreds covers the RTT credential fields (Task
+// 6): rtt.username is not a secret and saves plainly, while rtt.password is
+// write-only like darwin.token/wifi.psk — a second POST with a blank
+// password must keep the previously stored one, mirroring
+// TestConfigNetworkSavesSecretsWriteOnly's darwin.token coverage above.
+func TestConfigNetworkPostSavesRTTCreds(t *testing.T) {
+	srv, _, path, applyCh := newConfigTestServer(t)
+	cookie, csrf := loginAs(t, srv, configTestPassword)
+
+	form := baseNetworkForm()
+	form.Set("rtt.username", "jess")
+	form.Set("rtt.password", "hunter22")
+	form.Set("csrf", csrf)
+	rec := postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.RTT.Username != "jess" || cur.RTT.Password != "hunter22" {
+		t.Fatalf("RTT = %+v, want username=jess password=hunter22", cur.RTT)
+	}
+
+	form = baseNetworkForm()
+	form.Set("rtt.username", "jess")
+	form.Set("rtt.password", "")
+	form.Set("csrf", csrf)
+	rec = postForm(t, srv.Handler(), "/config/network", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("second POST: want 303, got %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitApply(t, applyCh)
+
+	cur, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.RTT.Password != "hunter22" {
+		t.Fatalf("RTT.Password = %q, want unchanged %q (blank rtt.password means keep)", cur.RTT.Password, "hunter22")
 	}
 }
 
@@ -1230,6 +1325,29 @@ func TestFormatReplacements(t *testing.T) {
 				t.Fatalf("formatReplacements(%#v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestConfigListDesktopRedirectScript pins the desktop redirect to /config/departures:
+// GET /config (authed) renders an inline script that location.replace's to
+// /config/departures when the viewport is >=64rem (desktop), keeping the index
+// as mobile navigation. The script is present on the index page but the index
+// itself has no master-detail rail; the rail only appears on section pages
+// like /config/departures.
+func TestConfigListDesktopRedirectScript(t *testing.T) {
+	srv, _, _, _ := newConfigTestServer(t)
+	cookie, _ := loginAs(t, srv, configTestPassword)
+
+	rec := getPath(t, srv.Handler(), "/config", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /config: want 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `min-width: 64rem`) {
+		t.Errorf("expected desktop redirect script with media query, got: %s", body)
+	}
+	if !strings.Contains(body, `location.replace("/config/departures")`) {
+		t.Errorf("expected location.replace redirect, got: %s", body)
 	}
 }
 

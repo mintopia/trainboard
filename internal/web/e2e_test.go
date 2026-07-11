@@ -470,7 +470,7 @@ func runRouteCase(t *testing.T, h http.Handler, tc routeCase, cookie *http.Cooki
 //
 //	Route                          | method | no session   | valid session
 //	-------------------------------|--------|--------------|----------------
-//	/actions/update/check          | POST   | 302 /login   | 302 / (Update seams unwired in this harness; Service.CheckForUpdate's nil-safe error still redirects)
+//	/actions/update/check          | POST   | 302 /login   | 302 /?checked=1 (Update seams unwired in this harness; Service.CheckForUpdate's nil-safe error still redirects)
 //	/actions/update/apply          | POST   | 302 /login   | 302 / (nil-safe error path; no restart scheduled — see handlers_update_test.go for the wired-seam success/failure behaviour)
 //	/actions/update/dismiss        | POST   | 302 /login   | 302 / (Service.DismissRollback's nil-safe no-op still redirects)
 //	/api/actions/update/check      | POST   | 401 JSON     | 500 JSON (nil-safe "not available" error, uniform error shape — see handlers_update_test.go for the wired-seam success path)
@@ -481,7 +481,7 @@ func TestRouteSecurityInvariantMatrixUpdateRoutes(t *testing.T) {
 	cookie, csrf := loginAs(t, srv, configTestPassword)
 
 	updateRouteMatrix := []routeCase{
-		{name: "POST /actions/update/check", method: http.MethodPost, path: "/actions/update/check", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/"},
+		{name: "POST /actions/update/check", method: http.MethodPost, path: "/actions/update/check", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/?checked=1"},
 		{name: "POST /actions/update/apply", method: http.MethodPost, path: "/actions/update/apply", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/"},
 		{name: "POST /actions/update/dismiss", method: http.MethodPost, path: "/actions/update/dismiss", body: htmlForm(url.Values{}), wantAuthedStatus: http.StatusFound, wantAuthedLoc: "/"},
 		{name: "POST /api/actions/update/check", method: http.MethodPost, path: "/api/actions/update/check", isAPI: true, body: apiBody(nil), wantAuthedStatus: http.StatusInternalServerError},

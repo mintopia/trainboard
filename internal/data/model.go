@@ -38,6 +38,7 @@ type Departure struct {
 	ExpectedTime  string // etd, raw
 	Status        Status
 	Platform      string
+	Headcode      string // RTT trainIdentity, e.g. "1A23"; "" when enrichment is off or unmatched
 	Operator      string
 	OperatorCode  string
 	ServiceType   string // "train", "bus", "ferry"

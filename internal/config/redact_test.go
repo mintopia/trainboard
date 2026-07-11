@@ -102,6 +102,36 @@ func TestRedactedMasksWebPasswordHash(t *testing.T) {
 	}
 }
 
+func TestRedactedMasksRTTPassword(t *testing.T) {
+	c := Default()
+	c.RTT = RTTConfig{Username: "jess", Password: "hunter22"}
+	r := c.Redacted()
+	if r.RTT.Password != "***REDACTED***" {
+		t.Fatalf("rtt.password = %q, want masked", r.RTT.Password)
+	}
+	if r.RTT.Username != "jess" {
+		t.Fatalf("rtt.username = %q, want passthrough (not a secret)", r.RTT.Username)
+	}
+	c.RTT.Password = ""
+	if c.Redacted().RTT.Password != "" {
+		t.Fatal("empty rtt.password must stay empty")
+	}
+}
+
+func TestRTTConfigStringMasksPassword(t *testing.T) {
+	r := RTTConfig{Username: "jess", Password: "hunter22"}
+	for _, s := range []string{
+		fmt.Sprintf("%v", r),
+		//nolint:staticcheck // test that %s and %v both use Stringer interface
+		fmt.Sprintf("%s", r),
+		fmt.Sprintf("%#v", r),
+	} {
+		if strings.Contains(s, "hunter22") {
+			t.Fatalf("RTTConfig leaked password: %s", s)
+		}
+	}
+}
+
 func TestBareSubstructStringNeverLeaksSecrets(t *testing.T) {
 	wifi := WifiConfig{SSID: "HomeNet", PSK: "psk-secret"}
 	web := WebConfig{PasswordHash: "$argon2id$fake"}

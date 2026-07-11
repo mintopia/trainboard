@@ -29,6 +29,10 @@ type statusPageData struct {
 	// HotspotActive mirrors Service.Hotspot() != nil: true while the board
 	// is running its own AP because it couldn't join the configured WiFi.
 	HotspotActive bool
+	// CheckedNow is true when this render immediately follows an explicit
+	// "Check for updates" (the /?checked=1 PRG landing): the template may
+	// affirm "up to date" rather than silently showing no banner.
+	CheckedNow bool
 }
 
 // handleIndex renders the authed status page: board state/fault, version,
@@ -50,6 +54,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		UptimeText:    humanUptime(st.Uptime),
 		MDNSState:     s.svc.MDNSState(),
 		HotspotActive: s.svc.Hotspot() != nil,
+		CheckedNow:    r.URL.Query().Get("checked") == "1",
 	}
 	data.StateLabel, data.StateClass, data.StateDetail = stateLine(st, time.Now())
 	if st.SoakRemaining > 0 {

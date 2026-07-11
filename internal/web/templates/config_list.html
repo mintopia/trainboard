@@ -1,5 +1,10 @@
 {{define "title"}}Configuration — Trainboard{{end}}
 {{define "content"}}
+<!-- Desktop (>=64rem) has the cfgnav master-detail rail, so the section list
+     is redundant there: hop straight to the first section. location.replace
+     keeps Back working (the index never enters history). Mobile keeps this
+     page as its section navigation. -->
+<script>if (window.matchMedia && matchMedia("(min-width: 64rem)").matches) location.replace("/config/departures");</script>
 <h2>Configuration</h2>
 <div class="setlist">
 {{range .Sections}}

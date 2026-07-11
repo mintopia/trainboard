@@ -100,6 +100,9 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 .notice.calm { background: #eef1f4; }
 .notice.fault { background: #fbe9e5; }
 .notice strong { font-weight: 700; }
+.spinner { display: inline-block; width: .85em; height: .85em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; opacity: .4; } }
 
 /* Fact rows */
 .rows { border-top: 1px solid var(--hairline); }
@@ -122,7 +125,7 @@ h3 { font-family: var(--ra); font-size: .92rem; font-weight: 400; margin: 1.1rem
 
 /* Forms */
 label.f { display: block; margin: 0 0 .95rem; font-size: .82rem; color: #405264; }
-label.f .hint { font-size: .74rem; color: var(--muted); margin-top: .15rem; }
+label.f .hint, form > .hint { font-size: .74rem; color: var(--muted); margin-top: .15rem; }
 input[type="text"], input[type="password"], input[type="number"], select, textarea {
   display: block; width: 100%; min-height: 44px; margin-top: .3rem;
   font: inherit; font-size: .95rem; color: var(--ink);

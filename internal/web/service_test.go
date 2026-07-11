@@ -141,6 +141,46 @@ func TestUpdateConfigWriteOnlySecrets(t *testing.T) {
 	}
 }
 
+// TestUpdateConfigPersistsRTT covers layout.headcodes plus the write-only
+// rtt.password round trip: setting it must persist, and a subsequent save of
+// the redacted (masked) value back through UpdateConfig must NOT clobber the
+// stored secret — mirroring the Darwin token discipline exactly.
+func TestUpdateConfigPersistsRTT(t *testing.T) {
+	svc, cfgPath := newTestService(t, validCfg())
+
+	cfg, err := svc.ConfigRedacted()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RTT.Username = "jess"
+	cfg.Layout.Headcodes = true
+	if err := svc.UpdateConfig(ConfigUpdate{Cfg: cfg, NewRTTPassword: "hunter22"}); err != nil {
+		t.Fatal(err)
+	}
+
+	onDisk, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.RTT.Username != "jess" || onDisk.RTT.Password != "hunter22" || !onDisk.Layout.Headcodes {
+		t.Fatalf("stored = %+v", onDisk.RTT)
+	}
+
+	// Write-only round trip: a redacted re-save with blank NewRTTPassword
+	// must keep the stored secret.
+	cfg2, _ := svc.ConfigRedacted()
+	if cfg2.RTT.Password != "***REDACTED***" {
+		t.Fatalf("redacted rtt.password = %q", cfg2.RTT.Password)
+	}
+	if err := svc.UpdateConfig(ConfigUpdate{Cfg: cfg2}); err != nil {
+		t.Fatal(err)
+	}
+	onDisk2, _ := config.Load(cfgPath)
+	if onDisk2.RTT.Password != "hunter22" {
+		t.Fatalf("blank NewRTTPassword clobbered the stored secret: %q", onDisk2.RTT.Password)
+	}
+}
+
 func TestUpdateConfigRejectsInvalid(t *testing.T) {
 	svc, path := newTestService(t, validCfg())
 	u := ConfigUpdate{Cfg: validCfg()}

@@ -46,11 +46,11 @@ func ServiceInfoText(d data.Departure) string {
 func departureBoardScene(b *data.Board, layout config.LayoutConfig, f *Fonts) *render.Scene {
 	first := b.Departures[0]
 	els := []render.Element{
-		newNextServiceRow(first, f),
+		newNextServiceRow(first, f, layout.Headcodes),
 		&render.ScrollingText{Font: f.Regular, Text: "Calling at:", X: 0, Y: RowH, W: CallingLabelW, H: RowH, Level: 15},
 		&render.ScrollingText{Font: f.Regular, Text: CallingAtText(first, layout.Times), X: CallingListX, Y: RowH, W: CallingListW, H: RowH, Level: 15},
 		&render.ScrollingText{Font: f.Regular, Text: ServiceInfoText(first), X: 0, Y: ServiceInfoY, W: W, H: RowH, Level: 15},
-		newRemainingServices(b.Departures[1:], f),
+		newRemainingServices(b.Departures[1:], f, layout.Headcodes),
 		offsetElement(&render.Clock{Large: f.BoldLarge, Tall: f.BoldTall, W: W, Level: 15}, 0, ClockY, W, ClockH),
 	}
 	return &render.Scene{Elements: els}

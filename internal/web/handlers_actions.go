@@ -132,7 +132,10 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if err := s.svc.CheckForUpdate(r.Context()); err != nil {
 		s.log.Warn("update check failed", "error", err.Error())
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	// "/?checked=1": the status page affirms "no update available" only for
+	// a landing that immediately follows an explicit check — an unqualified
+	// "/" (every other visit) must not imply a check just happened.
+	http.Redirect(w, r, "/?checked=1", http.StatusFound)
 }
 
 // handleUpdateApply stages the available update, then — success only —

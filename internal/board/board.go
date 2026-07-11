@@ -16,7 +16,7 @@ const (
 	ColOrderX    = 0
 	ColSchedX    = 17
 	ColSchedW    = 28
-	ColHeadcodeX = 45 // retained for a future headcode source; never drawn in M1
+	ColHeadcodeX = 45 // optional column between sched and platform (layout.headcodes)
 	ColHeadcodeW = 27
 	ColPlatformX = 45
 	ColPlatformW = 19

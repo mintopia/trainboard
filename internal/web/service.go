@@ -178,10 +178,11 @@ func (s *Service) ConfigRedacted() (config.Config, error) {
 // ConfigUpdate carries a submitted config. Secret fields are write-only:
 // empty means keep the stored value.
 type ConfigUpdate struct {
-	Cfg         config.Config
-	NewToken    string
-	NewWifiPSK  string
-	NewPassword string
+	Cfg            config.Config
+	NewToken       string
+	NewWifiPSK     string
+	NewPassword    string
+	NewRTTPassword string
 }
 
 // UpdateConfig merges, validates, and transactionally saves. Nothing is
@@ -207,11 +208,15 @@ func (s *Service) UpdateConfig(u ConfigUpdate) error {
 	next.Powersaving = u.Cfg.Powersaving
 	next.Wifi.SSID = u.Cfg.Wifi.SSID
 	next.Update = u.Cfg.Update
+	next.RTT.Username = u.Cfg.RTT.Username
 	if u.NewToken != "" {
 		next.Darwin.Token = u.NewToken
 	}
 	if u.NewWifiPSK != "" {
 		next.Wifi.PSK = u.NewWifiPSK
+	}
+	if u.NewRTTPassword != "" {
+		next.RTT.Password = u.NewRTTPassword
 	}
 	if u.NewPassword != "" {
 		if len(u.NewPassword) < 8 {
