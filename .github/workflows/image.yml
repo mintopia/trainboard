@@ -7,19 +7,6 @@ on:
   workflow_dispatch:
     inputs:
       tag: { description: "release tag to bake (vX.Y.Z)", required: true }
-  # TEMPORARY, branch-scoped: workflow_dispatch only fires for a workflow
-  # already present on the default branch, so this push trigger exists
-  # solely to prove image.yml end-to-end (real R2 publish included) before
-  # it merges. Removed in the same task once that run is green — the
-  # workflow that lands on main is workflow_dispatch-only, per policy.
-  push:
-    branches: [feat/distribution-image]
-    paths: [.github/workflows/image.yml, deploy/image/**]
-env:
-  # Only consulted by the push-trigger branch test above (workflow_dispatch
-  # always supplies inputs.tag). Bakes the current latest release so the
-  # branch-test publish is the real first R2 artifact, not throwaway data.
-  BRANCH_TEST_TAG: v0.4.1
 jobs:
   image:
     runs-on: ubuntu-24.04-arm
@@ -30,7 +17,6 @@ jobs:
         id: tag
         run: |
           TAG="${{ inputs.tag }}"
-          [ -n "$TAG" ] || TAG="$BRANCH_TEST_TAG"
           case "$TAG" in v*) ;; *) echo "not a release tag: $TAG" >&2; exit 1;; esac
           gh release view "$TAG" --repo mintopia/trainboard >/dev/null  # tag must be a real release
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
