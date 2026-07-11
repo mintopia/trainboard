@@ -6,9 +6,8 @@ now on your desk. It pulls live departures from National Rail's Darwin feed,
 is configured entirely from a phone-friendly web UI, sets itself up over its
 own WiFi hotspot the first time it boots, answers to `trainboard.local` on
 the LAN, and updates itself over the air once it's signed and released. An
-optional column of train headcodes (from the next release onward), sourced from
-the RealTime Trains API, can be switched on for anyone who wants that extra bit
-of railway detail.
+optional column of train headcodes, sourced from the RealTime Trains API,
+can be switched on for anyone who wants that extra bit of railway detail.
 
 <!-- TODO: swap in a real photo of a running board once one exists. -->
 ![Trainboard OLED panel showing a departures screen](docs/images/board.jpg)
@@ -41,11 +40,15 @@ GPIO24, RST on GPIO25.
    your home station, and a Darwin token. Submit it and the board restarts
    onto your network showing live departures.
 
+The flashed image may be a few releases behind by the time you download it —
+that's expected, not a bug. Once setup finishes, the board offers (or
+auto-applies, if you enable that) the newest release over the air.
+
 You'll need a free Darwin (OpenLDBWS) token to fetch departures — register
 for one at
 [realtime.nationalrail.co.uk/OpenLDBWSRegistration](https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/).
-If you also want the optional headcode column (from the next release onward), sign up
-for a free [RealTime Trains API](https://api.rtt.io/) account and add its credentials
+If you also want the optional headcode column, sign up for a free
+[RealTime Trains API](https://api.rtt.io/) account and add its credentials
 on the board's Network settings page — everything else works without it.
 
 ## Manual install, updating, and troubleshooting

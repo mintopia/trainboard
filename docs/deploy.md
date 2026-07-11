@@ -12,7 +12,10 @@ hardware bench session follows end to end.
 > flash it with Raspberry Pi Imager/balenaEtcher, and skip straight to
 > first boot: the board comes up in hotspot setup mode (§9) with
 > self-update ready. The rest of §1 is the manual path this image bakes
-> for you.
+> for you. Images are cut on major versions only (§12), so the flashed
+> image may be a few releases behind — the board offers (or auto-applies,
+> if enabled) the newest update after setup finishes; that's normal, not a
+> bug.
 
 Requires macOS, a DietPi Bookworm ARMv8 image for the Pi 2/3/4 family
 (`DietPi_RPi234-ARMv8-Bookworm.img.xz`), and a spare SD card in a USB reader.
@@ -677,3 +680,79 @@ scp bench pi@trainboard:/tmp/ && ssh pi@trainboard /tmp/bench --frames 300 --hz 
 
 See `docs/benchmarks/README.md` for the results table and the decision this
 gates.
+
+## 12. Image pipeline
+
+The `image` GitHub Actions workflow (`.github/workflows/image.yml`) bakes
+the prebaked SD image referenced by the §1 fast path. It takes a pinned
+DietPi Bookworm ARMv8 base (`deploy/image/BASE_IMAGE`), boots it under
+`systemd-nspawn` on an `ubuntu-24.04-arm` (arm64) runner so DietPi's own
+unattended first-run install completes for real, then installs the
+trainboard launcher + A/B slot layout, the USB gadget lifeline (§10), and
+leaves the board ready to boot straight into hotspot setup mode (§9) — the
+same state a fresh flash-and-first-boot reaches by hand, just captured
+once instead of repeated per device. `deploy/image/build-image.sh` drives
+the whole thing in five stages (fetch → inject → bake → snapshot → smoke);
+the final smoke stage re-verifies every ship-critical property (identity
+scrubbed, slots populated, gadget units present, first-run disarmed) against
+the compressed artifact before it's trusted.
+
+The finished image is published to the Cloudflare R2 bucket `mintopia-github`
+under the `trainboard/` prefix — never outside it, since the bucket is
+shared with other projects — and served publicly at
+https://github-files.mintopia.net/trainboard/. Both a versioned object
+(`trainboard-vX.Y.Z.img.xz` + `.sha256`) and a `trainboard-latest.img.xz`
+alias (the one §1's fast path links) are written; the previous 5 versioned
+images are kept, older ones pruned (`deploy/image/publish-r2.sh`).
+
+**Manually dispatched, major versions only.** Baking and publishing a new
+image is not part of the normal release flow — minor releases reach
+already-flashed boards entirely through self-update (§6). Run the workflow
+by hand only when cutting a major version:
+
+```
+gh workflow run image.yml -f tag=vX.Y.Z
+```
+
+`tag` must name an existing GitHub release; the workflow refuses to run
+against a tag that hasn't been released yet.
+
+**Bumping `deploy/image/BASE_IMAGE`.** Changing the pinned DietPi URL/SHA256
+is a reviewed change, not a routine edit: `workflow_dispatch` runs against
+any ref, so push the bump to a branch first and dispatch the workflow
+against it — `gh workflow run image.yml --ref <branch> -f tag=vX.Y.Z` —
+and confirm bake + smoke pass before merging the bump into `main`.
+
+**Building locally.** The pipeline needs an arm64 Linux host with
+`systemd-nspawn`, `losetup`, `parted`, `xz`, and `gh` on `PATH` — a spare
+arm64 machine, or a VM (e.g. a Lima VM on a Mac: `limactl start
+--arch=aarch64 default`) works fine for debugging a failed bake without
+burning CI minutes:
+
+```
+sudo deploy/image/build-image.sh --tag vX.Y.Z --work <dir> --stage all
+```
+
+Pass `--stage fetch|inject|bake|snapshot|smoke` instead of `all` to re-run
+a single stage against an already-populated `--work` directory.
+
+### Hardware-acceptance checklist
+
+CI's smoke stage only checks what's true of the image on disk — it can't
+verify the image actually boots real hardware correctly. Run this once
+against the first CI-built image flashed to a spare SD card, and again
+after any change to `deploy/image/*.sh` or `BASE_IMAGE`:
+
+- [ ] Boots to hotspot setup mode (§9) — no manual intervention needed
+- [ ] No interactive first-boot hang: DietPi's unattended install doesn't
+      block on a prompt (the empty `machine-id` / `ConditionFirstBoot` path
+      runs clean)
+- [ ] SSH host keys regenerate on first boot (the `trainboard-regen-hostkeys`
+      dropbear oneshot) — `ssh root@trainboard.local` works and each card
+      gets its own keys, not the base image's shared ones
+- [ ] Self-update sees the current release as available/newer than what
+      shipped
+- [ ] The usb0 lifeline answers at `http://10.55.0.1` (§10)
+
+The image ships DietPi's default root password (`dietpi`) unchanged —
+change it after setup, the same as any manually-flashed DietPi install.
