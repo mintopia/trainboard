@@ -1,0 +1,4 @@
+# Pinned DietPi base for the prebaked image. Bumping this is a reviewed
+# change: re-run the full image pipeline on a branch before merging.
+URL=https://dietpi.com/downloads/images/DietPi_RPi234-ARMv8-Bookworm.img.xz
+SHA256=aee8a93960b86c91956776c6a4aebf6ededda54d8e28dbec42b7abacec19cdde

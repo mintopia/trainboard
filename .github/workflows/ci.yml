@@ -19,6 +19,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.10.1
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck deploy/image/*.sh deploy/*.sh
   release-dryrun:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,64 @@
+# Builds the flashable SD image and publishes it to R2
+# (spec: docs/superpowers/specs/2026-07-10-distribution-image-design.md).
+# MANUAL trigger by policy: images are cut deliberately on major versions;
+# minor releases reach flashed boards via OTA self-update, not new images.
+name: image
+on:
+  workflow_dispatch:
+    inputs:
+      tag: { description: "release tag to bake (vX.Y.Z)", required: true }
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: resolve tag
+        id: tag
+        run: |
+          TAG="${{ inputs.tag }}"
+          case "$TAG" in v*) ;; *) echo "not a release tag: $TAG" >&2; exit 1;; esac
+          gh release view "$TAG" --repo mintopia/trainboard >/dev/null  # tag must be a real release
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - name: deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs util-linux unzip
+          # ubuntu-24.04-arm has no `awscli` apt candidate (arm64 universe
+          # gap); GitHub's runner image ships AWS CLI v2 preinstalled, but
+          # don't rely on that staying true — install the official aarch64
+          # bundle only if `aws` isn't already on PATH.
+          if ! command -v aws >/dev/null 2>&1; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            sudo /tmp/aws/install
+          fi
+          aws --version
+      - name: build image
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: sudo -E deploy/image/build-image.sh --tag "${{ steps.tag.outputs.tag }}" --work /tmp/tbimg --stage all
+      - name: publish to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "::warning::R2 secrets not configured — image built but NOT published"
+            exit 0
+          fi
+          deploy/image/publish-r2.sh --tag "${{ steps.tag.outputs.tag }}" --work /tmp/tbimg
+      - name: image artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trainboard-image
+          path: |
+            /tmp/tbimg/trainboard-*.img.xz
+            /tmp/tbimg/trainboard-*.img.xz.sha256
+          if-no-files-found: warn
+      - name: image logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: image-logs, path: /tmp/tbimg/logs }
