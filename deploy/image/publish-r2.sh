@@ -96,7 +96,13 @@ run "${AWS[@]}" s3api copy-object --copy-source "$BUCKET/$PREFIX/$IMG" --bucket 
 # downloads the latest pair couldn't `sha256sum -c` it without renaming
 # files (confirmed on the first real publish). Same hash (the alias is a
 # byte-identical server-side copy of the versioned object), latest name.
-LATEST_SUM="$WORK/trainboard-latest.img.xz.sha256"
+# Written to a private mktemp dir, NOT $WORK: in CI the build runs under
+# sudo so $WORK is root-owned, while this publish step is unprivileged.
+LATEST_TMP=$(mktemp -d)
+# Keep the generated file in --dry-run: it is part of the inspectable plan
+# (the offline test reads it to verify the regenerated checksum line).
+trap '[ -n "$DRY" ] || rm -rf "$LATEST_TMP"' EXIT
+LATEST_SUM="$LATEST_TMP/trainboard-latest.img.xz.sha256"
 if [ -f "$SUM_PATH" ]; then
   hash=$(cut -d' ' -f1 "$SUM_PATH")
   printf '%s  trainboard-latest.img.xz\n' "$hash" > "$LATEST_SUM"

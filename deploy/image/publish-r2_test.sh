@@ -62,22 +62,28 @@ grep -qF "$COPYOBJ --copy-source mintopia-github/trainboard/$IMG --bucket mintop
 # Latest .sha256: an UPLOAD of a regenerated file naming
 # trainboard-latest.img.xz — never a copy of the versioned checksum, whose
 # line names the versioned file and would fail `sha256sum -c` after a
-# latest-pair download.
-grep -qF "$CP $T/trainboard-latest.img.xz.sha256 s3://mintopia-github/trainboard/trainboard-latest.img.xz.sha256" <<<"$OUT" || fail "missing regenerated latest sha256 upload"
-[ "$(grep -c "^$CP $T/" <<<"$OUT")" -eq 3 ] || fail "expected exactly 3 local uploads (2 versioned + latest sha256)"
+# latest-pair download. The local path is a mktemp dir (unpredictable), so
+# match the filename + destination and count local uploads.
+latest_up=$(grep "^$CP .*/trainboard-latest\.img\.xz\.sha256 s3://mintopia-github/trainboard/trainboard-latest\.img\.xz\.sha256$" <<<"$OUT" || true)
+[ -n "$latest_up" ] || fail "missing regenerated latest sha256 upload"
+[ "$(grep -c "^$CP " <<<"$OUT")" -eq 3 ] || fail "expected exactly 3 local uploads (2 versioned + latest sha256)"
 if grep -qF "$COPYOBJ --copy-source mintopia-github/trainboard/$IMG.sha256" <<<"$OUT"; then
   fail "latest sha256 must be regenerated+uploaded, never server-side copied"
 fi
 
 echo "=== Checking regenerated latest sha256 content names the latest file ==="
 # Feed a real versioned .sha256 through the generation path: same hash,
-# filename rewritten to trainboard-latest.img.xz.
+# filename rewritten to trainboard-latest.img.xz. In --dry-run the script
+# keeps its mktemp output for exactly this inspection — read the generated
+# file via the local path echoed in the DRY upload line.
 printf 'deadbeef00  %s\n' "$IMG" > "$T/$IMG.sha256"
-"$HERE/publish-r2.sh" --tag "$TAG" --work "$T" --dry-run --list-file "$T/listing.txt" >/dev/null
-[ -f "$T/trainboard-latest.img.xz.sha256" ] || fail "latest sha256 file was not generated"
-[ "$(cat "$T/trainboard-latest.img.xz.sha256")" = "deadbeef00  trainboard-latest.img.xz" ] \
-  || fail "latest sha256 content wrong: $(cat "$T/trainboard-latest.img.xz.sha256")"
-rm -f "$T/$IMG.sha256" "$T/trainboard-latest.img.xz.sha256"
+OUT3=$("$HERE/publish-r2.sh" --tag "$TAG" --work "$T" --dry-run --list-file "$T/listing.txt")
+gen_path=$(grep "trainboard-latest\.img\.xz\.sha256 s3://" <<<"$OUT3" | awk '{print $(NF-1)}')
+[ -n "$gen_path" ] || fail "could not locate generated latest sha256 in plan"
+[ -f "$gen_path" ] || fail "generated latest sha256 file missing: $gen_path"
+[ "$(cat "$gen_path")" = "deadbeef00  trainboard-latest.img.xz" ] \
+  || fail "latest sha256 content wrong: $(cat "$gen_path")"
+rm -rf "$(dirname "$gen_path")" "$T/$IMG.sha256"
 
 echo "=== Checking prune deletes exactly the 2 oldest versions (4 keys) ==="
 deletes=$(grep "^$RM " <<<"$OUT" || true)
