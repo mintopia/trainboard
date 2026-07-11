@@ -82,13 +82,14 @@ run "${AWS[@]}" s3 cp "$IMG_PATH" "s3://$BUCKET/$PREFIX/$IMG"
 run "${AWS[@]}" s3 cp "$SUM_PATH" "s3://$BUCKET/$PREFIX/$IMG.sha256"
 
 # latest alias: server-side copy AFTER the versioned upload succeeded.
-# --copy-props none: aws s3 cp's server-side copy defaults to replicating
-# object tags via GetObjectTagging, which R2's S3 API does not implement
-# ("NotImplemented") — every alias copy would fail without this. We don't
-# use tags/ACLs on these objects, so skipping their propagation is a no-op
-# other than avoiding the unsupported call.
-run "${AWS[@]}" s3 cp --copy-props none "s3://$BUCKET/$PREFIX/$IMG"        "s3://$BUCKET/$PREFIX/trainboard-latest.img.xz"
-run "${AWS[@]}" s3 cp --copy-props none "s3://$BUCKET/$PREFIX/$IMG.sha256" "s3://$BUCKET/$PREFIX/trainboard-latest.img.xz.sha256"
+# `aws s3 cp` (even with --copy-props none) sends an x-amz-tagging-directive
+# header on the single-object CopyObject call it makes for small files —
+# R2 rejects it as NotImplemented (confirmed live: the multipart copy path
+# used for the large image happened not to hit this, but the tiny .sha256
+# copy did). The low-level `s3api copy-object` call maps straight to the
+# CopyObject API with no tagging/ACL headers added, which R2 does support.
+run "${AWS[@]}" s3api copy-object --copy-source "$BUCKET/$PREFIX/$IMG"        --bucket "$BUCKET" --key "$PREFIX/trainboard-latest.img.xz"
+run "${AWS[@]}" s3api copy-object --copy-source "$BUCKET/$PREFIX/$IMG.sha256" --bucket "$BUCKET" --key "$PREFIX/trainboard-latest.img.xz.sha256"
 
 # Prune: list ONLY trainboard/trainboard-v*.img.xz, sort by version, keep
 # newest $KEEP, delete the rest (+ their .sha256). sort -V handles semver
