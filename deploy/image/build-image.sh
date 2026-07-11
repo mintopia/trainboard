@@ -31,6 +31,27 @@ mkdir -p "$WORK"
 # shellcheck source=/dev/null
 . "$HERE/BASE_IMAGE"   # provides URL, SHA256
 
+# e2fsck's exit status is a bitmask, not a simple pass/fail:
+#   0  = clean
+#   1  = filesystem errors CORRECTED
+#   2  = errors corrected, reboot advised
+#   4  = errors left UNCORRECTED
+#   8  = operational error   16 = usage/syntax   32 = cancelled by user
+# `-y` auto-answers every prompt, so 1/2 (fixed) are expected and fine on a
+# loop-mounted image; anything >=4 means the fsck could not make the fs
+# consistent and every downstream step (resize2fs, the shipped rootfs) would
+# inherit the damage — that must hard-fail. `... || true` (the shape this
+# replaced) masked 4/8/16 too, which is exactly the class we must NOT ship.
+e2fsck_ok() {
+  local dev=$1 rc=0
+  e2fsck -fy "$dev" || rc=$?
+  if [ "$rc" -ge 4 ]; then
+    echo "e2fsck: $dev could not be made consistent (exit $rc, bit >=4 set)" >&2
+    return 1
+  fi
+  return 0
+}
+
 stage_fetch() {
   if [ ! -f "$WORK/base.img" ]; then
     curl -fL --retry 3 -o "$WORK/base.img.xz" "$URL"
@@ -67,18 +88,22 @@ umount_all() {
   # failure-tolerant (falls back to a lazy unmount, then just warns) so
   # `losetup -d` always runs. A `losetup -d` that never happens leaks the
   # loop device for the life of the CI runner and breaks every build after it.
-  # stage_bake nests the FAT boot partition inside the mounted rootfs
-  # (at /boot/firmware on Bookworm-layout images, /boot on older ones) so
-  # the partition appears where the OS's own fstab expects it; unmount the
-  # nested mount before its parent rootfs.
-  for nested in "$WORK/root/boot/firmware" "$WORK/root/boot"; do
-    if mountpoint -q "$nested" 2>/dev/null; then
-      umount "$nested" 2>/dev/null || umount -l "$nested" 2>/dev/null || echo "WARN: unmount $nested failed" >&2
+  # stage_bake and stage_snapshot nest the FAT boot partition inside the
+  # mounted rootfs (at /boot/firmware on Bookworm-layout images, /boot on
+  # older ones) so the partition appears where the OS's own fstab expects
+  # it; stage_smoke does the same against a decompressed COPY under
+  # $WORK/smoke-root. Unmount every nested FAT mount before its parent
+  # rootfs, for both roots.
+  for base in "$WORK/root" "$WORK/smoke-root"; do
+    for nested in "$base/boot/firmware" "$base/boot"; do
+      if mountpoint -q "$nested" 2>/dev/null; then
+        umount "$nested" 2>/dev/null || umount -l "$nested" 2>/dev/null || echo "WARN: unmount $nested failed" >&2
+      fi
+    done
+    if mountpoint -q "$base" 2>/dev/null; then
+      umount "$base" 2>/dev/null || umount -l "$base" 2>/dev/null || echo "WARN: unmount $base failed" >&2
     fi
   done
-  if mountpoint -q "$WORK/root" 2>/dev/null; then
-    umount "$WORK/root" 2>/dev/null || umount -l "$WORK/root" 2>/dev/null || echo "WARN: unmount $WORK/root failed" >&2
-  fi
   if mountpoint -q "$WORK/boot" 2>/dev/null; then
     umount "$WORK/boot" 2>/dev/null || umount -l "$WORK/boot" 2>/dev/null || echo "WARN: unmount $WORK/boot failed" >&2
   fi
@@ -186,7 +211,7 @@ grow_image() {
   parted -s "$loop" resizepart 2 100% || { losetup -d "$loop"; echo "parted resizepart failed" >&2; exit 1; }
   partprobe "$loop" 2>/dev/null || true
   udevadm settle 2>/dev/null || true
-  e2fsck -fy "${loop}p2" || true   # -y: auto-answer; nonzero on fixups is fine
+  e2fsck_ok "${loop}p2" || { losetup -d "$loop"; echo "grow: e2fsck failed" >&2; exit 1; }
   resize2fs "${loop}p2" || { losetup -d "$loop"; echo "resize2fs failed" >&2; exit 1; }
   losetup -d "$loop"
   touch "$WORK/.grown"
@@ -357,6 +382,13 @@ stage_bake() {
   bake_log "mounted: rootfs=${LOOP}p2 -> $WORK/root, boot=${LOOP}p1 -> $BOOTMNT"
   prep_container
   local marker="$BOOTMNT/trainboard-baked"
+  # Stale-marker footgun (local iteration): the boot loop treats an existing
+  # marker as an instant GO *without booting*. On a fresh CI runner the image
+  # is pristine so this never bites, but re-running bake against a locally
+  # re-used $WORK (or a base.img already baked once) would false-GO on the old
+  # receipt and skip the actual install. Simplest fix: delete any pre-existing
+  # marker up front so every bake re-proves the install from scratch.
+  rm -f "$marker"
 
   local max_boots=5
   local deadline=$(( $(date +%s) + 30 * 60 ))
@@ -433,8 +465,349 @@ stage_bake() {
   echo "stage bake: exhausted $max_boots boots without trainboard-baked marker" >&2
   exit 1
 }
-stage_snapshot() { echo "not implemented" >&2; exit 3; }
-stage_smoke() { echo "not implemented" >&2; exit 3; }
+# ── snapshot ──────────────────────────────────────────────────────────
+# Turn the baked image into a shippable, per-device-fresh artifact:
+#   1. scrub the baked identity (SSH host keys, machine-id) so no two
+#      flashed cards share it, and RE-ARM regeneration for the real first
+#      boot (install_stage=2 means DietPi's first-run never runs on device,
+#      so anything DietPi's firstboot would normally do we must arm here);
+#   2. strip the FAT staging payload + logs + apt caches;
+#   3. shrink the rootfs back down (bake grew it +1GiB) and xz it into
+#      trainboard-<tag>.img.xz (+ .sha256).
+# stage_smoke re-verifies every ship-critical property on a decompressed
+# COPY — snapshot does the work, smoke refuses to trust it.
+
+SNAP_TAG="[snapshot]"
+snap_log() { echo "$SNAP_TAG $*" >&2; }
+
+# The per-device SSH-host-key regeneration unit written into the rootfs.
+# WHY THIS IS REQUIRED (verified against the baked image, not assumed):
+# the shipped SSH server is Dropbear, started by dropbear.service with
+#   ExecStart=/usr/sbin/dropbear -EF -p 22 $DROPBEAR_EXTRA_ARGS
+# and DROPBEAR_EXTRA_ARGS is empty — no `-r` (host-key file) and no `-R`
+# (auto-generate). Empirically confirmed: with the host keys removed,
+# `dropbear -EF -p 22` exits immediately with "No hostkeys available.
+# 'dropbear -R' may be useful or run dropbearkey." — it does NOT
+# self-regenerate. DietPi normally generates keys during its first-run,
+# but this image ships install_stage=2 so first-run never executes on the
+# device. Without this unit, deleting the baked keys (which we MUST, or
+# every flashed card ships the base image's Jun-2025 keys) would leave SSH
+# permanently dead. This oneshot regenerates each key iff absent, ordered
+# before dropbear starts. It is idempotent (the `-s` guard) so it is inert
+# on every boot after the first.
+REGEN_UNIT_NAME="trainboard-regen-hostkeys.service"
+write_regen_unit() {
+  local unit="$WORK/root/etc/systemd/system/$REGEN_UNIT_NAME"
+  cat > "$unit" <<'EOF'
+[Unit]
+Description=Regenerate Dropbear SSH host keys on first boot if absent
+Documentation=trainboard SD-image snapshot (deploy/image/build-image.sh)
+Before=dropbear.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for t in rsa ecdsa ed25519; do f="/etc/dropbear/dropbear_${t}_host_key"; [ -s "$f" ] || /usr/bin/dropbearkey -t "$t" -f "$f"; done'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$unit"
+  # Enable it the way `systemctl enable` would, but offline (no running
+  # systemd in this loop-mount): the [Install] WantedBy symlink.
+  local wants="$WORK/root/etc/systemd/system/multi-user.target.wants"
+  mkdir -p "$wants"
+  ln -sf "../$REGEN_UNIT_NAME" "$wants/$REGEN_UNIT_NAME"
+  snap_log "installed + enabled $REGEN_UNIT_NAME (dropbear does not self-regenerate keys)"
+}
+
+stage_snapshot() {
+  [ "$(id -u)" -eq 0 ] || { echo "stage snapshot requires root (loop devices)" >&2; exit 1; }
+  [ -f "$WORK/base.img" ] || { echo "stage snapshot: $WORK/base.img missing (run bake first)" >&2; exit 1; }
+  mount_bake   # rootfs -> $WORK/root, FAT -> $BOOTMNT (Bookworm: /boot/firmware)
+  local r="$WORK/root"
+  [ -f "$BOOTMNT/trainboard-baked" ] || { echo "stage snapshot: no trainboard-baked marker — image is not baked" >&2; exit 1; }
+  snap_log "scrubbing baked identity + re-arming per-device first boot"
+
+  # --- Identity scrub -------------------------------------------------
+  # Dropbear host keys: the base image ships a fixed set (dated at base
+  # build time, NOT regenerated during the bake) — shared across every
+  # download of this image. Remove so each device gets its own via the
+  # regen unit below.
+  rm -f "$r"/etc/dropbear/dropbear_*_host_key
+  # OpenSSH keys: this base uses Dropbear, but strip any OpenSSH host keys
+  # defensively so a future base swap can't silently ship shared keys.
+  rm -f "$r"/etc/ssh/ssh_host_*
+  # machine-id: TRUNCATE (do not delete). systemd PID 1 regenerates an
+  # empty /etc/machine-id during early boot (documented: an empty file is
+  # the canonical "reset for reprovisioning" trigger, and ConditionFirstBoot
+  # keys off it) — deleting it instead can trip services that stat the path.
+  : > "$r/etc/machine-id"
+  chmod 0444 "$r/etc/machine-id" 2>/dev/null || true
+  # dbus machine-id: absent on this base (dbus reads /etc/machine-id). If a
+  # future base ships a separate real file, reset it too; never touch a
+  # symlink (that IS the /etc/machine-id indirection).
+  if [ -f "$r/var/lib/dbus/machine-id" ] && [ ! -L "$r/var/lib/dbus/machine-id" ]; then
+    : > "$r/var/lib/dbus/machine-id"
+    snap_log "reset /var/lib/dbus/machine-id"
+  fi
+  write_regen_unit
+
+  # --- Strip the FAT staging payload ---------------------------------
+  # These were only needed so the in-image install hook could run during
+  # the bake. Keep trainboard-version (a harmless human-readable receipt of
+  # what shipped). trainboard-baked is a bake receipt with no on-device
+  # meaning — drop it.
+  local f
+  for f in trainboard.bin trainboard-launcher.bin trainboard.service \
+           Automation_Custom_Script.sh trainboard-baked; do
+    rm -f "$BOOTMNT/$f"
+  done
+  rm -rf "$BOOTMNT/trainboard-gadget"
+  # The install hook was ALSO migrated onto the rootfs /boot by
+  # prep_container during the bake — remove that copy too, so it can never
+  # be re-run. (Belt to install_stage=2's braces: with install_stage=2
+  # DietPi's first-run automation, the only thing that executes
+  # Automation_Custom_Script.sh, never runs on the device regardless.)
+  rm -f "$r/boot/Automation_Custom_Script.sh"
+  snap_log "removed FAT staging payload (kept trainboard-version)"
+
+  # --- Logs + apt caches ---------------------------------------------
+  # /var/log: clear file contents but keep the directory tree (RAMlog and
+  # services expect their dirs to exist).
+  find "$r/var/log" -type f -exec sh -c ': > "$1"' _ {} \; 2>/dev/null || true
+  rm -rf "$r"/var/lib/dietpi/logs/* 2>/dev/null || true
+  rm -f "$r"/var/cache/apt/archives/*.deb "$r"/var/cache/apt/archives/partial/*.deb 2>/dev/null || true
+  rm -f "$r"/var/lib/apt/lists/*Packages* "$r"/var/lib/apt/lists/*Release* 2>/dev/null || true
+  rm -f "$r"/root/.bash_history "$r"/home/*/.bash_history 2>/dev/null || true
+  snap_log "cleared logs + apt caches"
+
+  # --- Sanity assertions on what the device will boot from ------------
+  # unprep_container (bake) already restored the real connectivity-check
+  # IPs and the resize service is expected still-armed — but assert, don't
+  # trust, before we shrink and ship. (stage_smoke re-checks all of this on
+  # the compressed artifact; these are the cheap in-place guards.)
+  if grep -q '^CONFIG_CHECK_CONNECTION_IP=127\.' "$BOOTMNT/dietpi.txt" "$r/boot/dietpi.txt" 2>/dev/null; then
+    echo "stage snapshot: connectivity-check IP still points at loopback (bake unprep did not run?)" >&2
+    exit 1
+  fi
+  # NB: the enable is an ABSOLUTE symlink (-> /etc/systemd/system/...), so
+  # `-e` follows it to the HOST root and wrongly reports missing inside a
+  # loop-mount; `-L` (symlink present) is the correct armed test here.
+  if [ ! -L "$r/etc/systemd/system/local-fs.target.wants/dietpi-fs_partition_resize.service" ]; then
+    echo "stage snapshot: dietpi-fs_partition_resize.service is NOT armed — the user's SD would never expand" >&2
+    exit 1
+  fi
+  snap_log "verified: connectivity IPs real + partition-resize armed"
+
+  umount_all   # release the loop before re-attaching for the offline shrink
+
+  shrink_and_compress
+}
+
+# Shrink the rootfs to (minimum + margin), pull the partition boundary in
+# to match, truncate the image file, then xz it. Runs on its own loop
+# device (fs must be UNmounted for resize2fs to shrink).
+shrink_and_compress() {
+  local img="$WORK/base.img" loop
+  snap_log "shrinking rootfs (bake grew it +1GiB)"
+  loop=$(losetup -Pf --show "$img")
+  # resize2fs refuses a dirty fs; shrink to minimum, then grow back by a
+  # small margin so the shipped rootfs is not 100% full before the on-device
+  # partition-resize runs.
+  e2fsck_ok "${loop}p2" || { losetup -d "$loop"; exit 1; }
+  resize2fs -M "${loop}p2" || { losetup -d "$loop"; echo "resize2fs -M failed" >&2; exit 1; }
+  local blk_size min_blocks margin_blocks target_blocks
+  blk_size=$(dumpe2fs -h "${loop}p2" 2>/dev/null | awk -F: '/Block size/{gsub(/[[:space:]]/,"",$2);print $2}')
+  min_blocks=$(dumpe2fs -h "${loop}p2" 2>/dev/null | awk -F: '/Block count/{gsub(/[[:space:]]/,"",$2);print $2}')
+  # ~32 MiB of slack.
+  margin_blocks=$(( 32 * 1024 * 1024 / blk_size ))
+  target_blocks=$(( min_blocks + margin_blocks ))
+  resize2fs "${loop}p2" "$target_blocks" || { losetup -d "$loop"; echo "resize2fs grow-to-margin failed" >&2; exit 1; }
+  e2fsck_ok "${loop}p2" || { losetup -d "$loop"; exit 1; }
+
+  # Pull partition 2's boundary in to match the shrunk filesystem. parted's
+  # `resizepart` REFUSES to shrink in --script mode (it prints "Shrinking a
+  # partition can cause data loss" and answers its own prompt No → non-zero),
+  # so drive the MBR table with `sfdisk -N 2` instead, which is fully
+  # non-interactive. Keep the existing start sector and type; only the size
+  # changes. resize2fs already made the fs smaller than the new boundary, so
+  # no data is at risk. Work in 512-byte sectors, aligned to 1 MiB (2048
+  # sectors) for SD-card friendliness.
+  local sect=512 align=2048 p2_start_b start_sect fs_sect size_sect mib=$(( 1024 * 1024 ))
+  p2_start_b=$(parted -sm "$loop" unit B print | awk -F: '/^2:/{gsub(/B/,"",$2);print $2}')
+  start_sect=$(( p2_start_b / sect ))
+  local fs_bytes
+  fs_bytes=$(( target_blocks * blk_size ))
+  fs_sect=$(( (fs_bytes + sect - 1) / sect ))
+  # Round the partition size up to the alignment grid, and guarantee it is
+  # >= the filesystem.
+  size_sect=$(( ( (fs_sect + align - 1) / align ) * align ))
+  echo "size=${size_sect}" | sfdisk --no-reread --no-tell-kernel -N 2 "$loop" \
+    || { losetup -d "$loop"; echo "sfdisk -N 2 resize failed" >&2; exit 1; }
+  losetup -d "$loop"
+
+  # Truncate the image to just past the end of partition 2 (MBR table, no
+  # trailing secondary GPT to preserve).
+  local end_sect=$(( start_sect + size_sect ))
+  local new_size=$(( end_sect * sect ))
+  truncate -s "$new_size" "$img"
+  snap_log "image shrunk to $(( new_size / mib )) MiB (rootfs fs $(( fs_bytes / mib )) MiB + margin)"
+
+  # Compress. -T0 auto-splits into per-thread blocks; -9 for size (the
+  # artifact Jess flashes). Keep base.img (-k via -c redirect) so a re-run
+  # of smoke could still reach it if needed.
+  local out="$WORK/trainboard-${TAG}.img.xz"
+  snap_log "compressing -> $out (xz -9 -T0)"
+  xz -9 -T0 -c "$img" > "$out"
+  ( cd "$WORK" && sha256sum "trainboard-${TAG}.img.xz" > "trainboard-${TAG}.img.xz.sha256" )
+  snap_log "wrote $out ($(du -h "$out" | cut -f1)) + .sha256"
+}
+
+# ── smoke ─────────────────────────────────────────────────────────────
+# Read-only acceptance gate on the SHIPPED artifact. Decompress a fresh
+# copy, verify its checksum, loop-mount read-only, and assert every
+# ship-critical property. Every failed assertion is reported (not just the
+# first) before exiting 1, so one CI run surfaces the full list.
+SMOKE_FAILS=0
+smoke_assert() {
+  # smoke_assert "<description>" <test-command...>
+  local desc=$1; shift
+  if "$@"; then
+    echo "  PASS: $desc" >&2
+  else
+    echo "  FAIL: $desc" >&2
+    SMOKE_FAILS=$(( SMOKE_FAILS + 1 ))
+  fi
+}
+
+stage_smoke() {
+  [ "$(id -u)" -eq 0 ] || { echo "stage smoke requires root (loop devices)" >&2; exit 1; }
+  local xzimg="$WORK/trainboard-${TAG}.img.xz"
+  [ -f "$xzimg" ] || { echo "stage smoke: $xzimg missing (run snapshot first)" >&2; exit 1; }
+
+  echo "$SMOKE_TAG verifying checksum of $xzimg" >&2
+  ( cd "$WORK" && sha256sum -c "trainboard-${TAG}.img.xz.sha256" ) \
+    || { echo "stage smoke: checksum mismatch on $xzimg" >&2; exit 1; }
+
+  local simg="$WORK/smoke.img"
+  echo "$SMOKE_TAG decompressing a fresh copy -> $simg" >&2
+  rm -f "$simg"
+  xz -dc "$xzimg" > "$simg"
+
+  LOOP=$(losetup -Pf --show "$simg")
+  local sr="$WORK/smoke-root"
+  mkdir -p "$sr"
+  mount -o ro "${LOOP}p2" "$sr"
+  local sboot
+  if grep -Eq '^[^#]*[[:space:]]/boot/firmware[[:space:]]' "$sr/etc/fstab"; then
+    sboot="$sr/boot/firmware"
+  else
+    sboot="$sr/boot"
+  fi
+  mkdir -p "$sboot"
+  mount -o ro "${LOOP}p1" "$sboot"
+  echo "$SMOKE_TAG mounted read-only: rootfs=$sr FAT=$sboot" >&2
+  echo "$SMOKE_TAG === assertions ===" >&2
+
+  # --- service unit -------------------------------------------------
+  local svc="$sr/etc/systemd/system/trainboard.service"
+  smoke_assert "trainboard.service present" test -f "$svc"
+  smoke_assert "trainboard.service has --production --manage-network" \
+    grep -q -- '^ExecStart=/opt/trainboard/launcher --production --manage-network$' "$svc"
+  smoke_assert "trainboard.service enabled (multi-user.target.wants symlink)" \
+    test -L "$sr/etc/systemd/system/multi-user.target.wants/trainboard.service"
+
+  # --- A/B slots + launcher ------------------------------------------
+  smoke_assert "launcher executable" test -x "$sr/opt/trainboard/launcher"
+  smoke_assert "slots/a/trainboard executable" test -x "$sr/opt/trainboard/slots/a/trainboard"
+  smoke_assert "slots/b is an empty dir" smoke_empty_dir "$sr/opt/trainboard/slots/b"
+
+  # slot-a --version must equal the tag (native arm64 exec off the mount).
+  local ver rc=0
+  ver=$("$sr/opt/trainboard/slots/a/trainboard" --version 2>/dev/null) || rc=$?
+  if [ "$rc" -eq 0 ] && printf '%s' "$ver" | grep -qw -- "$TAG"; then
+    echo "  PASS: slots/a/trainboard --version reports $TAG (got: $ver)" >&2
+  else
+    echo "  FAIL: slots/a/trainboard --version != $TAG (rc=$rc, got: $ver)" >&2
+    SMOKE_FAILS=$(( SMOKE_FAILS + 1 ))
+  fi
+
+  # --- updater state -------------------------------------------------
+  local state="$sr/var/lib/trainboard/updater/state.json"
+  smoke_assert "state.json present" test -f "$state"
+  smoke_assert "state.json active=a" grep -Eq '"active"[[:space:]]*:[[:space:]]*"a"' "$state"
+  smoke_assert "state.json active_version=$TAG" \
+    grep -Eq "\"active_version\"[[:space:]]*:[[:space:]]*\"$TAG\"" "$state"
+
+  # --- gadget lifeline ----------------------------------------------
+  smoke_assert "trainboard-gadget.service present" test -f "$sr/etc/systemd/system/trainboard-gadget.service"
+  smoke_assert "trainboard-dnsmasq-usb0.service present" test -f "$sr/etc/systemd/system/trainboard-dnsmasq-usb0.service"
+  smoke_assert "gadget helper script present" test -f "$sr/usr/local/lib/trainboard/trainboard-gadget.sh"
+  smoke_assert "dnsmasq binary present in rootfs" test -x "$sr/usr/sbin/dnsmasq"
+
+  # --- identity scrub -----------------------------------------------
+  smoke_assert "no Dropbear host keys shipped" smoke_no_glob "$sr/etc/dropbear/dropbear_"'*_host_key'
+  smoke_assert "no OpenSSH host keys shipped" smoke_no_glob "$sr/etc/ssh/ssh_host_"'*'
+  smoke_assert "machine-id is empty" smoke_empty_file "$sr/etc/machine-id"
+  smoke_assert "host-key regen unit present" test -f "$sr/etc/systemd/system/$REGEN_UNIT_NAME"
+  smoke_assert "host-key regen unit enabled" \
+    test -L "$sr/etc/systemd/system/multi-user.target.wants/$REGEN_UNIT_NAME"
+  smoke_assert "no WiFi credentials (dietpi-wifi.txt SSID empty/absent)" smoke_no_wifi "$sboot" "$sr"
+
+  # --- automation hook cannot re-run --------------------------------
+  smoke_assert "no Automation_Custom_Script.sh on FAT" test ! -e "$sboot/Automation_Custom_Script.sh"
+  smoke_assert "no Automation_Custom_Script.sh on rootfs /boot" test ! -e "$sr/boot/Automation_Custom_Script.sh"
+  smoke_assert "install_stage=2 (DietPi first-run disarmed on device)" \
+    smoke_file_eq "$sr/boot/dietpi/.install_stage" 2
+
+  # --- connectivity IPs real in BOTH dietpi.txt copies ---------------
+  smoke_assert "FAT dietpi.txt connectivity IP is not loopback" smoke_ip_not_loopback "$sboot/dietpi.txt"
+  smoke_assert "rootfs dietpi.txt connectivity IP is not loopback" smoke_ip_not_loopback "$sr/boot/dietpi.txt"
+
+  # --- partition resize armed ---------------------------------------
+  # `-L` not `-e`: the enable is an absolute symlink that `-e` would chase
+  # to the host root inside this loop-mount.
+  smoke_assert "dietpi-fs_partition_resize.service armed (SD expands on first boot)" \
+    test -L "$sr/etc/systemd/system/local-fs.target.wants/dietpi-fs_partition_resize.service"
+
+  # --- receipt kept -------------------------------------------------
+  smoke_assert "trainboard-version receipt present on FAT" test -f "$sboot/trainboard-version"
+  smoke_assert "trainboard-version == $TAG" smoke_file_eq "$sboot/trainboard-version" "$TAG"
+
+  umount_all
+
+  echo "$SMOKE_TAG === $SMOKE_FAILS failure(s) ===" >&2
+  [ "$SMOKE_FAILS" -eq 0 ] || { echo "stage smoke: $SMOKE_FAILS assertion(s) failed" >&2; exit 1; }
+  echo "$SMOKE_TAG GO: all assertions passed for $TAG" >&2
+}
+SMOKE_TAG="[smoke]"
+
+# Smoke assertion helpers (each returns 0/1 for smoke_assert).
+smoke_empty_dir() { [ -d "$1" ] && [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
+smoke_empty_file() { [ -e "$1" ] && [ ! -s "$1" ]; }
+smoke_file_eq() { [ -f "$1" ] && [ "$(tr -d '[:space:]' < "$1")" = "$2" ]; }
+smoke_no_glob() {
+  # No path matches the glob $1 (passed as a literal pattern string).
+  local matches
+  matches=$(compgen -G "$1" 2>/dev/null) && [ -n "$matches" ] && return 1
+  return 0
+}
+smoke_ip_not_loopback() {
+  local file=$1 ip
+  [ -f "$file" ] || return 1
+  ip=$(grep -m1 '^CONFIG_CHECK_CONNECTION_IP=' "$file" | cut -d= -f2)
+  case "$ip" in 127.*|"") return 1;; *) return 0;; esac
+}
+smoke_no_wifi() {
+  # dietpi-wifi.txt absent, or every aWIFI_SSID[...] empty, in both copies.
+  local fat=$1 root=$2 f
+  for f in "$fat/dietpi-wifi.txt" "$root/boot/dietpi-wifi.txt"; do
+    [ -f "$f" ] || continue
+    if grep -Eq "^aWIFI_SSID\[[0-9]+\]='.+'" "$f"; then return 1; fi
+  done
+  return 0
+}
 
 case "$STAGE" in
   fetch) stage_fetch;;
@@ -445,15 +818,8 @@ case "$STAGE" in
   all)
     stage_fetch
     stage_inject
-    # bake/snapshot/smoke are stubs (exit 3) until later tasks land, which
-    # makes the calls below genuinely unreachable today per shellcheck's
-    # flow analysis — disabled rather than removed, since they're the real
-    # pipeline order once those stages exist.
-    # shellcheck disable=SC2317
     stage_bake
-    # shellcheck disable=SC2317
     stage_snapshot
-    # shellcheck disable=SC2317
     stage_smoke
     ;;
 esac

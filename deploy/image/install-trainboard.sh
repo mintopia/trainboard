@@ -74,8 +74,12 @@ install -m 0644 "$SRCDIR/trainboard-gadget/trainboard-dnsmasq-usb0.service" "$DE
 if [ -z "${SKIP_SYSTEMCTL:-}" ]; then
   # dnsmasq package is required by the usb0 lifeline (deploy.md §10 install
   # step, and the same package deploy.md §9 requires for AP-mode fallback —
-  # a single apt-get here covers both).
-  apt-get install -y -qq dnsmasq >/dev/null || echo "WARN: dnsmasq install failed; usb0 lifeline degraded"
+  # a single apt-get here covers both). HARD-FAIL: a shipped image whose
+  # usb0/AP lifeline can't come up is a brick with no recovery path, so this
+  # aborts the bake (before the trainboard-baked marker below) rather than
+  # shipping a degraded board. This runs only on-device (guarded by the
+  # SKIP_SYSTEMCTL branch); the DESTDIR off-device test never reaches it.
+  apt-get install -y -qq dnsmasq >/dev/null || { echo "ERROR: dnsmasq install failed; usb0/AP lifeline would be dead — aborting bake"; exit 1; }
   systemctl daemon-reload
   systemctl enable trainboard.service trainboard-gadget.service trainboard-dnsmasq-usb0.service
 fi
