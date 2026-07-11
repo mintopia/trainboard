@@ -275,13 +275,19 @@ unprep_container() {
 dump_diagnostics() {
   local dst="$WORK/logs"
   bake_log "collecting diagnostics into $dst"
-  if [ -d "$WORK/root/var/lib/dietpi/logs" ]; then
-    mkdir -p "$dst/dietpi-logs"
-    cp -r "$WORK/root/var/lib/dietpi/logs/." "$dst/dietpi-logs/" 2>/dev/null || true
-  fi
+  # DietPi's first-run transcript is the single most useful artifact.
+  for f in dietpi-firstrun-setup.log dietpi-update.log dietpi-firstboot.log \
+           fs_partition_resize.log dietpi-ramlog.log; do
+    [ -f "$WORK/root/var/lib/dietpi/logs/$f" ] && cp "$WORK/root/var/lib/dietpi/logs/$f" "$dst/" 2>/dev/null || true
+  done
+  cp "$WORK/root/boot/dietpi/.install_stage" "$dst/install_stage.txt" 2>/dev/null || true
   ls -la "$WORK/root/boot" > "$dst/rootfs-boot-listing-after.txt" 2>/dev/null || true
   ls -la "$BOOTMNT" > "$dst/fat-listing-after.txt" 2>/dev/null || true
-  [ -f "$WORK/root/boot/dietpi/.install_stage" ] && cp "$WORK/root/boot/dietpi/.install_stage" "$dst/install_stage.txt" 2>/dev/null || true
+  # Make everything the unprivileged runner user can upload: some DietPi
+  # log subtrees (ramlog_store/private) ship as mode 700, which breaks
+  # actions/upload-artifact's scandir (EACCES). We only copy plain files
+  # above, but harden the whole dir regardless.
+  chmod -R a+rX "$dst" 2>/dev/null || true
 }
 
 stage_bake() {
@@ -306,6 +312,13 @@ stage_bake() {
     if [ -f "$marker" ]; then baked=1; break; fi
     local console="$WORK/logs/nspawn-boot-$boot.log"
     bake_log "boot attempt $boot/$max_boots -> $console"
+    : > "$console"
+    # Stream the container console straight into the CI step log (as well as
+    # the file) so a hang is diagnosable without waiting for the artifact —
+    # run 2 timed out with the console trapped in a file the failed
+    # upload-artifact step never captured.
+    tail -n +1 -f "$console" &
+    local tailpid=$!
     # No -n/--network-veth: the container shares the host network namespace,
     # so apt + dietpi-update get the runner's outbound HTTPS directly.
     # --resolv-conf=replace-host gives it working DNS. --timezone=off avoids
@@ -320,9 +333,10 @@ stage_bake() {
         bake_log "marker appeared during boot $boot — powering off container"
         machinectl poweroff tbbake 2>/dev/null || kill -TERM "$npid" 2>/dev/null || true
       elif [ "$(date +%s)" -ge "$deadline" ]; then
-        bake_log "HARD TIMEOUT (30 min) — terminating container"
+        bake_log "HARD TIMEOUT — terminating container"
         machinectl terminate tbbake 2>/dev/null || kill -KILL "$npid" 2>/dev/null || true
         wait "$npid" 2>/dev/null || true
+        kill "$tailpid" 2>/dev/null || true
         dump_diagnostics
         echo "stage bake: timed out before trainboard-baked marker appeared" >&2
         exit 1
@@ -330,6 +344,7 @@ stage_bake() {
       sleep 5
     done
     wait "$npid" 2>/dev/null || true
+    kill "$tailpid" 2>/dev/null || true
     bake_log "boot $boot ended (nspawn exited)"
     if [ -f "$marker" ]; then baked=1; break; fi
     bake_log "no marker yet after boot $boot (DietPi likely rebooted mid-first-run) — relaunching"
