@@ -551,6 +551,14 @@ stage_snapshot() {
     : > "$r/var/lib/dbus/machine-id"
     snap_log "reset /var/lib/dbus/machine-id"
   fi
+  # systemd's random-seed: written once by systemd-random-seed.service from
+  # the bake's own RNG state. Every card cut from this same baked image
+  # would otherwise ship with the identical seed file — not a security
+  # break on its own (systemd credits it as untrusted, mixed with other
+  # entropy sources on boot) but a shared-entropy smell worth scrubbing
+  # like the host keys above. systemd regenerates it on first boot if
+  # absent, so removing it is safe.
+  rm -f "$r/var/lib/systemd/random-seed"
   write_regen_unit
 
   # --- Strip the FAT staging payload ---------------------------------
@@ -653,6 +661,12 @@ shrink_and_compress() {
   local new_size=$(( end_sect * sect ))
   truncate -s "$new_size" "$img"
   snap_log "image shrunk to $(( new_size / mib )) MiB (rootfs fs $(( fs_bytes / mib )) MiB + margin)"
+  # grow_image's .grown sentinel now lies: base.img is back down to its
+  # pre-grow size, but the sentinel would tell a re-run against this same
+  # $WORK to skip growing again. Drop it here (simpler than teaching
+  # grow_image to re-check actual size) so a re-bake against a reused work
+  # dir regrows correctly instead of running bake against a too-small image.
+  rm -f "$WORK/.grown"
 
   # Compress. -T0 auto-splits into per-thread blocks; -9 for size (the
   # artifact Jess flashes). Keep base.img (-k via -c redirect) so a re-run
@@ -726,7 +740,7 @@ stage_smoke() {
   # slot-a --version must equal the tag (native arm64 exec off the mount).
   local ver rc=0
   ver=$("$sr/opt/trainboard/slots/a/trainboard" --version 2>/dev/null) || rc=$?
-  if [ "$rc" -eq 0 ] && printf '%s' "$ver" | grep -qw -- "$TAG"; then
+  if [ "$rc" -eq 0 ] && printf '%s' "$ver" | grep -qwF -- "$TAG"; then
     echo "  PASS: slots/a/trainboard --version reports $TAG (got: $ver)" >&2
   else
     echo "  FAIL: slots/a/trainboard --version != $TAG (rc=$rc, got: $ver)" >&2
@@ -750,6 +764,7 @@ stage_smoke() {
   smoke_assert "no Dropbear host keys shipped" smoke_no_glob "$sr/etc/dropbear/dropbear_"'*_host_key'
   smoke_assert "no OpenSSH host keys shipped" smoke_no_glob "$sr/etc/ssh/ssh_host_"'*'
   smoke_assert "machine-id is empty" smoke_empty_file "$sr/etc/machine-id"
+  smoke_assert "no shared systemd random-seed shipped" test ! -e "$sr/var/lib/systemd/random-seed"
   smoke_assert "host-key regen unit present" test -f "$sr/etc/systemd/system/$REGEN_UNIT_NAME"
   smoke_assert "host-key regen unit enabled" \
     test -L "$sr/etc/systemd/system/multi-user.target.wants/$REGEN_UNIT_NAME"
