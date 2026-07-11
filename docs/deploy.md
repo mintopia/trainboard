@@ -627,6 +627,13 @@ The board announces itself over multicast DNS on every eligible interface
   service, so it shows up in service-browser tools, not just as a bare
   hostname
 
+`trainboard.local` mirrors the board's actual LAN hostname (`trainboard`,
+set at image-build/first-boot time) — it's the one README leads with, and
+the one that stays stable across reflashes. `trainboard-XXXX.local` is a
+second, MAC-suffixed name this same responder advertises purely so several
+boards on one network stay distinguishable; it isn't a separate discovery
+mechanism, just a second name from the app's own mDNS service advert.
+
 It's on by default; disable it with `--mdns=false` (see the flags table in
 §5). **wlan0 goes silent while the AP hotspot is up** (§9) — the hotspot's
 own dnsmasq already answers DHCP/DNS on that subnet, and the responder would
@@ -754,5 +761,15 @@ after any change to `deploy/image/*.sh` or `BASE_IMAGE`:
       shipped
 - [ ] The usb0 lifeline answers at `http://10.55.0.1` (§10)
 
-The image ships DietPi's default root password (`dietpi`) unchanged —
-change it after setup, the same as any manually-flashed DietPi install.
+**This is not the same situation as a manually-flashed DietPi install.** A
+hand-flashed DietPi card normally FORCES a root password change during its
+first-run wizard — you can't get far without setting one. This image bakes
+`install_stage=2`, so that first-run (and its forced password change) never
+executes on the device at all — the same disarming the "no interactive
+first-boot hang" checklist item above is verifying. The result: root SSH
+(Dropbear) is reachable from first boot with DietPi's well-known default
+password, `dietpi`, still active and unchanged. Changing it immediately
+after setup is REQUIRED, not routine housekeeping — until you do, anyone who
+can reach the board's SSH port on your LAN has root on it. (Randomizing or
+otherwise not shipping a known default password is a real fix for this and
+is tracked as a separate design decision, not covered here.)

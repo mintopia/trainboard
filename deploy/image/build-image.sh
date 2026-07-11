@@ -759,6 +759,14 @@ stage_smoke() {
   smoke_assert "trainboard-dnsmasq-usb0.service present" test -f "$sr/etc/systemd/system/trainboard-dnsmasq-usb0.service"
   smoke_assert "gadget helper script present" test -f "$sr/usr/local/lib/trainboard/trainboard-gadget.sh"
   smoke_assert "dnsmasq binary present in rootfs" test -x "$sr/usr/sbin/dnsmasq"
+  # Present isn't enough — a unit nobody enabled never starts on boot.
+  # Same -L (not -e) pattern as the trainboard.service check above: real
+  # enables can produce absolute symlink targets that -e would chase into
+  # the host root inside this loop-mount, so only assert presence.
+  smoke_assert "trainboard-gadget.service enabled (multi-user.target.wants symlink)" \
+    test -L "$sr/etc/systemd/system/multi-user.target.wants/trainboard-gadget.service"
+  smoke_assert "trainboard-dnsmasq-usb0.service enabled (multi-user.target.wants symlink)" \
+    test -L "$sr/etc/systemd/system/multi-user.target.wants/trainboard-dnsmasq-usb0.service"
 
   # --- identity scrub -----------------------------------------------
   smoke_assert "no Dropbear host keys shipped" smoke_no_glob "$sr/etc/dropbear/dropbear_"'*_host_key'
@@ -789,6 +797,18 @@ stage_smoke() {
   # --- receipt kept -------------------------------------------------
   smoke_assert "trainboard-version receipt present on FAT" test -f "$sboot/trainboard-version"
   smoke_assert "trainboard-version == $TAG" smoke_file_eq "$sboot/trainboard-version" "$TAG"
+
+  # --- no bake-only container identity residue -----------------------
+  # prep_container/unprep_container pin hw_model_identifier=75
+  # ("Container") for the bake so DietPi's first-run doesn't mistake the
+  # nspawn runner for an RPi 1 and write arm_freq=/over_voltage= overclock
+  # lines into config.txt. unprep_container restores or removes the file
+  # afterwards; these assert that cleanup actually happened on the
+  # shipped artifact, not just that unprep_container ran without error.
+  smoke_assert "no leftover hw_model_identifier=75 (bake-only container identity)" \
+    smoke_hwid_not_75 "$sr/etc/.dietpi_hw_model_identifier"
+  smoke_assert "FAT config.txt has no overclock lines (model-75 pinning artifact)" \
+    smoke_no_overclock "$sboot/config.txt"
 
   umount_all
 
@@ -822,6 +842,22 @@ smoke_no_wifi() {
     if grep -Eq "^aWIFI_SSID\[[0-9]+\]='.+'" "$f"; then return 1; fi
   done
   return 0
+}
+smoke_hwid_not_75() {
+  # Absent is fine (unprep_container removed a bake-only file); present is
+  # only fine if it doesn't say 75 (unprep_container restored a real
+  # pre-bake value, e.g. an actual RPi model id).
+  local f=$1
+  [ -f "$f" ] || return 0
+  ! grep -q '75' "$f"
+}
+smoke_no_overclock() {
+  # arm_freq=/over_voltage= lines are what an un-pinned bake (hw model
+  # falling back to RPi 1 detection) writes into config.txt — see
+  # prep_container's comment.
+  local f=$1
+  [ -f "$f" ] || return 0
+  ! grep -Eq '^(arm_freq|over_voltage)=' "$f"
 }
 
 case "$STAGE" in

@@ -9,8 +9,7 @@ the LAN, and updates itself over the air once it's signed and released. An
 optional column of train headcodes, sourced from the RealTime Trains API,
 can be switched on for anyone who wants that extra bit of railway detail.
 
-<!-- TODO: swap in a real photo of a running board once one exists. -->
-![Trainboard OLED panel showing a departures screen](docs/images/board.jpg)
+<!-- TODO: add a real board photo at docs/images/board.jpg and restore the image here -->
 
 ## Hardware
 
