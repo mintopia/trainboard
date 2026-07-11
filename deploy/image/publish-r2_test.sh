@@ -52,15 +52,32 @@ echo "$OUT"
 echo "=== Checking versioned upload (2 objects) ==="
 grep -qF "$CP $T/$IMG s3://mintopia-github/trainboard/$IMG" <<<"$OUT" || fail "missing versioned image upload"
 grep -qF "$CP $T/$IMG.sha256 s3://mintopia-github/trainboard/$IMG.sha256" <<<"$OUT" || fail "missing versioned sha256 upload"
-[ "$(grep -c "^$CP $T/" <<<"$OUT")" -eq 2 ] || fail "expected exactly 2 versioned uploads"
 
-echo "=== Checking latest-alias copy (2 objects) ==="
-# s3api copy-object (not `s3 cp`): R2 rejects the x-amz-tagging-directive
-# header the high-level `s3 cp` server-side copy sends, even with
-# --copy-props none — the low-level API call adds no such header.
+echo "=== Checking latest-alias image copy + regenerated latest sha256 ==="
+# Image alias: s3api copy-object (not `s3 cp`) — R2 rejects the
+# x-amz-tagging-directive header the high-level server-side copy sends,
+# even with --copy-props none; the low-level call adds no such header.
 grep -qF "$COPYOBJ --copy-source mintopia-github/trainboard/$IMG --bucket mintopia-github --key trainboard/trainboard-latest.img.xz" <<<"$OUT" || fail "missing latest alias copy"
-grep -qF "$COPYOBJ --copy-source mintopia-github/trainboard/$IMG.sha256 --bucket mintopia-github --key trainboard/trainboard-latest.img.xz.sha256" <<<"$OUT" || fail "missing latest alias sha256 copy"
-[ "$(grep -c "^$COPYOBJ " <<<"$OUT")" -eq 2 ] || fail "expected exactly 2 alias copies"
+[ "$(grep -c "^$COPYOBJ " <<<"$OUT")" -eq 1 ] || fail "expected exactly 1 alias copy-object"
+# Latest .sha256: an UPLOAD of a regenerated file naming
+# trainboard-latest.img.xz — never a copy of the versioned checksum, whose
+# line names the versioned file and would fail `sha256sum -c` after a
+# latest-pair download.
+grep -qF "$CP $T/trainboard-latest.img.xz.sha256 s3://mintopia-github/trainboard/trainboard-latest.img.xz.sha256" <<<"$OUT" || fail "missing regenerated latest sha256 upload"
+[ "$(grep -c "^$CP $T/" <<<"$OUT")" -eq 3 ] || fail "expected exactly 3 local uploads (2 versioned + latest sha256)"
+if grep -qF "$COPYOBJ --copy-source mintopia-github/trainboard/$IMG.sha256" <<<"$OUT"; then
+  fail "latest sha256 must be regenerated+uploaded, never server-side copied"
+fi
+
+echo "=== Checking regenerated latest sha256 content names the latest file ==="
+# Feed a real versioned .sha256 through the generation path: same hash,
+# filename rewritten to trainboard-latest.img.xz.
+printf 'deadbeef00  %s\n' "$IMG" > "$T/$IMG.sha256"
+"$HERE/publish-r2.sh" --tag "$TAG" --work "$T" --dry-run --list-file "$T/listing.txt" >/dev/null
+[ -f "$T/trainboard-latest.img.xz.sha256" ] || fail "latest sha256 file was not generated"
+[ "$(cat "$T/trainboard-latest.img.xz.sha256")" = "deadbeef00  trainboard-latest.img.xz" ] \
+  || fail "latest sha256 content wrong: $(cat "$T/trainboard-latest.img.xz.sha256")"
+rm -f "$T/$IMG.sha256" "$T/trainboard-latest.img.xz.sha256"
 
 echo "=== Checking prune deletes exactly the 2 oldest versions (4 keys) ==="
 deletes=$(grep "^$RM " <<<"$OUT" || true)

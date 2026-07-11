@@ -81,15 +81,27 @@ fi
 run "${AWS[@]}" s3 cp "$IMG_PATH" "s3://$BUCKET/$PREFIX/$IMG"
 run "${AWS[@]}" s3 cp "$SUM_PATH" "s3://$BUCKET/$PREFIX/$IMG.sha256"
 
-# latest alias: server-side copy AFTER the versioned upload succeeded.
-# `aws s3 cp` (even with --copy-props none) sends an x-amz-tagging-directive
-# header on the single-object CopyObject call it makes for small files —
-# R2 rejects it as NotImplemented (confirmed live: the multipart copy path
-# used for the large image happened not to hit this, but the tiny .sha256
-# copy did). The low-level `s3api copy-object` call maps straight to the
-# CopyObject API with no tagging/ACL headers added, which R2 does support.
-run "${AWS[@]}" s3api copy-object --copy-source "$BUCKET/$PREFIX/$IMG"        --bucket "$BUCKET" --key "$PREFIX/trainboard-latest.img.xz"
-run "${AWS[@]}" s3api copy-object --copy-source "$BUCKET/$PREFIX/$IMG.sha256" --bucket "$BUCKET" --key "$PREFIX/trainboard-latest.img.xz.sha256"
+# latest alias for the image: server-side copy AFTER the versioned upload
+# succeeded. `aws s3 cp` (even with --copy-props none) sends an
+# x-amz-tagging-directive header on the single-object CopyObject call it
+# makes for small files — R2 rejects it as NotImplemented (confirmed live:
+# the multipart copy path taken for the large image happened not to hit
+# this, but a small-object copy did). The low-level `s3api copy-object`
+# call maps straight to the CopyObject API with no tagging/ACL headers
+# added, which R2 does support.
+run "${AWS[@]}" s3api copy-object --copy-source "$BUCKET/$PREFIX/$IMG" --bucket "$BUCKET" --key "$PREFIX/trainboard-latest.img.xz"
+
+# latest .sha256: REGENERATED with the latest filename, never copied — the
+# versioned checksum line names trainboard-vX.Y.Z.img.xz, so a user who
+# downloads the latest pair couldn't `sha256sum -c` it without renaming
+# files (confirmed on the first real publish). Same hash (the alias is a
+# byte-identical server-side copy of the versioned object), latest name.
+LATEST_SUM="$WORK/trainboard-latest.img.xz.sha256"
+if [ -f "$SUM_PATH" ]; then
+  hash=$(cut -d' ' -f1 "$SUM_PATH")
+  printf '%s  trainboard-latest.img.xz\n' "$hash" > "$LATEST_SUM"
+fi
+run "${AWS[@]}" s3 cp "$LATEST_SUM" "s3://$BUCKET/$PREFIX/trainboard-latest.img.xz.sha256"
 
 # Prune: list ONLY trainboard/trainboard-v*.img.xz, sort by version, keep
 # newest $KEEP, delete the rest (+ their .sha256). sort -V handles semver
