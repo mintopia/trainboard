@@ -575,21 +575,20 @@ git commit -m "feat(image): R2 publisher scoped to the trainboard/ prefix"
 
 - [ ] **Step 1: Write the workflow**
 
+Policy (Jess, 2026-07-11): images are cut **manually, on major versions only** — minor/patch releases reach flashed devices via OTA self-update. So the trigger is `workflow_dispatch` ONLY; no release chaining.
+
 ```yaml
-# Builds the flashable SD image after each release and publishes it to R2
+# Builds the flashable SD image and publishes it to R2
 # (spec: docs/superpowers/specs/2026-07-10-distribution-image-design.md).
+# MANUAL trigger by policy: images are cut deliberately on major versions;
+# minor releases reach flashed boards via OTA self-update, not new images.
 name: image
 on:
-  workflow_run:
-    workflows: [release]
-    types: [completed]
   workflow_dispatch:
     inputs:
-      tag: { description: "release tag (vX.Y.Z)", required: true }
+      tag: { description: "release tag to bake (vX.Y.Z)", required: true }
 jobs:
   image:
-    # Only after a SUCCESSFUL release run (or manual dispatch).
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -597,9 +596,10 @@ jobs:
         id: tag
         run: |
           TAG="${{ inputs.tag }}"
-          [ -n "$TAG" ] || TAG="${{ github.event.workflow_run.head_branch }}"
           case "$TAG" in v*) ;; *) echo "not a release tag: $TAG" >&2; exit 1;; esac
+          gh release view "$TAG" --repo mintopia/trainboard >/dev/null  # tag must be a real release
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        env: { GH_TOKEN: "${{ github.token }}" }
       - name: deps
         run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd-container xz-utils parted awscli
       - name: build image
@@ -621,16 +621,16 @@ jobs:
         with: { name: image-logs, path: /tmp/tbimg/logs }
 ```
 
-(Verify the `workflow_run` tag plumbing: for tag-triggered upstream runs, `head_branch` carries the tag name — confirm in the run's event payload during the branch test; if it doesn't, resolve the tag from `github.event.workflow_run.head_sha` via `git tag --points-at`.)
+(workflow_dispatch only works once the workflow file exists on the default branch — for the branch test, temporarily keep a push trigger scoped to this branch alongside dispatch, and remove it in the same task once verified, OR verify via the still-present PoC workflow mechanics before the swap. Note R2 secrets ARE configured: the branch test performs a REAL publish — run `publish-r2.sh` mentally/`--dry-run` first, confirm prefix scoping, and delete any test-published objects that shouldn't persist, or bake the current latest release so the publish is the real first artifact.)
 
-- [ ] **Step 2: Delete `image-poc.yml`**, run the real workflow once via `workflow_dispatch` against the latest release tag on the branch. Expect: green build, warning-skipped publish (no secrets yet), image artifact attached.
+- [ ] **Step 2: Delete `image-poc.yml`**, verify the workflow end-to-end once on the branch. Expect: green build, real publish under `trainboard/` (secrets are set), image artifact attached. Verify `https://github-files.mintopia.net/trainboard/trainboard-latest.img.xz` serves the upload afterwards.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/image.yml
 git rm .github/workflows/image-poc.yml
-git commit -m "feat(ci): image workflow — bake after release, publish to R2"
+git commit -m "feat(ci): manual image workflow — bake a release tag, publish to R2"
 ```
 
 ---
@@ -641,7 +641,7 @@ git commit -m "feat(ci): image workflow — bake after release, publish to R2"
 - Modify: `docs/deploy.md` (image pipeline section), `CONTEXT.md` if it tracks infra terms
 
 - [ ] **Step 1:** `make check` green (should be untouched — no Go changes). Wire shellcheck into the repo gates so image scripts stay linted: add a `shellcheck` target to the Makefile (`shellcheck deploy/image/*.sh deploy/*.sh`), include it in `check`, and add a shellcheck step to ci.yml's build job. If existing `deploy/*.sh` scripts fail shellcheck, scope the target to `deploy/image/*.sh` only and note the debt — do not "fix" scripts outside this round's scope.
-- [ ] **Step 2:** deploy.md gains a short "§ Image pipeline" subsection: what CI builds, where it publishes, how to re-run (`workflow_dispatch`), how to bump `BASE_IMAGE`, and the attended R2-secrets setup (named secrets list).
+- [ ] **Step 2:** deploy.md gains a short "§ Image pipeline" subsection: what the workflow builds, where it publishes, that it is **manually dispatched on major versions only** (minor releases reach devices via OTA), how to run it (`gh workflow run image.yml -f tag=vX.Y.Z`), and how to bump `BASE_IMAGE`. README + deploy.md fast path get one added sentence setting the expectation: the flashed image may be a few releases behind and offers/self-applies the newest update after setup — that's normal.
 - [ ] **Step 3:** Push, PR titled `feat: prebaked SD image pipeline + README/LICENSE`, body covering: the nspawn bake findings from Task 4, the `--manage-network`/gadget inclusion rationale, R2 prefix scoping, the two attended steps (R2 secrets; hardware flash acceptance). Standard footer. Request Codex review per repo rules.
 
 ---

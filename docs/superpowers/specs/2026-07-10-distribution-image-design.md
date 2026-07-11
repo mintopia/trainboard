@@ -43,9 +43,13 @@ the Pi Zero 2 W, published to Cloudflare R2.
 
 ## 2. Image build pipeline (`.github/workflows/image.yml`)
 
-Trigger: release tag push, running after (and gated on) the existing
-release job, so the image embeds the exact released binary; plus
-`workflow_dispatch` (with a tag input) for retries/backfills.
+Trigger: **manual only** (`workflow_dispatch` with a required tag input) —
+Jess's 2026-07-11 decision: images are cut as a deliberate step on major
+versions, NOT on every release. Minor/patch releases reach flashed devices
+through the existing OTA self-update: a freshly flashed board may be a few
+releases behind its image and updates itself from the web UI (or
+automatically overnight). The README/deploy.md must state this expectation
+("the image may prompt an update on first setup — that's normal").
 
 Steps (implemented as scripts under `deploy/image/` so they run locally as
 well as in CI):
