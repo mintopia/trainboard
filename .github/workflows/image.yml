@@ -36,7 +36,15 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
         env: { GH_TOKEN: "${{ github.token }}" }
       - name: deps
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs util-linux awscli
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq systemd-container xz-utils parted e2fsprogs util-linux unzip
+          # ubuntu-24.04-arm has no `awscli` apt candidate (arm64 universe
+          # gap) — install AWS CLI v2 from the official aarch64 bundle.
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install
+          aws --version
       - name: build image
         env: { GH_TOKEN: "${{ github.token }}" }
         run: sudo -E deploy/image/build-image.sh --tag "${{ steps.tag.outputs.tag }}" --work /tmp/tbimg --stage all
